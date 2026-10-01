@@ -759,7 +759,7 @@ pub fn geometry(
 
     let stage = geometry_stage(dims.n_blks);
 
-    StageLayout::new(&ctx, ctx.state, &stage, 0).geometry
+    StageLayout::new(&ctx, &stage, 0).geometry
 }
 
 /// A PAR(`order`) model for every hydro in `hydros` (finite placeholder

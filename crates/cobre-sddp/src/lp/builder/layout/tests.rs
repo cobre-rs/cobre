@@ -320,7 +320,7 @@ fn stage_layout_zero_anticipated_matches_pre_anticipated_offsets() {
     let mut fixtures = ZeroEntityFixtures::new();
     let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(layout.state.commit_out.len(), 0, "n_ant_state");
     assert_eq!(layout.state.n_anticipated, 0, "n_anticipated");
@@ -344,7 +344,7 @@ fn symbolic_upper_bound_resolves_per_block_and_suppresses_collapse() {
     fixtures.install_symbolic_upper_bound();
     let ctx = fixtures.make_ctx_generic();
     let stage = stage_with_blocks(BlockMode::Parallel, 2);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(
         layout.generic_constraint_rows.len(),
@@ -386,7 +386,7 @@ fn symbolic_endpoint_makes_row_two_sided_for_slack() {
     fixtures.install_symbolic_upper_bound();
     let ctx = fixtures.make_ctx_generic();
     let stage = stage_with_blocks(BlockMode::Parallel, 2);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     for row in &layout.generic_constraint_rows {
         assert!(
@@ -404,7 +404,7 @@ fn folded_upper_bound_constant_shifts_parquet_base() {
     fixtures.install_folded_upper_bound_constant();
     let ctx = fixtures.make_ctx_generic();
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(layout.generic_constraint_rows.len(), 1);
     let row = &layout.generic_constraint_rows[0];
@@ -652,7 +652,7 @@ fn useful_volume_single_term_lower_bound_folds_v_lo() {
     );
     let ctx = fixtures.make_ctx();
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(layout.generic_constraint_rows.len(), 1);
     let row = &layout.generic_constraint_rows[0];
@@ -683,7 +683,7 @@ fn useful_volume_negative_coefficient_lower_bound_subtracts_v_lo() {
     );
     let ctx = fixtures.make_ctx();
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(layout.generic_constraint_rows.len(), 1);
     let row = &layout.generic_constraint_rows[0];
@@ -724,7 +724,7 @@ fn useful_volume_multi_term_lower_bound_sums_each_hydros_v_lo() {
     );
     let ctx = fixtures.make_ctx();
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(layout.generic_constraint_rows.len(), 1);
     let row = &layout.generic_constraint_rows[0];
@@ -745,7 +745,7 @@ fn useful_volume_fold_inert_for_non_useful_volume_constraint() {
     fixtures.install_constraint(vec![], vec![(0, None, Some(-0.0), None)]);
     let ctx = fixtures.make_ctx();
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     let row = &layout.generic_constraint_rows[0];
     assert_eq!(
@@ -776,7 +776,7 @@ fn useful_volume_fold_leaves_untargeted_lower_endpoint_as_none() {
     );
     let ctx = fixtures.make_ctx();
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     let row = &layout.generic_constraint_rows[0];
     assert_eq!(
@@ -810,7 +810,7 @@ fn useful_volume_fold_collapses_block_independent_expression_to_one_row() {
     );
     let ctx = fixtures.make_ctx();
     let stage = stage_with_blocks(BlockMode::Parallel, 3);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(
         layout.generic_constraint_rows.len(),
@@ -851,7 +851,7 @@ fn useful_volume_fold_uses_entity_physical_v_lo_not_per_stage_operative_bounds()
     let ctx = fixtures.make_ctx();
 
     let stage0 = stage_with_id(0);
-    let layout0 = StageLayout::new(&ctx, ctx.state, &stage0, 0);
+    let layout0 = StageLayout::new(&ctx, &stage0, 0);
     assert_eq!(
         layout0.generic_constraint_rows[0]
             .bound_lower
@@ -862,7 +862,7 @@ fn useful_volume_fold_uses_entity_physical_v_lo_not_per_stage_operative_bounds()
     );
 
     let stage1 = stage_with_id(1);
-    let layout1 = StageLayout::new(&ctx, ctx.state, &stage1, 1);
+    let layout1 = StageLayout::new(&ctx, &stage1, 1);
     assert_eq!(
         layout1.generic_constraint_rows[0]
             .bound_lower
@@ -900,7 +900,7 @@ fn useful_volume_fold_effective_coefficient_includes_term_scale() {
     );
     let ctx = fixtures.make_ctx();
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     let row = &layout.generic_constraint_rows[0];
     assert_eq!(
@@ -930,7 +930,7 @@ fn useful_volume_fold_unresolvable_hydro_id_fires_debug_assert() {
     );
     let ctx = fixtures.make_ctx();
     let stage = minimal_stage();
-    let _ = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let _ = StageLayout::new(&ctx, &stage, 0);
 }
 
 // ── interior storage-boundary sizing ─────────────────────────────────────
@@ -999,7 +999,7 @@ fn chronological_interior_storage_boundary_sizing() {
     let anchor = ctx.state.control_region_start();
 
     let stage_parallel = stage_with_blocks(BlockMode::Parallel, 3);
-    let parallel = StageLayout::new(&ctx, ctx.state, &stage_parallel, 0);
+    let parallel = StageLayout::new(&ctx, &stage_parallel, 0);
     assert_eq!(
         parallel.geometry.storage_internal_start, parallel.geometry.turbine.start,
         "parallel K=3 interior storage-boundary family is empty"
@@ -1014,7 +1014,7 @@ fn chronological_interior_storage_boundary_sizing() {
     );
 
     let stage_chrono_k1 = stage_with_blocks(BlockMode::Chronological, 1);
-    let chrono_k1 = StageLayout::new(&ctx, ctx.state, &stage_chrono_k1, 0);
+    let chrono_k1 = StageLayout::new(&ctx, &stage_chrono_k1, 0);
     assert_eq!(
         chrono_k1.geometry.storage_internal_start, chrono_k1.geometry.turbine.start,
         "chronological K=1 interior storage-boundary family is empty"
@@ -1029,7 +1029,7 @@ fn chronological_interior_storage_boundary_sizing() {
     );
 
     let stage_chrono_k3 = stage_with_blocks(BlockMode::Chronological, 3);
-    let chrono_k3 = StageLayout::new(&ctx, ctx.state, &stage_chrono_k3, 0);
+    let chrono_k3 = StageLayout::new(&ctx, &stage_chrono_k3, 0);
     assert_eq!(
         chrono_k3.geometry.storage_internal_start, anchor,
         "chronological K=3 storage_internal_start anchors at control_region_start()"
@@ -1057,7 +1057,7 @@ fn block_storage_col_resolves_all_boundaries() {
     let ctx = fixtures.make_ctx();
 
     let stage_chrono_k3 = stage_with_blocks(BlockMode::Chronological, 3);
-    let chrono_k3 = StageLayout::new(&ctx, ctx.state, &stage_chrono_k3, 0);
+    let chrono_k3 = StageLayout::new(&ctx, &stage_chrono_k3, 0);
     let h = 1;
     assert_eq!(
         chrono_k3.block_storage_col(HydroSys::new(h), Boundary::Incoming),
@@ -1089,7 +1089,7 @@ fn block_storage_col_resolves_all_boundaries() {
     );
 
     let stage_chrono_k1 = stage_with_blocks(BlockMode::Chronological, 1);
-    let chrono_k1 = StageLayout::new(&ctx, ctx.state, &stage_chrono_k1, 0);
+    let chrono_k1 = StageLayout::new(&ctx, &stage_chrono_k1, 0);
     assert_eq!(
         chrono_k1.geometry.storage_internal_start, chrono_k1.geometry.turbine.start,
         "K = 1 has no interior storage columns"
@@ -1118,7 +1118,7 @@ fn storage_boundary_endpoints_match_state_space_accessors() {
     let mut fixtures = TwoHydroFixtures::new();
     let ctx = fixtures.make_ctx();
     let stage = stage_with_blocks(BlockMode::Chronological, 3);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
     let geometry = layout.geometry.clone();
     assert!(ctx.state.hydro_count >= 2);
     let mut compared = 0;
@@ -1156,7 +1156,7 @@ fn chronological_water_balance_row_count() {
     let ctx = fixtures.make_ctx();
 
     let stage_parallel = stage_with_blocks(BlockMode::Parallel, 3);
-    let parallel = StageLayout::new(&ctx, ctx.state, &stage_parallel, 0);
+    let parallel = StageLayout::new(&ctx, &stage_parallel, 0);
     assert_eq!(
         parallel.geometry.water_balance.end() - parallel.geometry.water_balance.start(),
         2,
@@ -1169,7 +1169,7 @@ fn chronological_water_balance_row_count() {
     );
 
     let stage_chrono_k3 = stage_with_blocks(BlockMode::Chronological, 3);
-    let chrono_k3 = StageLayout::new(&ctx, ctx.state, &stage_chrono_k3, 0);
+    let chrono_k3 = StageLayout::new(&ctx, &stage_chrono_k3, 0);
     assert_eq!(
         chrono_k3.geometry.water_balance.end() - chrono_k3.geometry.water_balance.start(),
         6,
@@ -1182,7 +1182,7 @@ fn chronological_water_balance_row_count() {
     );
 
     let stage_chrono_k1 = stage_with_blocks(BlockMode::Chronological, 1);
-    let chrono_k1 = StageLayout::new(&ctx, ctx.state, &stage_chrono_k1, 0);
+    let chrono_k1 = StageLayout::new(&ctx, &stage_chrono_k1, 0);
     assert_eq!(
         chrono_k1.geometry.water_balance.end() - chrono_k1.geometry.water_balance.start(),
         2,
@@ -1207,7 +1207,7 @@ fn parallel_z_inflow_column_enters_each_target_water_row_once() {
     let mut fixtures = TwoHydroFixtures::new();
     let ctx = fixtures.make_ctx();
     let stage = stage_with_blocks(BlockMode::Parallel, 3);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     let col_entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
     let water_rows = layout.geometry.water_balance.range();
@@ -1395,7 +1395,7 @@ fn stage_layout_populates_fpha_local_index_inverse_map() {
     let mut fixtures = FphaMixFixtures::new();
     let ctx = fixtures.make_ctx();
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(
         layout.geometry.fpha_hydro_indices,
@@ -1492,7 +1492,7 @@ impl FillingMembershipFixtures {
     fn fpha_indices_at(&mut self, stage_id: i32) -> Vec<HydroSys> {
         let ctx = self.make_ctx();
         let stage = stage_with_id(stage_id);
-        StageLayout::new(&ctx, ctx.state, &stage, 0)
+        StageLayout::new(&ctx, &stage, 0)
             .geometry
             .fpha_hydro_indices
     }
@@ -1501,7 +1501,7 @@ impl FillingMembershipFixtures {
     fn evap_indices_at(&mut self, stage_id: i32) -> Vec<HydroSys> {
         let ctx = self.make_ctx();
         let stage = stage_with_id(stage_id);
-        StageLayout::new(&ctx, ctx.state, &stage, 0)
+        StageLayout::new(&ctx, &stage, 0)
             .geometry
             .evap_hydro_indices
     }
@@ -1510,7 +1510,7 @@ impl FillingMembershipFixtures {
     fn filling_target_indices_at(&mut self, stage_id: i32) -> Vec<HydroSys> {
         let ctx = self.make_ctx();
         let stage = stage_with_id(stage_id);
-        StageLayout::new(&ctx, ctx.state, &stage, 0)
+        StageLayout::new(&ctx, &stage, 0)
             .geometry
             .filling_target_hydro_indices
     }
@@ -1519,7 +1519,7 @@ impl FillingMembershipFixtures {
     fn filled_min_storage_floor_indices_at(&mut self, stage_id: i32) -> Vec<HydroSys> {
         let ctx = self.make_ctx();
         let stage = stage_with_id(stage_id);
-        StageLayout::new(&ctx, ctx.state, &stage, 0)
+        StageLayout::new(&ctx, &stage, 0)
             .geometry
             .filled_min_storage_floor_hydro_indices
     }
@@ -1567,7 +1567,7 @@ fn non_filling_system_no_filling_target_num_rows_unchanged() {
     let mut layout_at = |stage_id: i32| {
         let ctx = fixtures.make_ctx();
         let stage = stage_with_id(stage_id);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         (
             layout.geometry.filling_target_hydro_indices.clone(),
             layout.rows.num_rows,
@@ -1605,7 +1605,7 @@ fn filling_target_row_and_col_below_structural_bounds() {
     let mut fixtures = FillingMembershipFixtures::new();
     let ctx = fixtures.make_ctx();
     let stage = stage_with_id(2); // entry − 1: the terminal stage.
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     let n_targets = layout.geometry.filling_target_hydro_indices.len();
     assert_eq!(n_targets, 2, "both filling hydros carry the target at id 2");
@@ -1659,7 +1659,7 @@ fn filling_target_adds_rows_at_every_filling_stage() {
     for stage_id in [0, 3, 4] {
         let ctx = fixtures.make_ctx();
         let stage = stage_with_id(stage_id);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         assert!(
             layout.geometry.filling_target_hydro_indices.is_empty(),
             "no σ_fill target rows at non-Filling id {stage_id}"
@@ -1728,7 +1728,7 @@ fn non_filling_system_no_filled_min_storage_floor_num_rows_unchanged() {
     let mut layout_at = |stage_id: i32| {
         let ctx = fixtures.make_ctx();
         let stage = stage_with_id(stage_id);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         (
             layout
                 .geometry
@@ -1848,7 +1848,7 @@ fn non_filling_hydro_membership_bit_identical_across_stages() {
     let (reference_fpha, reference_evap) = {
         let ctx = fixtures.make_ctx();
         let stage = stage_with_id(0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         (
             layout.geometry.fpha_hydro_indices,
             layout.geometry.evap_hydro_indices,
@@ -1861,7 +1861,7 @@ fn non_filling_hydro_membership_bit_identical_across_stages() {
     for stage_id in [1, 2, 3, 7] {
         let ctx = fixtures.make_ctx();
         let stage = stage_with_id(stage_id);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         assert_eq!(
             layout.geometry.fpha_hydro_indices, reference_fpha,
             "non-filling fpha_hydro_indices must be stage-invariant (stage_id {stage_id})"
@@ -1892,7 +1892,7 @@ fn stage_layout_operational_violation_rows_are_contiguous_blocks() {
     let mut fixtures = FphaMixFixtures::new();
     let ctx = fixtures.make_ctx();
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     let n_op = ctx.hydros.len(); // n_h * n_blks with n_blks == 1
     assert!(
@@ -2001,7 +2001,7 @@ fn block_strided_addresses_match_their_family_ranges() {
     let mut fpha_fixtures = FphaMixFixtures::new();
     let fpha_ctx = fpha_fixtures.make_ctx();
     let fpha_stage = minimal_stage();
-    let fpha_layout = StageLayout::new(&fpha_ctx, fpha_ctx.state, &fpha_stage, 0);
+    let fpha_layout = StageLayout::new(&fpha_ctx, &fpha_stage, 0);
     let fpha_counts = assert_block_strided_addresses(&fpha_layout);
 
     let mut zero_fixtures = ZeroEntityFixtures::new();
@@ -2009,7 +2009,7 @@ fn block_strided_addresses_match_their_family_ranges() {
     zero_fixtures.base.buses = vec![dormant_bus(0), dormant_bus(1)];
     let thermal_ctx = zero_fixtures.make_ctx(vec![], &[]);
     let thermal_stage = stage_with_blocks(BlockMode::Parallel, 4);
-    let thermal_layout = StageLayout::new(&thermal_ctx, thermal_ctx.state, &thermal_stage, 0);
+    let thermal_layout = StageLayout::new(&thermal_ctx, &thermal_stage, 0);
     assert_eq!(
         thermal_layout.clock.n_blks(),
         4,
@@ -2053,7 +2053,7 @@ fn anticipated_decision_columns_placed_between_thermal_and_line_fwd() {
             duration_hours: 186.0,
         })
         .collect();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(
         layout.geometry.anticipated_decision.start, layout.geometry.thermal.start,
@@ -2104,7 +2104,7 @@ fn stage_layout_with_anticipated_shifts_decision_region() {
         &[0, 2],    // anticipated_positions (arbitrary; layout doesn't inspect them)
     );
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     let expected_n_ant_state = n_anticipated * k_max;
     assert_eq!(
@@ -2147,7 +2147,7 @@ fn anticipated_fishing_row_offset_after_operational_violations() {
         &[0, 1],    // arbitrary thermal indices
     );
     let stage = minimal_stage(); // 1 block
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 1);
+    let layout = StageLayout::new(&ctx, &stage, 1);
 
     // n_op_rows = n_hydros * n_blks = 0 * 1 = 0
     let n_op_rows = 0_usize;
@@ -2179,7 +2179,7 @@ fn anticipated_fishing_row_count_grows_with_stage() {
     let stage = minimal_stage(); // 1 block
 
     for (stage_idx, expected) in [(0_usize, 2), (1, 2), (2, 2), (3, 2)] {
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, stage_idx);
+        let layout = StageLayout::new(&ctx, &stage, stage_idx);
         assert_eq!(
             layout.anticipated.fishing_rows.len(),
             expected,
@@ -2207,7 +2207,7 @@ fn num_rows_drops_by_n_state_with_anticipated_thermals() {
     let mut fixtures = AntFixturesWithNStages::new(1);
     let ctx = fixtures.make_ctx(vec![3, 2], &[0, 1]);
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     // n_state for this fixture: N*(1+L) + A*K = 0 + 2*3 = 6.
     let n_state = ctx.hydros.len() * (1 + ctx.par_lp.max_order()) + n_anticipated * k_max;
@@ -2724,7 +2724,7 @@ fn test_layout_state_out_block_adjacent_to_decision() {
         &[0, 1],
     );
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     // The outgoing ring sits in the state region: N*(1+L) + B.
     assert_eq!(
@@ -2757,7 +2757,7 @@ fn test_layout_state_out_def_rows_zero_when_all_inactive() {
         &[0, 1],
     );
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 5);
+    let layout = StageLayout::new(&ctx, &stage, 5);
 
     assert_eq!(layout.anticipated.state_out_def_rows.len(), 0);
     // Column block stays allocated at the state-region offset regardless of
@@ -2771,7 +2771,7 @@ fn test_layout_no_anticipated_unchanged_num_cols() {
     let mut fixtures = ZeroEntityFixtures::new();
     let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(layout.anticipated.state_out_def_rows.len(), 0);
 }
@@ -2894,7 +2894,7 @@ fn pumping_layout_inert_when_no_stations() {
     let mut fixtures = ZeroEntityFixtures::new();
     let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = minimal_stage();
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(
         ctx.resolved.bounds.n_pumping(),
@@ -2942,7 +2942,7 @@ fn pumping_layout_reserves_block_major_columns() {
     let mut baseline_fixtures = PumpingFixtures::new(0, 3);
     let baseline_ctx = baseline_fixtures.make_ctx();
     let stage = PumpingFixtures::stage_with_blocks(n_blks);
-    let baseline = StageLayout::new(&baseline_ctx, baseline_ctx.state, &stage, 0);
+    let baseline = StageLayout::new(&baseline_ctx, &stage, 0);
     assert_eq!(baseline_ctx.pumping_stations.len(), 0);
 
     let mut fixtures = PumpingFixtures::new(n_pumping, 3);
@@ -2952,7 +2952,7 @@ fn pumping_layout_reserves_block_major_columns() {
         n_pumping,
         "fixture bounds must report n_pumping() == 2"
     );
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(
         ctx.pumping_stations.len(),
@@ -2989,7 +2989,7 @@ fn contract_columns_empty_keep_generic_slack_at_pumping_end() {
     assert_eq!(ctx.contracts.len(), 0);
 
     let stage = PumpingFixtures::stage_with_blocks(n_blks);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     let col_pumping_end = layout.geometry.pumping_flow.end;
     assert_eq!(
@@ -3023,7 +3023,7 @@ fn contract_columns_reserve_import_then_export_blocks() {
     let ctx = fixtures.make_ctx();
 
     let stage = PumpingFixtures::stage_with_blocks(n_blks);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     let col_pumping_end = layout.geometry.pumping_flow.end;
     assert_eq!(
@@ -3057,7 +3057,7 @@ fn contract_col_covers_each_contract_column_once() {
     let ctx = fixtures.make_ctx();
 
     let stage = PumpingFixtures::stage_with_blocks(n_blks);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     let mut hits = vec![0_usize; layout.num_cols];
     let mut compared = 0_usize;
@@ -3151,7 +3151,7 @@ fn withdrawal_and_operational_columns_collapse_onto_evap_col_start_when_no_hydro
     let mut fixtures = ZeroEntityFixtures::new();
     let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = PumpingFixtures::stage_with_blocks(4);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(ctx.hydros.len(), 0, "fixture must have zero hydros");
     assert_eq!(
@@ -3204,7 +3204,7 @@ fn operational_violation_rows_collapse_onto_row_evap_start_when_no_hydros() {
     let mut fixtures = ZeroEntityFixtures::new();
     let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = PumpingFixtures::stage_with_blocks(4);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(ctx.hydros.len(), 0, "fixture must have zero hydros");
     assert_eq!(
@@ -3257,7 +3257,7 @@ fn group2_accessors_return_post_equipment_cursor_when_no_hydros() {
     let mut fixtures = ZeroEntityFixtures::new();
     let ctx = fixtures.make_ctx(vec![], &[]);
     let stage = PumpingFixtures::stage_with_blocks(4);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(ctx.hydros.len(), 0, "fixture must have zero hydros");
     assert_eq!(
@@ -3458,7 +3458,7 @@ fn test_turbine_family_is_sized_by_cell_not_by_plant() {
     let mut split_fixtures = TwoHydroMultiBusFixtures::new(true);
     let split_ctx = split_fixtures.make_ctx();
     assert_eq!(split_ctx.hydro_cell_index.n_cells(), 3);
-    let split_layout = StageLayout::new(&split_ctx, split_ctx.state, &stage, 0);
+    let split_layout = StageLayout::new(&split_ctx, &stage, 0);
     assert_eq!(split_layout.geometry.turbine.len(), 9, "3 cells * 3 blocks");
     assert_eq!(
         split_layout.geometry.spillage.start, split_layout.geometry.turbine.end,
@@ -3468,7 +3468,7 @@ fn test_turbine_family_is_sized_by_cell_not_by_plant() {
     let mut same_bus_fixtures = TwoHydroMultiBusFixtures::new(false);
     let same_bus_ctx = same_bus_fixtures.make_ctx();
     assert_eq!(same_bus_ctx.hydro_cell_index.n_cells(), 2);
-    let same_bus_layout = StageLayout::new(&same_bus_ctx, same_bus_ctx.state, &stage, 0);
+    let same_bus_layout = StageLayout::new(&same_bus_ctx, &stage, 0);
     assert_eq!(
         same_bus_layout.geometry.turbine.len(),
         6,
@@ -3499,7 +3499,7 @@ fn test_turbine_col_addresses_each_cell_of_a_split_plant() {
     );
 
     let stage = stage_with_blocks(BlockMode::Parallel, n_blks);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     let mut columns = Vec::with_capacity(9);
     for cell in 0..3 {
@@ -3636,7 +3636,7 @@ fn test_generation_family_is_sized_by_fpha_cell() {
     assert_eq!(ctx.hydro_cell_index.cells_of(HydroSys::new(2)), 2..4);
 
     let stage = stage_with_blocks(BlockMode::Parallel, n_blks);
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(
         layout.geometry.fpha_hydro_indices,
@@ -3820,7 +3820,7 @@ fn column_address_pins_cover_every_family() {
     let ctx = filling_fixtures.make_ctx();
 
     let filling_stage = stage_with_id(1);
-    let filling_layout = StageLayout::new(&ctx, ctx.state, &filling_stage, 0);
+    let filling_layout = StageLayout::new(&ctx, &filling_stage, 0);
     let filling_counts = compare_column_addresses(&ctx, &filling_layout);
     totals.inflow_slack += filling_counts.inflow_slack;
     totals.withdrawal_slack_neg += filling_counts.withdrawal_slack_neg;
@@ -3828,19 +3828,14 @@ fn column_address_pins_cover_every_family() {
     totals.filling_target_slack += filling_counts.filling_target_slack;
 
     let operating_stage = stage_with_id(3);
-    let operating_layout = StageLayout::new(&ctx, ctx.state, &operating_stage, 0);
+    let operating_layout = StageLayout::new(&ctx, &operating_stage, 0);
     let operating_counts = compare_column_addresses(&ctx, &operating_layout);
     totals.filled_min_storage_floor_slack += operating_counts.filled_min_storage_floor_slack;
 
     let mut anticipated_fixtures = ZeroEntityFixtures::new();
     let anticipated_ctx = anticipated_fixtures.make_ctx(vec![1, 1], &[0, 1]);
     let anticipated_stage = minimal_stage();
-    let anticipated_layout = StageLayout::new(
-        &anticipated_ctx,
-        anticipated_ctx.state,
-        &anticipated_stage,
-        0,
-    );
+    let anticipated_layout = StageLayout::new(&anticipated_ctx, &anticipated_stage, 0);
     let anticipated_counts = compare_column_addresses(&anticipated_ctx, &anticipated_layout);
     totals.anticipated_decision += anticipated_counts.anticipated_decision;
 
@@ -3851,8 +3846,7 @@ fn column_address_pins_cover_every_family() {
     equipment_ctx.non_controllable_sources = &ncs;
     equipment_ctx.pumping_stations = &pumping;
     let equipment_stage = stage_with_blocks(BlockMode::Parallel, 2);
-    let equipment_layout =
-        StageLayout::new(&equipment_ctx, equipment_ctx.state, &equipment_stage, 0);
+    let equipment_layout = StageLayout::new(&equipment_ctx, &equipment_stage, 0);
     let equipment_counts = compare_column_addresses(&equipment_ctx, &equipment_layout);
     totals.ncs_generation += equipment_counts.ncs_generation;
     totals.pumping_flow += equipment_counts.pumping_flow;
@@ -4120,7 +4114,7 @@ fn row_address_pins_cover_every_family() {
     let ant_ctx = ant_fixtures.make_ctx(vec![2, 3], &[0, 1]);
     let ant_stage = minimal_stage();
     for stage_idx in [0, 1] {
-        let layout = StageLayout::new(&ant_ctx, ant_ctx.state, &ant_stage, stage_idx);
+        let layout = StageLayout::new(&ant_ctx, &ant_stage, stage_idx);
         let counts = assert_row_addresses(&layout);
         for (total, count) in totals.iter_mut().zip(counts) {
             *total += count;
@@ -4131,7 +4125,7 @@ fn row_address_pins_cover_every_family() {
     let mut filling_fixtures = FillingMembershipFixtures::new();
     let filling_ctx = filling_fixtures.make_ctx();
     let filling_stage = stage_with_id(1);
-    let filling_layout = StageLayout::new(&filling_ctx, filling_ctx.state, &filling_stage, 0);
+    let filling_layout = StageLayout::new(&filling_ctx, &filling_stage, 0);
     let filling_counts = assert_row_addresses(&filling_layout);
     for (total, count) in totals.iter_mut().zip(filling_counts) {
         *total += count;
@@ -4147,7 +4141,7 @@ fn row_address_pins_cover_every_family() {
             duration_hours: 372.0,
         })
         .collect();
-    let operating_layout = StageLayout::new(&filling_ctx, filling_ctx.state, &operating_stage, 0);
+    let operating_layout = StageLayout::new(&filling_ctx, &operating_stage, 0);
     let operating_counts = assert_row_addresses(&operating_layout);
     for (total, count) in totals.iter_mut().zip(operating_counts) {
         *total += count;
@@ -4158,7 +4152,7 @@ fn row_address_pins_cover_every_family() {
     generic_fixtures.install_symbolic_upper_bound();
     let generic_ctx = generic_fixtures.make_ctx_generic();
     let generic_stage = stage_with_blocks(BlockMode::Parallel, 2);
-    let generic_layout = StageLayout::new(&generic_ctx, generic_ctx.state, &generic_stage, 0);
+    let generic_layout = StageLayout::new(&generic_ctx, &generic_stage, 0);
     let generic_counts = assert_row_addresses(&generic_layout);
     for (total, count) in totals.iter_mut().zip(generic_counts) {
         *total += count;
@@ -4174,7 +4168,7 @@ fn row_address_pins_cover_every_family() {
         "the context's own state must carry the bucket this case addresses"
     );
     let transit_stage = minimal_stage();
-    let transit_layout = StageLayout::new(&transit_ctx, transit_ctx.state, &transit_stage, 0);
+    let transit_layout = StageLayout::new(&transit_ctx, &transit_stage, 0);
     let transit_counts = assert_row_addresses(&transit_layout);
     for (total, count) in totals.iter_mut().zip(transit_counts) {
         *total += count;
@@ -4348,7 +4342,7 @@ fn two_sided_real_layout_allocates_minus_slack_column() {
         },
     };
 
-    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+    let layout = StageLayout::new(&ctx, &stage, 0);
 
     assert_eq!(
         layout.generic_constraint_rows.len(),

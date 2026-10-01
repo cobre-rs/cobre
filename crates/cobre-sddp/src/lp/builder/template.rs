@@ -106,17 +106,12 @@ pub(super) struct StageBuildOutput {
 }
 
 /// Construct the [`StageBuildOutput`] for a single study stage.
-#[expect(
-    clippy::similar_names,
-    reason = "state is the StageData field and stage/stage_idx are the per-stage inputs, so renaming either would obscure it"
-)]
 pub(super) fn build_single_stage_template(
     ctx: &TemplateBuildCtx<'_>,
-    state: &StateSpace,
     stage: &Stage,
     stage_idx: usize,
 ) -> StageBuildOutput {
-    let layout = StageLayout::new(ctx, state, stage, stage_idx);
+    let layout = StageLayout::new(ctx, stage, stage_idx);
 
     let (col_lower, mut col_upper, mut objective) =
         columns::fill_stage_columns(ctx, stage, stage_idx, &layout);
@@ -327,12 +322,7 @@ pub(crate) fn build_stage_templates(
 
     let mut stage_outputs = Vec::with_capacity(study_stages.len());
     for (stage_idx, stage) in study_stages.iter().enumerate() {
-        stage_outputs.push(build_single_stage_template(
-            &ctx,
-            state_layout,
-            stage,
-            stage_idx,
-        ));
+        stage_outputs.push(build_single_stage_template(&ctx, stage, stage_idx));
     }
 
     assemble_stage_templates_output(

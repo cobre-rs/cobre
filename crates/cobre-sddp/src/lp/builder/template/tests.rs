@@ -571,7 +571,7 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
         .iter()
         .find(|s| s.id >= 0)
         .expect("one study stage");
-    let layout = super::super::layout::StageLayout::new(&ctx, ctx.state, stage, 0);
+    let layout = super::super::layout::StageLayout::new(&ctx, stage, 0);
     assert_eq!(
         layout.geometry.pumping_flow.len(),
         ctx.pumping_stations.len() * layout.clock.n_blks(),
@@ -638,7 +638,7 @@ fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
 
     assert_eq!(templates.geometry_per_stage.len(), study_stages.len());
     for (t, stage) in study_stages.iter().enumerate() {
-        let layout = super::super::layout::StageLayout::new(&ctx, ctx.state, stage, t);
+        let layout = super::super::layout::StageLayout::new(&ctx, stage, t);
         assert_eq!(
             ctx.pumping_stations.len(),
             2,
@@ -889,7 +889,7 @@ fn geometry_ncs_family_matches_the_stage_layout() {
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
 
     for (t, stage) in study_stages.iter().enumerate() {
-        let layout = super::super::layout::StageLayout::new(&ctx, ctx.state, stage, t);
+        let layout = super::super::layout::StageLayout::new(&ctx, stage, t);
         assert_eq!(
             ctx.non_controllable_sources.len(),
             2,
@@ -1252,7 +1252,7 @@ fn stage_layout_geometry_populates_contract_ranges() {
         .iter()
         .find(|s| s.id >= 0)
         .expect("one study stage");
-    let layout = super::super::layout::StageLayout::new(&ctx, ctx.state, stage, 0);
+    let layout = super::super::layout::StageLayout::new(&ctx, stage, 0);
     let geometry = layout.geometry.clone();
 
     assert_eq!(geometry.contract_import.len(), 2, "1 import * 2 blocks");
@@ -1309,7 +1309,7 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
         .iter()
         .find(|s| s.id >= 0)
         .expect("one study stage");
-    let layout = super::super::layout::StageLayout::new(&ctx, ctx.state, stage, 0);
+    let layout = super::super::layout::StageLayout::new(&ctx, stage, 0);
     let col_pumping_end = layout.geometry.pumping_flow.end;
     let geometry = layout.geometry.clone();
 
@@ -2137,17 +2137,13 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
     for stage_idx in [0_usize, 2, 3] {
         let stage = study_stages[stage_idx];
 
-        let tpl_a =
-            super::build_single_stage_template(&ctx_a, ctx_a.state, stage, stage_idx).template;
-        let tpl_b =
-            super::build_single_stage_template(&ctx_b, ctx_b.state, stage, stage_idx).template;
+        let tpl_a = super::build_single_stage_template(&ctx_a, stage, stage_idx).template;
+        let tpl_b = super::build_single_stage_template(&ctx_b, stage, stage_idx).template;
 
         // Both templates share num_cols/num_rows: the layout depends only on
         // n_anticipated and k_max, unchanged by the swap.
-        let layout_a =
-            super::super::layout::StageLayout::new(&ctx_a, ctx_a.state, stage, stage_idx);
-        let layout_b =
-            super::super::layout::StageLayout::new(&ctx_b, ctx_b.state, stage, stage_idx);
+        let layout_a = super::super::layout::StageLayout::new(&ctx_a, stage, stage_idx);
+        let layout_b = super::super::layout::StageLayout::new(&ctx_b, stage, stage_idx);
 
         assert_eq!(
             layout_a.geometry.anticipated_decision.start,
@@ -3288,8 +3284,8 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
     let ctx = Box::leak(Box::new(ctx));
     let stage = &system.stages()[0];
 
-    let template = super::build_single_stage_template(ctx, ctx.state, stage, 0).template;
-    let layout = StageLayout::new(ctx, ctx.state, stage, 0);
+    let template = super::build_single_stage_template(ctx, stage, 0).template;
+    let layout = StageLayout::new(ctx, stage, 0);
     (layout, template)
 }
 
@@ -3785,7 +3781,7 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
         &inputs,
     );
     let stage = &system.stages()[0];
-    super::build_single_stage_template(&ctx, ctx.state, stage, 0).template
+    super::build_single_stage_template(&ctx, stage, 0).template
 }
 
 /// `K = 1` chronological build collapses to the parallel LP: the interior
@@ -3901,8 +3897,8 @@ fn block_layout_and_template(
     let ctx = Box::leak(Box::new(ctx));
     let stage = &system.stages()[0];
 
-    let template = super::build_single_stage_template(ctx, ctx.state, stage, 0).template;
-    let layout = StageLayout::new(ctx, ctx.state, stage, 0);
+    let template = super::build_single_stage_template(ctx, stage, 0).template;
+    let layout = StageLayout::new(ctx, stage, 0);
     let tau: Vec<f64> = stage
         .blocks
         .iter()
@@ -4477,7 +4473,7 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
     let mut saw_empty_filled_floor = false;
 
     for (stage_idx, stage) in system.stages().iter().enumerate() {
-        let layout = super::super::layout::StageLayout::new(&ctx, ctx.state, stage, stage_idx);
+        let layout = super::super::layout::StageLayout::new(&ctx, stage, stage_idx);
         let geometry = layout.geometry.clone();
 
         assert_eq!(
@@ -4918,8 +4914,8 @@ fn filling_block_layout_and_template(
     let ctx = Box::leak(Box::new(ctx));
     let stage = &system.stages()[0];
 
-    let template = super::build_single_stage_template(ctx, ctx.state, stage, 0).template;
-    let layout = StageLayout::new(ctx, ctx.state, stage, 0);
+    let template = super::build_single_stage_template(ctx, stage, 0).template;
+    let layout = StageLayout::new(ctx, stage, 0);
     (layout, template, (*ctx.filling_v_target).clone())
 }
 

@@ -1345,7 +1345,7 @@ mod interior_storage_bound_tests {
     /// offsets by value (the borrowed `StateSpace` cannot escape).
     fn run_fill(fixtures: &mut InteriorStorageFixtures, stage: &Stage) -> RawFill {
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, stage, STAGE_IDX);
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
         let mut objective = vec![0.0_f64; layout.num_cols];
@@ -1424,14 +1424,10 @@ mod interior_storage_bound_tests {
         // computation on its CSC.
         let ctx = fixtures.make_ctx();
         let chrono_stage = stage_with_blocks(BlockMode::Chronological);
-        let layout = StageLayout::new(&ctx, ctx.state, &chrono_stage, STAGE_IDX);
-        let template = super::super::template::build_single_stage_template(
-            &ctx,
-            ctx.state,
-            &chrono_stage,
-            STAGE_IDX,
-        )
-        .template;
+        let layout = StageLayout::new(&ctx, &chrono_stage, STAGE_IDX);
+        let template =
+            super::super::template::build_single_stage_template(&ctx, &chrono_stage, STAGE_IDX)
+                .template;
         let col_scale = super::super::compute_col_scale(
             template.num_cols,
             &template.col_starts,
@@ -1466,7 +1462,6 @@ mod interior_storage_bound_tests {
             let parallel_stage = stage_with_blocks(BlockMode::Parallel);
             super::super::template::build_single_stage_template(
                 &par_ctx,
-                par_ctx.state,
                 &parallel_stage,
                 STAGE_IDX,
             )
@@ -1507,7 +1502,7 @@ mod interior_storage_bound_tests {
         let (endpoint, par_storage_internal_empty) = {
             let par_ctx = fixtures.make_ctx();
             let stage = stage_with_blocks(BlockMode::Parallel);
-            let l = StageLayout::new(&par_ctx, par_ctx.state, &stage, STAGE_IDX);
+            let l = StageLayout::new(&par_ctx, &stage, STAGE_IDX);
             (
                 l.block_storage_col(HydroSys::new(0), Boundary::Outgoing),
                 l.geometry.storage_internal_start == l.geometry.turbine.start,
@@ -1768,7 +1763,7 @@ mod diversion_bound_tests {
     fn run_fill(fixtures: &mut DivFixtures) -> (Vec<f64>, Vec<f64>, usize, usize) {
         let stage = two_block_stage(STAGE_IDX, [372.0, 372.0]);
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
         let mut objective = vec![0.0_f64; layout.num_cols];
@@ -2113,7 +2108,7 @@ mod filling_phase_gating_tests {
         let stage_index = usize::try_from(stage_id).expect("test stage ids are non-negative");
         let stage = two_block_stage(stage_index, [372.0, 372.0]);
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -2171,7 +2166,7 @@ mod filling_phase_gating_tests {
         stage: &Stage,
     ) -> (Vec<f64>, Vec<f64>, usize, usize) {
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -2579,7 +2574,7 @@ mod filling_phase_gating_tests {
         let stage_index = usize::try_from(stage_id).expect("test stage ids are non-negative");
         let stage = two_block_stage(stage_index, [372.0, 372.0]);
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -2692,7 +2687,7 @@ mod filling_phase_gating_tests {
         let stage_index = usize::try_from(stage_id).expect("test stage ids are non-negative");
         let stage = two_block_stage(stage_index, [372.0, 372.0]);
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -2827,7 +2822,7 @@ mod filling_phase_gating_tests {
         let stage_index = usize::try_from(stage_id).expect("test stage ids are non-negative");
         let stage = two_block_stage(stage_index, [372.0, 372.0]);
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -3094,7 +3089,7 @@ mod anticipated_objective_tests {
         let mut fixtures = AntObjFixtures::new();
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(STAGE_IDX, [372.0, 372.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
 
         let (_col_lower, col_upper, objective) =
             fill_stage_columns(&ctx, &stage, STAGE_IDX, &layout);
@@ -3287,7 +3282,7 @@ mod anticipated_objective_tests {
         );
         let ctx = fx.make_ctx();
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 0, &layout);
         let decision_col = layout.geometry.anticipated_decision.start;
@@ -3537,7 +3532,7 @@ mod anticipated_objective_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = two_block_stage(0, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 0, &layout);
         let decision_col = layout.geometry.anticipated_decision.start;
@@ -3570,7 +3565,7 @@ mod anticipated_objective_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = two_block_stage(1, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 1);
+        let layout = StageLayout::new(&ctx, &stage, 1);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 1, &layout);
         let decision_col = layout.geometry.anticipated_decision.start;
@@ -3602,7 +3597,7 @@ mod anticipated_objective_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = two_block_stage(1, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 1);
+        let layout = StageLayout::new(&ctx, &stage, 1);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 1, &layout);
         let decision_col = layout.geometry.anticipated_decision.start;
@@ -3630,7 +3625,7 @@ mod anticipated_objective_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = two_block_stage(1, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 1);
+        let layout = StageLayout::new(&ctx, &stage, 1);
 
         let (col_lower, col_upper, _objective) = fill_stage_columns(&ctx, &stage, 1, &layout);
         let decision_col = layout.geometry.anticipated_decision.start;
@@ -4002,7 +3997,7 @@ mod block_family_slack_tests {
         let mut fixtures = SlackFixtures::new(&specs);
         let stage = two_block_stage(STAGE_IDX, [BLOCK_HOURS[0], BLOCK_HOURS[1]]);
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
 
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
@@ -4343,7 +4338,7 @@ mod evaporation_slack_objective_tests {
 
     fn run_fill(fixtures: &mut EvapFixtures, stage: &Stage) -> EvapFill {
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, stage, STAGE_IDX);
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
         let mut objective = vec![0.0_f64; layout.num_cols];
@@ -4588,7 +4583,7 @@ mod contract_column_tests {
     fn run_fill(fixtures: &mut ContractFixtures) -> (Vec<f64>, Vec<f64>, Vec<f64>, usize, usize) {
         let stage = one_block_stage();
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
         let mut objective = vec![0.0_f64; layout.num_cols];
@@ -4821,7 +4816,7 @@ mod thermal_block_bound_tests {
     ) -> (Vec<f64>, Vec<f64>, Vec<f64>, usize) {
         let stage = three_block_stage(stage_idx);
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, stage_idx);
+        let layout = StageLayout::new(&ctx, &stage, stage_idx);
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
         let mut objective = vec![0.0_f64; layout.num_cols];
@@ -5297,7 +5292,7 @@ mod line_contract_pumping_block_bound_tests {
     fn run_fill(fixtures: &mut LcpFixtures, stage_idx: usize) -> FillResult {
         let stage = three_block_stage(stage_idx);
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, stage_idx);
+        let layout = StageLayout::new(&ctx, &stage, stage_idx);
 
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
@@ -5983,7 +5978,7 @@ mod hydro_block_bound_tests {
     fn run_fill(fixtures: &mut HydroBlockFixtures, stage_idx: usize) -> FillResult {
         let stage = three_block_stage(stage_idx);
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, stage_idx);
+        let layout = StageLayout::new(&ctx, &stage, stage_idx);
 
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];
@@ -6570,7 +6565,7 @@ mod hydro_block_bound_tests {
 
         let stage = three_block_stage(STAGE_IDX);
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
         assert_eq!(
             layout.geometry.fpha_hydro_indices.len(),
             1,
@@ -7042,7 +7037,7 @@ mod cell_column_bound_tests {
         );
 
         let stage = three_block_stage(STAGE_IDX);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -7188,7 +7183,7 @@ mod cell_column_bound_tests {
         );
 
         let stage = three_block_stage(STAGE_IDX);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -7262,7 +7257,7 @@ mod cell_column_bound_tests {
         // row, decoupled from stage.id exactly as the filling-phase gating
         // tests decouple them.
         let stage = three_block_stage(usize::try_from(PREFILLING_ID).expect("non-negative"));
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
         assert!(
             layout.geometry.fpha_hydro_indices.is_empty(),
             "the suspended FPHA plant must be excluded from fpha_hydro_indices during PreFilling"
@@ -7341,7 +7336,7 @@ mod cell_column_bound_tests {
         );
 
         let stage = three_block_stage(STAGE_IDX);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -7466,7 +7461,7 @@ mod cell_column_bound_tests {
         );
 
         let stage2 = three_block_stage(2);
-        let layout2 = StageLayout::new(&ctx, ctx.state, &stage2, 2);
+        let layout2 = StageLayout::new(&ctx, &stage2, 2);
         let (mut col_lower2, mut col_upper2, mut objective2) = fresh_bufs(layout2.num_cols);
         let mut bufs2 = ColumnBufs {
             col_lower: &mut col_lower2,
@@ -7500,7 +7495,7 @@ mod cell_column_bound_tests {
         );
 
         let stage0 = three_block_stage(0);
-        let layout0 = StageLayout::new(&ctx, ctx.state, &stage0, 0);
+        let layout0 = StageLayout::new(&ctx, &stage0, 0);
         let (mut col_lower0, mut col_upper0, mut objective0) = fresh_bufs(layout0.num_cols);
         let mut bufs0 = ColumnBufs {
             col_lower: &mut col_lower0,
@@ -7587,7 +7582,7 @@ mod cell_column_bound_tests {
         assert_eq!(ctx.hydro_cell_index.bus_of(cell_overridden), EntityId(900));
 
         let stage2 = three_block_stage(2);
-        let layout2 = StageLayout::new(&ctx, ctx.state, &stage2, 2);
+        let layout2 = StageLayout::new(&ctx, &stage2, 2);
         assert_eq!(
             layout2.geometry.fpha_hydro_indices,
             vec![HydroSys::new(3)],
@@ -7627,7 +7622,7 @@ mod cell_column_bound_tests {
         );
 
         let stage0 = three_block_stage(0);
-        let layout0 = StageLayout::new(&ctx, ctx.state, &stage0, 0);
+        let layout0 = StageLayout::new(&ctx, &stage0, 0);
         let (mut col_lower0, mut col_upper0, mut objective0) = fresh_bufs(layout0.num_cols);
         let mut bufs0 = ColumnBufs {
             col_lower: &mut col_lower0,
@@ -7765,7 +7760,7 @@ mod cell_column_bound_tests {
         );
 
         let stage = three_block_stage(STAGE_IDX);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
+        let layout = StageLayout::new(&ctx, &stage, STAGE_IDX);
         let (mut col_lower, mut col_upper, mut objective) = fresh_bufs(layout.num_cols);
         let mut bufs = ColumnBufs {
             col_lower: &mut col_lower,
@@ -7933,7 +7928,7 @@ mod ncs_objective_tests {
     fn run_fill(fixtures: &mut NcsFixtures, stage_idx: usize) -> FillResult {
         let stage = three_block_stage(stage_idx);
         let ctx = fixtures.make_ctx();
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, stage_idx);
+        let layout = StageLayout::new(&ctx, &stage, stage_idx);
 
         let mut col_lower = vec![0.0_f64; layout.num_cols];
         let mut col_upper = vec![f64::INFINITY; layout.num_cols];

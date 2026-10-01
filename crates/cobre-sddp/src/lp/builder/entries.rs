@@ -2240,7 +2240,7 @@ mod zero_cost_tests {
         ctx.thermals = &thermals;
 
         let stage = two_block_stage(2, [372.0, 372.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 2);
+        let layout = StageLayout::new(&ctx, &stage, 2);
 
         let mut objective = vec![0.0_f64; layout.num_cols];
         let mut col_lower = vec![0.0_f64; layout.num_cols];
@@ -2287,7 +2287,7 @@ mod zero_cost_tests {
         fixtures.base.bounds = AntFixtures::bounds_with_n_stages(10, 0, 0);
         let ctx = fixtures.make_ctx(5, vec![1, 5], &[0, 1], 2);
         let stage = two_block_stage(2, [372.0, 372.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 2);
+        let layout = StageLayout::new(&ctx, &stage, 2);
 
         // Always-active: both plants active at stage 2 → two fishing rows.
         assert_eq!(
@@ -2329,7 +2329,7 @@ mod zero_cost_tests {
         fixtures.base.bounds = AntFixtures::bounds_with_n_stages(10, 0, 0);
         let ctx = fixtures.make_ctx(5, vec![1, 5], &[0, 1], 2);
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         // Always-active: both plants are active at stage 0 → two fishing rows.
         assert_eq!(
@@ -2410,7 +2410,7 @@ mod zero_cost_tests {
             ctx.state.k_max, 0,
             "fixture sanity: a lead-0 plant's ring is empty"
         );
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_fishing_entries(&ctx, &stage, 0, &layout, &mut col_entries);
@@ -2473,7 +2473,7 @@ mod zero_cost_tests {
 
         // Stage 0: both plants active.
         let stage0 = two_block_stage(0, [372.0, 372.0]);
-        let layout0 = StageLayout::new(&ctx, ctx.state, &stage0, 0);
+        let layout0 = StageLayout::new(&ctx, &stage0, 0);
         let (col_lower, col_upper, _objective) = fill_stage_columns(&ctx, &stage0, 0, &layout0);
         let leads = [2_usize, 3];
         let k_max = 3_usize;
@@ -2506,7 +2506,7 @@ mod zero_cost_tests {
 
         // Stage 5: both plants inactive.
         let stage5 = two_block_stage(5, [372.0, 372.0]);
-        let layout5 = StageLayout::new(&ctx, ctx.state, &stage5, 5);
+        let layout5 = StageLayout::new(&ctx, &stage5, 5);
         assert_eq!(
             layout5.anticipated.state_out_def_rows.len(),
             0,
@@ -2543,7 +2543,7 @@ mod zero_cost_tests {
     fn test_fill_anticipated_state_out_def_rows_two_active_plants() {
         let (mut fixtures, stage) = build_anticipated_ctx_n_stages_6();
         let ctx = fixtures.make_ctx(3, vec![2, 3], &[0, 1], 0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         assert_eq!(
             layout.anticipated.state_out_def_rows.len(),
@@ -2585,7 +2585,7 @@ mod zero_cost_tests {
     fn test_fill_anticipated_state_out_def_entries_two_active_plants() {
         let (mut fixtures, stage) = build_anticipated_ctx_n_stages_6();
         let ctx = fixtures.make_ctx(3, vec![2, 3], &[0, 1], 0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_state_out_def_entries(0, &layout, &mut col_entries);
@@ -2637,7 +2637,7 @@ mod zero_cost_tests {
         fixtures.base.bounds = AntFixtures::bounds_with_n_stages(6, 3, 1);
         let ctx = fixtures.make_ctx(3, vec![3], &[0], 1);
         let stage = two_block_stage(4, [372.0, 372.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 4);
+        let layout = StageLayout::new(&ctx, &stage, 4);
 
         assert_eq!(
             layout.anticipated.anticipated_slot_row_pos,
@@ -2725,7 +2725,7 @@ mod zero_cost_tests {
      {
         let (mut fixtures, stage) = build_anticipated_ctx_n_stages_6();
         let ctx = fixtures.make_ctx(3, vec![3, 2], &[0, 1], 2);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut actual: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_slot_definition_entries(&layout, &mut actual);
@@ -2787,7 +2787,7 @@ mod zero_cost_tests {
 
         for stage_idx in 0..4 {
             let stage = two_block_stage(stage_idx, [372.0, 372.0]);
-            let layout = StageLayout::new(&ctx, ctx.state, &stage, stage_idx);
+            let layout = StageLayout::new(&ctx, &stage, stage_idx);
             assert_eq!(
                 layout.anticipated.fishing_rows.len(),
                 0,
@@ -2857,7 +2857,7 @@ mod zero_cost_tests {
             ctx.state.k_max, 0,
             "fixture sanity: a lead-0 plant's ring is empty"
         );
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         assert_eq!(
             layout.anticipated.fishing_rows.len(),
@@ -2910,7 +2910,7 @@ mod zero_cost_tests {
         );
         let ctx = fixtures.make_ctx(3, vec![3], &[0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_slot_definition_entries(&layout, &mut col_entries);
@@ -2954,7 +2954,7 @@ mod zero_cost_tests {
         fixtures.base.bounds = AntFixtures::bounds_with_n_stages(8, 4, 0);
         let ctx = fixtures.make_ctx(4, vec![3, 4], &[0, 1], 0);
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_state_out_def_entries(0, &layout, &mut col_entries);
@@ -3032,7 +3032,7 @@ mod zero_cost_tests {
         );
         ctx.time_value = &time_value;
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_state_out_def_entries(0, &layout, &mut col_entries);
@@ -3083,7 +3083,7 @@ mod zero_cost_tests {
         );
         ctx.time_value = &time_value;
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_slot_definition_entries(&layout, &mut col_entries);
@@ -3129,7 +3129,7 @@ mod zero_cost_tests {
         );
         ctx.time_value = &time_value;
         let stage = two_block_stage(2, [372.0, 372.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 2);
+        let layout = StageLayout::new(&ctx, &stage, 2);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_fishing_entries(&ctx, &stage, 2, &layout, &mut col_entries);
@@ -3188,7 +3188,7 @@ mod zero_cost_tests {
                         // fishing-row entry resolves to a real thermal column.
         );
 
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let col_entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
 
         let a = ctx.study_dims.anticipated_plants.len();
@@ -3854,7 +3854,7 @@ mod pumping_water_tests {
         let mut fixtures = PumpFixtures::new(vec![fixture_hydro(1), fixture_hydro(2)], stations);
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         // Lower/upper start at a NaN sentinel so any column the helper fails to
         // bound is visible; objective starts at the production default (0.0), so
@@ -3901,7 +3901,7 @@ mod pumping_water_tests {
         );
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_pumping_water_entries(&ctx, &layout, &mut col_entries);
@@ -3935,7 +3935,7 @@ mod pumping_water_tests {
         );
         let ctx = fixtures.make_ctx();
         let stage = chronological_stage(0, &[300.0, 420.0, 24.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_pumping_water_entries(&ctx, &layout, &mut col_entries);
@@ -3964,7 +3964,7 @@ mod pumping_water_tests {
             vec![station(10, 2, 3, 0.0, 50.0), station(20, 3, 1, 0.0, 30.0)],
         );
         let reordered_ctx = reordered.make_ctx();
-        let reordered_layout = StageLayout::new(&reordered_ctx, reordered_ctx.state, &stage, 0);
+        let reordered_layout = StageLayout::new(&reordered_ctx, &stage, 0);
         let mut reordered_entries: Vec<Vec<(usize, f64)>> =
             vec![Vec::new(); reordered_layout.num_cols];
         fill_pumping_water_entries(&reordered_ctx, &reordered_layout, &mut reordered_entries);
@@ -3986,7 +3986,7 @@ mod pumping_water_tests {
         );
         let ctx = fixtures.make_ctx();
         let stage = chronological_stage(0, &[300.0, 420.0, 24.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
 
         let n_blks = layout.clock.n_blks();
@@ -4056,7 +4056,7 @@ mod pumping_water_tests {
         );
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_pumping_water_entries(&ctx, &layout, &mut col_entries);
@@ -4086,7 +4086,7 @@ mod pumping_water_tests {
         );
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_pumping_water_entries(&ctx, &layout, &mut col_entries);
@@ -4118,7 +4118,7 @@ mod pumping_water_tests {
         );
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
@@ -4171,7 +4171,7 @@ mod pumping_water_tests {
         );
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
@@ -4200,7 +4200,7 @@ mod pumping_water_tests {
         );
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
@@ -4233,7 +4233,7 @@ mod pumping_water_tests {
         );
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
@@ -4273,7 +4273,7 @@ mod pumping_water_tests {
         );
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
@@ -4308,7 +4308,7 @@ mod pumping_water_tests {
         );
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
@@ -4358,7 +4358,7 @@ mod pumping_water_tests {
         .with_generic_constraint(constraint, 50.0);
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         // Exercises fill_load_balance_entries (contract block) and
         // fill_generic_constraint_entries (the resolved ContractImport arm). Under
@@ -4380,7 +4380,7 @@ mod pumping_water_tests {
         );
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
@@ -4409,7 +4409,7 @@ mod pumping_water_tests {
             );
             let ctx = fixtures.make_ctx();
             let stage = two_block_stage(0, [300.0, 444.0]);
-            let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+            let layout = StageLayout::new(&ctx, &stage, 0);
             let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
             fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
             // Truncate to the non-pumping column region: with zero stations the
@@ -4451,7 +4451,7 @@ mod pumping_water_tests {
             let mut fixtures = PumpFixtures::new(hydros, stations);
             let ctx = fixtures.make_ctx();
             let stage = two_block_stage(0, [300.0, 444.0]);
-            let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+            let layout = StageLayout::new(&ctx, &stage, 0);
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
             // Mirror the production per-column row-sort (see build_single_stage_template).
             for col in &mut entries {
@@ -4558,7 +4558,7 @@ mod pumping_water_tests {
         let assemble = |fixtures: &mut PumpFixtures| {
             let ctx = fixtures.make_ctx();
             let stage = two_block_stage(0, [300.0, 444.0]);
-            let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+            let layout = StageLayout::new(&ctx, &stage, 0);
 
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
             let mut col_upper = vec![f64::INFINITY; layout.num_cols];
@@ -4630,7 +4630,7 @@ mod pumping_water_tests {
         // matches the layout order A's CSC was assembled with.
         let ctx_a = fixtures_a.make_ctx();
         let stage_a = two_block_stage(0, [300.0, 444.0]);
-        let layout_a = StageLayout::new(&ctx_a, ctx_a.state, &stage_a, 0);
+        let layout_a = StageLayout::new(&ctx_a, &stage_a, 0);
 
         assert_eq!(csc_a.0, csc_b.0, "col_starts must be byte-identical");
         assert_eq!(csc_a.1, csc_b.1, "row_indices must be byte-identical");
@@ -4741,7 +4741,7 @@ mod pumping_water_tests {
             let ctx = fixtures.make_ctx();
             // RET_FILLING_ID = 3 is a Filling stage for the start=2/entry=4 window.
             let stage = two_block_stage(usize::try_from(RET_FILLING_ID).unwrap(), [300.0, 444.0]);
-            let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+            let layout = StageLayout::new(&ctx, &stage, 0);
             let (row_lower, row_upper) =
                 super::super::rows::fill_stage_rows(&ctx, &stage, 0, &layout);
             let csc = {
@@ -4815,7 +4815,7 @@ mod pumping_water_tests {
         // the layout offsets read below stay valid.
         let ctx = cascade_fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let csc = {
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
             // Mirror the production per-column row-sort (see
@@ -4950,7 +4950,7 @@ mod pumping_water_tests {
         .with_par_lp(par_lp);
         let ar_ctx = ar_fixtures.make_ctx();
         let ar_stage = two_block_stage(0, [300.0, 444.0]);
-        let ar_layout = StageLayout::new(&ar_ctx, ar_ctx.state, &ar_stage, 0);
+        let ar_layout = StageLayout::new(&ar_ctx, &ar_stage, 0);
         let ar_csc = {
             let mut entries = build_stage_matrix_entries(&ar_ctx, &ar_stage, 0, &ar_layout);
             for col in &mut entries {
@@ -5064,7 +5064,7 @@ mod pumping_water_tests {
         let mut fixtures = split_plant_fixture();
         let ctx = fixtures.make_ctx();
         let stage = three_block_stage(0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
 
         let plant1_idx = 1;
@@ -5162,7 +5162,7 @@ mod pumping_water_tests {
         let mut fixtures = split_upstream_cascade_fixture();
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
 
         // id order 10, 11, 12 -> positions 0, 1, 2. Plant 0's cells: 0, 1
@@ -5215,7 +5215,7 @@ mod pumping_water_tests {
         let mut fixtures = split_plant_fixture();
         let ctx = fixtures.make_ctx();
         let stage = three_block_stage(0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
 
         let n_h = layout.state.hydro_count;
@@ -5436,7 +5436,7 @@ mod pumping_water_tests {
         let cell_b = HydroCell::new(1);
 
         let stage = three_block_stage(0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let n_cells = ctx.hydro_cell_index.n_cells();
         let n_blks = layout.clock.n_blks();
 
@@ -5630,7 +5630,7 @@ mod pumping_water_tests {
             let mut fixtures = PumpFixtures::new(hydros, Vec::new()).with_resolved_penalties();
             let ctx = fixtures.make_ctx();
             let stage = two_block_stage(0, [300.0, 444.0]);
-            let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+            let layout = StageLayout::new(&ctx, &stage, 0);
 
             // Parallel mode's water-balance row sums EVERY block, so block 1's
             // upstream/downstream turbine columns must be pinned too -- left free,
@@ -5669,8 +5669,7 @@ mod pumping_water_tests {
 
             let down_row = layout.geometry.water_balance.start() + downstream_idx;
 
-            let out =
-                super::super::template::build_single_stage_template(&ctx, ctx.state, &stage, 0);
+            let out = super::super::template::build_single_stage_template(&ctx, &stage, 0);
             let template = out.template;
 
             let mut solver = ActiveSolver::new().expect("ActiveSolver::new()");
@@ -5857,7 +5856,7 @@ mod pumping_water_tests {
         let mut fixture = split_bus_fixture(split_bus_production_models(vec![plane]));
         let ctx = fixture.fixtures.make_ctx();
         let stage = three_block_stage(0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
@@ -5959,7 +5958,7 @@ mod pumping_water_tests {
         let mut fixture = split_bus_fixture(production_models);
         let ctx = fixture.fixtures.make_ctx();
         let stage = three_block_stage(0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
@@ -6025,7 +6024,7 @@ mod pumping_water_tests {
         let mut fixture = split_bus_fixture(split_bus_production_models(vec![plane]));
         let ctx = fixture.fixtures.make_ctx();
         let stage = three_block_stage(0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_fpha_entries(&ctx, &stage, 0, &layout, &mut col_entries);
@@ -6154,7 +6153,7 @@ mod pumping_water_tests {
             .with_production_models(production_models);
         let ctx = fixtures.make_ctx();
         let stage = three_block_stage(0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_fpha_entries(&ctx, &stage, 0, &layout, &mut col_entries);
@@ -6277,7 +6276,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
 
         let down_row = i32::try_from(layout.geometry.water_balance.start() + down_idx).unwrap();
@@ -6386,7 +6385,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
 
         let down_row = i32::try_from(layout.geometry.water_balance.start() + down_idx).unwrap();
@@ -6470,12 +6469,12 @@ mod pumping_water_tests {
         // across the upstream's `exit_stage_id` boundary.
         let mut stage_active = two_block_stage(0, [300.0, 444.0]);
         stage_active.id = 0;
-        let layout_active = StageLayout::new(&ctx, ctx.state, &stage_active, 0);
+        let layout_active = StageLayout::new(&ctx, &stage_active, 0);
         let csc_active = build_sorted_csc(&ctx, &stage_active, 0, &layout_active);
 
         let mut stage_exited = two_block_stage(0, [300.0, 444.0]);
         stage_exited.id = 1;
-        let layout_exited = StageLayout::new(&ctx, ctx.state, &stage_exited, 0);
+        let layout_exited = StageLayout::new(&ctx, &stage_exited, 0);
         let csc_exited = build_sorted_csc(&ctx, &stage_exited, 0, &layout_exited);
 
         let down_row_active =
@@ -6585,7 +6584,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
 
         let def_row = i32::try_from(layout.rows.transit_bucket_definition.start).unwrap();
@@ -6672,7 +6671,7 @@ mod pumping_water_tests {
         fixtures.base.topology.per_stage_mask = vec![vec![3, 1]];
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_transit_bucket_definition_entries(&layout, &mut col_entries);
@@ -6724,7 +6723,7 @@ mod pumping_water_tests {
             ctx.state.n_buckets, 0,
             "fixture must declare no travel-time arc"
         );
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         // No bucket-row gap: load_balance starts exactly where water_balance
         // ends, and the bucket-definition row cursor collapses onto it.
@@ -6796,7 +6795,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let _ = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
     }
@@ -6868,7 +6867,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = chronological_stage(0, &block_hours);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
 
         let def_row = i32::try_from(layout.rows.transit_bucket_definition.start).unwrap();
@@ -7005,7 +7004,7 @@ mod pumping_water_tests {
         let par_ctx = par_fixtures.make_ctx();
         let mut par_stage = chronological_stage(0, &[720.0]);
         par_stage.block_mode = BlockMode::Parallel;
-        let par_layout = StageLayout::new(&par_ctx, par_ctx.state, &par_stage, 0);
+        let par_layout = StageLayout::new(&par_ctx, &par_stage, 0);
         let par_csc = build_sorted_csc(&par_ctx, &par_stage, 0, &par_layout);
 
         // Chronological build (K=1), same arc data via arc_spread_chrono.
@@ -7017,7 +7016,7 @@ mod pumping_water_tests {
         chr_fixtures.base.topology.per_stage_mask = vec![vec![1]];
         let chr_ctx = chr_fixtures.make_ctx();
         let chr_stage = chronological_stage(0, &[720.0]);
-        let chr_layout = StageLayout::new(&chr_ctx, chr_ctx.state, &chr_stage, 0);
+        let chr_layout = StageLayout::new(&chr_ctx, &chr_stage, 0);
         let chr_csc = build_sorted_csc(&chr_ctx, &chr_stage, 0, &chr_layout);
 
         assert_eq!(
@@ -7075,7 +7074,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = chronological_stage(0, &[720.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let _ = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
     }
@@ -7118,7 +7117,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = chronological_stage(0, &[720.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let _ = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
     }
@@ -7268,7 +7267,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = two_block_stage(0, [300.0, 420.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
 
         let row_water = i32::try_from(layout.geometry.water_balance.start() + down_idx).unwrap();
@@ -7312,7 +7311,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
 
         let stage = chronological_stage(0, &[300.0, 420.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let _ = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
     }
@@ -7371,7 +7370,7 @@ mod pumping_water_tests {
         .with_generic_constraint(constraint, 40.0);
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         // Block-dependent expression with block_id = None expands to one generic
         // row per block, so the constraint participates as `n_blks` rows.
@@ -7465,7 +7464,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
         let block_hours = [300.0, 444.0];
         let stage = two_block_stage(0, block_hours);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let n_blks = layout.clock.n_blks();
         assert_eq!(
@@ -7669,7 +7668,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
         let stage_index = usize::try_from(stage_id).expect("non-negative");
         let stage = two_block_stage(stage_index, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let csc = {
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
             for col in &mut entries {
@@ -7806,7 +7805,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
         let stage_index = usize::try_from(stage_id).expect("non-negative");
         let stage = two_block_stage(stage_index, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let (row_lower, row_upper) = super::super::rows::fill_stage_rows(&ctx, &stage, 0, &layout);
         let csc = {
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
@@ -7967,7 +7966,7 @@ mod pumping_water_tests {
 
         // The row RHS at id 2 reads that V_target[2], not min_storage.
         let stage = two_block_stage(usize::try_from(RET_START_STAGE_ID).unwrap(), [360.0, 360.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let (row_lower, _row_upper) = super::super::rows::fill_stage_rows(&ctx, &stage, 0, &layout);
         let row = layout.geometry.filling_target.start;
         assert_eq!(
@@ -7996,7 +7995,7 @@ mod pumping_water_tests {
         );
         let ctx = control.make_ctx();
         let stage = two_block_stage(usize::try_from(TARGET_TERMINAL_ID).unwrap(), [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         assert_eq!(
             layout.geometry.filling_target_hydro_indices.len(),
             0,
@@ -8119,7 +8118,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
         let stage_index = usize::try_from(stage_id).expect("non-negative");
         let stage = two_block_stage(stage_index, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let (row_lower, row_upper) = super::super::rows::fill_stage_rows(&ctx, &stage, 0, &layout);
         let csc = {
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
@@ -8232,7 +8231,7 @@ mod pumping_water_tests {
         );
         let ctx = control.make_ctx();
         let stage = two_block_stage(usize::try_from(RET_OPERATING_ID).unwrap(), [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         assert_eq!(
             layout.geometry.filled_min_storage_floor_hydro_indices.len(),
             0,
@@ -8334,7 +8333,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
         let stage_index = usize::try_from(stage_id).expect("non-negative");
         let stage = two_block_stage(stage_index, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let (row_lower, row_upper) = super::super::rows::fill_stage_rows(&ctx, &stage, 0, &layout);
         let csc = {
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
@@ -8520,7 +8519,7 @@ mod pumping_water_tests {
         let h1_idx = fixtures.hydro_pos[&EntityId(1)];
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(usize::try_from(RET_PREFILLING_ID).unwrap(), [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let (row_lower, row_upper) = super::super::rows::fill_stage_rows(&ctx, &stage, 0, &layout);
         let csc = {
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
@@ -8607,7 +8606,7 @@ mod pumping_water_tests {
         let h2_idx = fixtures.hydro_pos[&EntityId(2)];
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(usize::try_from(RET_PREFILLING_ID).unwrap(), [300.0, 444.0]);
-        let out = super::super::template::build_single_stage_template(&ctx, ctx.state, &stage, 0);
+        let out = super::super::template::build_single_stage_template(&ctx, &stage, 0);
         let template = out.template;
 
         let col_v_in = ctx
@@ -8666,7 +8665,7 @@ mod pumping_water_tests {
         let h2_idx_c = control.hydro_pos[&EntityId(2)];
         let ctx = control.make_ctx();
         let stage = two_block_stage(usize::try_from(RET_PREFILLING_ID).unwrap(), [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let (rl_c, ru_c) = super::super::rows::fill_stage_rows(&ctx, &stage, 0, &layout);
         let csc_c = {
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
@@ -8766,7 +8765,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
         let stage_index = usize::try_from(stage_id).expect("non-negative");
         let stage = two_block_stage(stage_index, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let (row_lower, row_upper) = super::super::rows::fill_stage_rows(&ctx, &stage, 0, &layout);
         let csc = {
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
@@ -8874,7 +8873,7 @@ mod pumping_water_tests {
             .water_withdrawal_m3s = 13.0;
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(0, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let (row_lower, row_upper) = super::super::rows::fill_stage_rows(&ctx, &stage, 0, &layout);
         let csc = {
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
@@ -8990,7 +8989,7 @@ mod pumping_water_tests {
         let ctx = fixtures.make_ctx();
         let stage_index = usize::try_from(stage_id).expect("non-negative");
         let stage = two_block_stage(stage_index, [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let (row_lower, row_upper) = super::super::rows::fill_stage_rows(&ctx, &stage, 0, &layout);
         let csc = {
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
@@ -9148,7 +9147,7 @@ mod pumping_water_tests {
             .water_withdrawal_m3s = 19.0;
         let ctx = fixtures.make_ctx();
         let stage = two_block_stage(usize::try_from(RET_PREFILLING_ID).unwrap(), [300.0, 444.0]);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
         let (row_lower, row_upper) = super::super::rows::fill_stage_rows(&ctx, &stage, 0, &layout);
         let csc = {
             let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
@@ -9248,7 +9247,7 @@ mod pumping_water_tests {
             two_block_stage(usize::try_from(RET_PREFILLING_ID).unwrap(), [300.0, 444.0]);
         stage.block_mode = BlockMode::Chronological;
         let stage = Box::leak(Box::new(stage));
-        let layout = StageLayout::new(ctx, ctx.state, stage, 0);
+        let layout = StageLayout::new(ctx, stage, 0);
         let (row_lower, row_upper) = super::super::rows::fill_stage_rows(ctx, stage, 0, &layout);
         let csc = {
             let mut entries = build_stage_matrix_entries(ctx, stage, 0, &layout);
@@ -9422,7 +9421,7 @@ mod pumping_water_tests {
                 two_block_stage(usize::try_from(RET_PREFILLING_ID).unwrap(), [372.0, 372.0]);
             stage.blocks.truncate(1);
             stage.block_mode = block_mode;
-            let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+            let layout = StageLayout::new(&ctx, &stage, 0);
             let (rl, ru) = super::super::rows::fill_stage_rows(&ctx, &stage, 0, &layout);
             let csc = {
                 let mut entries = build_stage_matrix_entries(&ctx, &stage, 0, &layout);
@@ -9517,7 +9516,7 @@ mod pumping_water_tests {
         }
         stage.block_mode = block_mode;
         let stage = Box::leak(Box::new(stage));
-        let layout = StageLayout::new(ctx, ctx.state, stage, 0);
+        let layout = StageLayout::new(ctx, stage, 0);
         let (row_lower, row_upper) = super::super::rows::fill_stage_rows(ctx, stage, 0, &layout);
         let cols = super::super::columns::fill_stage_columns(ctx, stage, 0, &layout);
         let csc = {
@@ -9787,7 +9786,7 @@ mod pumping_water_tests {
         let mut fixture = dormant_fpha_fixture();
         let ctx = fixture.make_ctx();
         let stage = three_block_stage(0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         assert!(
             layout.fpha_local_index[0].is_none(),
@@ -9807,7 +9806,7 @@ mod pumping_water_tests {
         let mut fixture = dormant_fpha_fixture();
         let ctx = fixture.make_ctx();
         let stage = three_block_stage(0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_load_balance_entries(&ctx, 0, &layout, &mut col_entries);
@@ -9844,7 +9843,7 @@ mod pumping_water_tests {
         let mut fixture = dormant_fpha_fixture();
         let ctx = fixture.make_ctx();
         let stage = three_block_stage(0);
-        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
+        let layout = StageLayout::new(&ctx, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_operational_violation_entries(&ctx, 0, &layout, &mut col_entries);

@@ -88,17 +88,9 @@ pub(crate) struct TemplateBuildCtx<'a> {
     /// single `resolve_lp_build_inputs` resolution
     /// (`LpBuildInputs::diversion_upstream`).
     pub(crate) diversion_upstream: &'a HashMap<EntityId, Vec<usize>>,
-    /// The role-(a) state layout, threaded from setup's single owner
-    /// (`resolve_state_layout`) — owns `anticipated_lead_stages`
-    /// and `anticipated_resolution`, which this ctx used to carry as its own
-    /// copies.
-    // Rationale: read only by tests and fixtures so far; production call sites
-    // still thread the state layout as their own separate parameter alongside
-    // this ctx.
-    #[cfg_attr(
-        not(any(test, feature = "test-support")),
-        expect(dead_code, reason = "read only by tests and fixtures so far")
-    )]
+    /// The role-(a) state layout, from setup's single owner
+    /// (`resolve_state_layout`), which owns `anticipated_lead_stages` and
+    /// `anticipated_resolution`.
     pub(crate) state: &'a StateSpace,
     /// Study-invariant, non-state LP shape (`inflow_method`,
     /// `max_deficit_segments`, `anticipated_plants`), threaded from setup's
@@ -188,12 +180,8 @@ impl AnticipatedLayout {
     /// Allocate the commitment-maturity rows, then the deposit-row family,
     /// then the future-window carry rows, in that order: reordering these
     /// three `row.alloc` calls would shift every family after them.
-    fn new(
-        row: &mut RangeCursor,
-        state: &StateSpace,
-        ctx: &TemplateBuildCtx<'_>,
-        stage_idx: usize,
-    ) -> Self {
+    fn new(row: &mut RangeCursor, ctx: &TemplateBuildCtx<'_>, stage_idx: usize) -> Self {
+        let state = ctx.state;
         // A `K = 0` self-delivery excludes a plant's row this stage, so the
         // maturity-row family is sparse like the deposit-row family below, not
         // the dense `state.n_anticipated` count.
@@ -1162,12 +1150,11 @@ fn allocate_water_balance_rows(
 
 fn allocate_transit_bucket_rows(
     row: &mut RangeCursor,
-    state: &StateSpace,
     ctx: &TemplateBuildCtx<'_>,
     stage_idx: usize,
 ) -> (Vec<Option<usize>>, Range<usize>) {
     let (transit_bucket_row_pos, n_transit_bucket_rows) =
-        build_transit_bucket_row_pos(state, &ctx.topology.per_stage_mask, stage_idx);
+        build_transit_bucket_row_pos(ctx.state, &ctx.topology.per_stage_mask, stage_idx);
     let transit_bucket_definition = row.alloc(n_transit_bucket_rows);
     (transit_bucket_row_pos, transit_bucket_definition)
 }
@@ -1264,12 +1251,8 @@ impl StageGeometry {
 }
 
 impl<'a> StageLayout<'a> {
-    pub(crate) fn new(
-        ctx: &TemplateBuildCtx<'_>,
-        state_layout: &'a StateSpace,
-        stage: &'a Stage,
-        stage_idx: usize,
-    ) -> Self {
+    pub(crate) fn new(ctx: &TemplateBuildCtx<'a>, stage: &'a Stage, stage_idx: usize) -> Self {
+        let state_layout = ctx.state;
         let clock = BlockClock::new(stage);
         let n_blks = clock.n_blks();
         let n_h = state_layout.hydro_count;
@@ -1340,7 +1323,7 @@ impl<'a> StageLayout<'a> {
         // range entirely — the cap itself is `build_transit_bucket_topology`'s,
         // gated on `boundary_present`.
         let (transit_bucket_row_pos, transit_bucket_definition) =
-            allocate_transit_bucket_rows(&mut row, state_layout, ctx, stage_idx);
+            allocate_transit_bucket_rows(&mut row, ctx, stage_idx);
         geometry.load_balance = BlockRowFamily::per_block(row.alloc(ctx.buses.len() * n_blks));
 
         // Sized by FPHA CELL, not FPHA plant (`n_fpha_cells` == `fpha_hydro_indices.len()`
@@ -1379,7 +1362,7 @@ impl<'a> StageLayout<'a> {
         geometry.filling_target = row.alloc(filling_target_hydro_indices.len());
         geometry.filled_min_storage_floor = row.alloc(filled_min_storage_floor_hydro_indices.len());
 
-        let anticipated = AnticipatedLayout::new(&mut row, state_layout, ctx, stage_idx);
+        let anticipated = AnticipatedLayout::new(&mut row, ctx, stage_idx);
 
         geometry.pumping_flow = col.alloc(ctx.pumping_stations.len() * n_blks);
 

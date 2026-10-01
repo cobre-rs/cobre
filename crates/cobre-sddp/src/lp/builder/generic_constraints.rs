@@ -652,7 +652,7 @@ fn resolve_pumping_column(
 }
 
 /// Resolve `ContractImport`/`ContractExport` to the block-major contract column via
-/// [`StageLayout::contract_col`].
+/// [`StageGeometry::contract_col`](super::layout::StageGeometry::contract_col).
 ///
 /// The injection/withdrawal LOAD-BALANCE sign is owned by the load-balance fill, not
 /// here: the resolved coefficient is the variable's own unit `+1.0` (the

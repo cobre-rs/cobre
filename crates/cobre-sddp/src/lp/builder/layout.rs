@@ -1676,7 +1676,7 @@ impl StageLayout<'_> {
         self.row_evap_start() + evap_slot_flat(local.get(), slot.get(), self.n_evap_slots)
     }
 
-    /// Filling-target-local `local`'s soft `σ_fill` row, over [`Self::filling_target`].
+    /// Filling-target-local `local`'s soft `σ_fill` row, over [`StageGeometry::filling_target`].
     #[inline]
     #[must_use]
     pub(crate) fn filling_target_row(&self, local: FillingTargetLocal) -> usize {
@@ -1684,7 +1684,7 @@ impl StageLayout<'_> {
     }
 
     /// Floor-local `local`'s soft `σ^{v-}` operating-floor row, over
-    /// [`Self::filled_min_storage_floor`].
+    /// [`StageGeometry::filled_min_storage_floor`].
     #[inline]
     #[must_use]
     pub(crate) fn filled_min_storage_floor_row(&self, local: FloorLocal) -> usize {

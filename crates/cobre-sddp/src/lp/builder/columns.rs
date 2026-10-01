@@ -994,7 +994,7 @@ pub(super) fn fill_pumping_columns(
     }
 }
 
-/// Energy-contract columns, addressed through [`StageLayout::contract_col`] by the
+/// Energy-contract columns, addressed through [`StageGeometry::contract_col`](super::layout::StageGeometry::contract_col) by the
 /// per-family slot from
 /// [`contract_family_slot`] — the
 /// single owner the load-balance fill and the resolver also share — not by `c_sys`.

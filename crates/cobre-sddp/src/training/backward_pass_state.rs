@@ -4661,7 +4661,7 @@ mod tests {
 
         let fixture = StageContextFixture::from_stage_templates(
             &setup.inputs.stage_data.stage_templates,
-            &setup.inputs.stage_data.stage_templates.state_boxes,
+            setup.inputs.stage_data.stage_templates.state_boxes(),
         )
         .ncs_stochastic_dense_col(&setup.inputs.ncs.stochastic_dense_col)
         .ncs_stochastic_windows(&setup.inputs.ncs.stochastic_windows)

@@ -2202,6 +2202,7 @@ fn stage_templates_empty_is_all_empty() {
     assert_eq!(empty.n_load_buses(), 0, "n_load_buses must be 0");
 
     assert!(empty.templates.is_empty(), "templates");
+    assert!(empty.state_boxes().is_empty(), "state_boxes");
     assert!(
         empty.block_hours_per_stage.is_empty(),
         "block_hours_per_stage"
@@ -2216,6 +2217,30 @@ fn stage_templates_empty_is_all_empty() {
         empty.hydro_productivities_per_stage.is_empty(),
         "hydro_productivities_per_stage"
     );
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "state_boxes read before postprocess_templates filled them")]
+fn state_boxes_read_before_postprocess_panics() {
+    let mut unfilled = super::StageTemplates::empty(DEFAULT_COST_SCALE_FACTOR);
+    unfilled
+        .templates
+        .push(crate::test_support::transit_bucket_only_template(1, 1));
+
+    let _ = unfilled.state_boxes();
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "set_state_boxes needs one state box per stage")]
+fn set_state_boxes_rejects_a_box_count_other_than_the_stage_count() {
+    let mut templates = super::StageTemplates::empty(DEFAULT_COST_SCALE_FACTOR);
+    templates
+        .templates
+        .push(crate::test_support::transit_bucket_only_template(1, 1));
+
+    templates.set_state_boxes(Vec::new());
 }
 
 // ── theta's coefficient is the stage's one-step discount factor ────────────

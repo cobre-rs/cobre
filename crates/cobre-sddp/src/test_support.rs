@@ -3173,11 +3173,11 @@ pub fn oracle_initial_state(setup: &StudySetup) -> Vec<f64> {
 }
 
 /// `stage`'s admissible box (per outgoing state dimension) as plain `(lower,
-/// upper)` vectors. `StateBox`/`StageTemplates::state_boxes` are `pub(crate)`, so
-/// this returns their data rather than naming either type in a `pub` signature.
+/// upper)` vectors, for integration tests, which cannot reach the crate-private
+/// `StageTemplates::state_boxes`.
 #[must_use]
 pub fn stage_state_box_bounds(setup: &StudySetup, stage: usize) -> (Vec<f64>, Vec<f64>) {
-    let state_box = &setup.inputs.stage_data.stage_templates.state_boxes[stage];
+    let state_box = &setup.inputs.stage_data.stage_templates.state_boxes()[stage];
     (state_box.lower.clone(), state_box.upper.clone())
 }
 

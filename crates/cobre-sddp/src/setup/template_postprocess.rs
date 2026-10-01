@@ -31,18 +31,23 @@ pub(crate) fn postprocess_templates(
     // `training/forward/stage_solve.rs`) and the raw commitment-hold bound.
     let bounds = system.bounds();
 
-    for stage_idx in 0..stage_templates.templates.len() {
-        let state_box = builder::build_state_box(
-            &stage_templates.templates[stage_idx],
-            state_layout,
-            stage_idx,
-            bounds,
-            anticipated_plants,
-            anticipated_plants.windows(),
-            time_value,
-        );
-        stage_templates.state_boxes.push(state_box);
-    }
+    let state_boxes = stage_templates
+        .templates
+        .iter()
+        .enumerate()
+        .map(|(stage_idx, template)| {
+            builder::build_state_box(
+                template,
+                state_layout,
+                stage_idx,
+                bounds,
+                anticipated_plants,
+                anticipated_plants.windows(),
+                time_value,
+            )
+        })
+        .collect();
+    stage_templates.set_state_boxes(state_boxes);
 
     // Column scaling then row scaling (D_r * A * D_c). Scale factors are stored on
     // the template for unscaling primal/dual solutions in the forward/backward passes.
@@ -191,7 +196,8 @@ mod tests {
         );
         let storage_j = state_layout.storage.start;
         assert_eq!(
-            stage_templates.state_boxes[0].upper[storage_j], PHYSICAL_UPPER,
+            stage_templates.state_boxes()[0].upper[storage_j],
+            PHYSICAL_UPPER,
             "the storage box's upper bound must be the physical max_storage, \
              not col_upper / col_scale"
         );

@@ -1722,7 +1722,7 @@ fn resolve_stage_data(
         &layout.state,
         &study_dims,
         &transit_bucket_topology,
-        stage_templates.state_boxes.first(),
+        stage_templates.state_boxes().first(),
     );
 
     let stage_data = stage_data::StageData {

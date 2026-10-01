@@ -52,7 +52,7 @@ impl SolveInputs {
     pub(crate) fn stage_ctx(&self) -> StageContext<'_> {
         StageContext {
             templates: &self.stage_data.stage_templates.templates,
-            state_boxes: &self.stage_data.stage_templates.state_boxes,
+            state_boxes: self.stage_data.stage_templates.state_boxes(),
             geometry_per_stage: &self.stage_data.stage_templates.geometry_per_stage,
             cost_scale_factor: self.stage_data.stage_templates.cost_scale_factor,
             load_bus_indices: &self.stage_data.stage_templates.load_bus_indices,

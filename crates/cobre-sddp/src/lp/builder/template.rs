@@ -22,9 +22,10 @@ pub(crate) mod canonical;
 pub struct StageTemplates {
     /// One structural LP template per study stage, in stage order.
     pub templates: Vec<StageTemplate>,
-    /// Per-stage admissible box for every outgoing state dimension, populated by
-    /// `postprocess_templates` after scaling. Length equals `templates.len()`.
-    pub(crate) state_boxes: Vec<StateBox>,
+    /// Per-stage admissible box for every outgoing state dimension, built by
+    /// `postprocess_templates` from the physical column bounds before column
+    /// scaling. Empty until then; read it through `state_boxes()`.
+    state_boxes: Vec<StateBox>,
     /// Per-stage block durations in hours (`block_hours_per_stage[stage]` is length
     /// `n_blocks`). Converts load-balance duals $/MW → $/`MWh`:
     /// `spot_price = dual / block_hours`.
@@ -88,6 +89,30 @@ impl StageTemplates {
     #[must_use]
     pub fn n_load_buses(&self) -> usize {
         self.load_bus_indices.len()
+    }
+
+    /// The per-stage state boxes, one per template.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when read before `postprocess_templates` fills them.
+    pub(crate) fn state_boxes(&self) -> &[StateBox] {
+        debug_assert_eq!(
+            self.state_boxes.len(),
+            self.templates.len(),
+            "state_boxes read before postprocess_templates filled them"
+        );
+        &self.state_boxes
+    }
+
+    /// Fills the per-stage state boxes, one per template.
+    pub(crate) fn set_state_boxes(&mut self, state_boxes: Vec<StateBox>) {
+        debug_assert_eq!(
+            state_boxes.len(),
+            self.templates.len(),
+            "set_state_boxes needs one state box per stage"
+        );
+        self.state_boxes = state_boxes;
     }
 }
 

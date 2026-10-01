@@ -1797,7 +1797,6 @@ fn build_phase_libraries(
         if inflow_scheme == SamplingScheme::External && inflow_differs {
             Some(scenario_libraries::build_external_inflow_library(
                 system,
-                &stage_data.stages,
                 stochastic.par(),
                 seed,
                 &stage_data.stage_lag_transitions,
@@ -1818,7 +1817,6 @@ fn build_phase_libraries(
             Some(scenario_libraries::build_external_load_library(
                 system,
                 load_scheme,
-                &stage_data.stages,
                 forward_passes,
                 stochastic.normal(),
                 &normal_load_bus_ids,
@@ -1831,7 +1829,6 @@ fn build_phase_libraries(
         if ncs_scheme == SamplingScheme::External && ncs_differs {
             Some(scenario_libraries::build_external_ncs_library(
                 system,
-                &stage_data.stages,
                 forward_passes,
                 stochastic.ncs_normal(),
                 stochastic.ncs_entity_ids(),

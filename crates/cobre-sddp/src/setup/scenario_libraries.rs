@@ -122,7 +122,6 @@ fn per_stage_scenario_counts(
 /// Returns `SddpError::Stochastic` on validation failure.
 pub(crate) fn build_external_inflow_library(
     system: &System,
-    stages: &[Stage],
     par: &PrecomputedPar,
     seed: DerivedSeed<'_>,
     stage_lag_transitions: &[StageLagTransition],
@@ -131,6 +130,7 @@ pub(crate) fn build_external_inflow_library(
 ) -> Result<ExternalScenarioLibrary, SddpError> {
     let external_rows = system.external_scenarios();
     let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+    let stages = study_stages_slice(system);
     let n_stages = stages.len();
     let n_hydros = hydro_ids.len();
     let row_entity_ids: HashSet<EntityId> = external_rows.iter().map(|r| r.hydro_id).collect();
@@ -196,12 +196,12 @@ pub(crate) fn build_external_inflow_library(
 pub(crate) fn build_external_load_library(
     system: &System,
     load_scheme: SamplingScheme,
-    stages: &[Stage],
     forward_passes: u32,
     normal_lp: &PrecomputedNormal,
     normal_bus_ids: &[EntityId],
 ) -> Result<ExternalScenarioLibrary, SddpError> {
     let external_rows = system.external_load_scenarios();
+    let stages = study_stages_slice(system);
     let n_stages = stages.len();
     let bus_ids = system.load_noise_member_bus_ids(load_scheme);
     let n_buses = bus_ids.len();
@@ -266,12 +266,12 @@ pub(crate) fn build_external_load_library(
 /// Returns `SddpError::Stochastic` on validation failure.
 pub(crate) fn build_external_ncs_library(
     system: &System,
-    stages: &[Stage],
     forward_passes: u32,
     ncs_normal: &PrecomputedNormal,
     normal_ncs_ids: &[EntityId],
 ) -> Result<ExternalScenarioLibrary, SddpError> {
     let external_rows = system.external_ncs_scenarios();
+    let stages = study_stages_slice(system);
     let n_stages = stages.len();
     let ncs_ids = system.ncs_noise_member_ids(SamplingScheme::External);
     let n_ncs = ncs_ids.len();
@@ -424,15 +424,8 @@ mod tests {
         let transitions = vec![finalizing_transition()];
         let system = inflow_system(hydro_id, &stages, rows);
 
-        let result = build_external_inflow_library(
-            &system,
-            &stages,
-            &par,
-            empty_derived_seed(),
-            &transitions,
-            1,
-            0,
-        );
+        let result =
+            build_external_inflow_library(&system, &par, empty_derived_seed(), &transitions, 1, 0);
 
         match result {
             Err(SddpError::Stochastic(StochasticError::InsufficientData { context })) => {
@@ -474,15 +467,8 @@ mod tests {
         let transitions = vec![finalizing_transition()];
         let system = inflow_system(hydro_id, &stages, rows);
 
-        let result = build_external_inflow_library(
-            &system,
-            &stages,
-            &par,
-            empty_derived_seed(),
-            &transitions,
-            1,
-            0,
-        );
+        let result =
+            build_external_inflow_library(&system, &par, empty_derived_seed(), &transitions, 1, 0);
 
         assert!(result.is_ok(), "expected Ok(()), got: {result:?}");
     }
@@ -542,7 +528,6 @@ mod tests {
         let library = build_external_load_library(
             &system,
             SamplingScheme::External,
-            &stages,
             1,
             &normal_lp,
             &[bus_id],
@@ -628,7 +613,6 @@ mod tests {
         let library = build_external_load_library(
             &system,
             SamplingScheme::External,
-            &stages,
             1,
             &normal_lp,
             &normal_load_bus_ids,
@@ -719,16 +703,11 @@ mod tests {
 
         let transitions = vec![finalizing_transition(), finalizing_transition()];
         let system = inflow_system(hydro_id, &stages, external_rows);
-        let library = build_external_inflow_library(
-            &system,
-            &stages,
-            &par,
-            empty_derived_seed(),
-            &transitions,
-            2,
-            0,
-        )
-        .expect("V3.7 must not reject stage 0 for having fewer real scenarios than stage 1");
+        let library =
+            build_external_inflow_library(&system, &par, empty_derived_seed(), &transitions, 2, 0)
+                .expect(
+                    "V3.7 must not reject stage 0 for having fewer real scenarios than stage 1",
+                );
 
         let reconstruct = |stage: usize, scenario: usize| {
             let eta = library.eta_slice(stage, scenario)[0];
@@ -821,7 +800,6 @@ mod tests {
 
         let library = build_external_inflow_library(
             &system,
-            &stages,
             &par,
             DerivedSeed {
                 lag_values: &derived_lag_values,
@@ -939,7 +917,6 @@ mod tests {
         let library = build_external_load_library(
             &system,
             SamplingScheme::External,
-            &stages,
             1,
             &normal_lp,
             &[bus_id],
@@ -1023,16 +1000,9 @@ mod tests {
 
         let transitions = vec![finalizing_transition(), finalizing_transition()];
         let system = inflow_system(hydro_id, &stages, external_rows);
-        let library = build_external_inflow_library(
-            &system,
-            &stages,
-            &par,
-            empty_derived_seed(),
-            &transitions,
-            1,
-            0,
-        )
-        .expect("a gapped-stage-id external inflow deck must build, not drop every row");
+        let library =
+            build_external_inflow_library(&system, &par, empty_derived_seed(), &transitions, 1, 0)
+                .expect("a gapped-stage-id external inflow deck must build, not drop every row");
 
         let reconstruct = |stage: usize| {
             let eta = library.eta_slice(stage, 0)[0];

@@ -377,10 +377,15 @@ mod tests {
     /// A `System` holding one hydro and the given external inflow rows — the
     /// production reader for [`build_external_inflow_library`]'s new
     /// `system`-sourced inputs.
-    fn inflow_system(hydro_id: EntityId, external_rows: Vec<ExternalScenarioRow>) -> System {
+    fn inflow_system(
+        hydro_id: EntityId,
+        stages: &[Stage],
+        external_rows: Vec<ExternalScenarioRow>,
+    ) -> System {
         let idx = usize::try_from(hydro_id.0).unwrap();
         SystemBuilder::new()
             .hydros(vec![crate::test_support::geometry_hydro(idx)])
+            .stages(stages.to_vec())
             .external_scenarios(external_rows)
             .build()
             .expect("system must build")
@@ -417,7 +422,7 @@ mod tests {
             value_m3s: 999.0,
         }];
         let transitions = vec![finalizing_transition()];
-        let system = inflow_system(hydro_id, rows);
+        let system = inflow_system(hydro_id, &stages, rows);
 
         let result = build_external_inflow_library(
             &system,
@@ -467,7 +472,7 @@ mod tests {
             value_m3s: 100.0,
         }];
         let transitions = vec![finalizing_transition()];
-        let system = inflow_system(hydro_id, rows);
+        let system = inflow_system(hydro_id, &stages, rows);
 
         let result = build_external_inflow_library(
             &system,
@@ -501,6 +506,7 @@ mod tests {
             value_mw: 123.0,
         }];
         let system = SystemBuilder::new()
+            .stages(stages.clone())
             .load_models(seasonal_load_models)
             .external_load_scenarios(external_rows.clone())
             .build()
@@ -590,6 +596,7 @@ mod tests {
             },
         ];
         let system = SystemBuilder::new()
+            .stages(stages.clone())
             .load_models(seasonal_load_models)
             .external_load_scenarios(external_rows)
             .build()
@@ -711,7 +718,7 @@ mod tests {
         );
 
         let transitions = vec![finalizing_transition(), finalizing_transition()];
-        let system = inflow_system(hydro_id, external_rows);
+        let system = inflow_system(hydro_id, &stages, external_rows);
         let library = build_external_inflow_library(
             &system,
             &stages,
@@ -810,7 +817,7 @@ mod tests {
         ];
         let derived_lag_values = [0.0_f64];
         let transitions = vec![finalizing_transition(), finalizing_transition()];
-        let system = inflow_system(hydro_id, external_rows);
+        let system = inflow_system(hydro_id, &stages, external_rows);
 
         let library = build_external_inflow_library(
             &system,
@@ -892,6 +899,7 @@ mod tests {
         ];
 
         let system = SystemBuilder::new()
+            .stages(stages.clone())
             .load_models(seasonal_load_models)
             .external_load_scenarios(external_rows.clone())
             .build()
@@ -1014,7 +1022,7 @@ mod tests {
         assert!(par.sigma(1, 0).abs() < 1e-10);
 
         let transitions = vec![finalizing_transition(), finalizing_transition()];
-        let system = inflow_system(hydro_id, external_rows);
+        let system = inflow_system(hydro_id, &stages, external_rows);
         let library = build_external_inflow_library(
             &system,
             &stages,

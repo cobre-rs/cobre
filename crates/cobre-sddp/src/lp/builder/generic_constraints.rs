@@ -192,7 +192,12 @@ fn resolve_turbine_cells(
         return vec![];
     };
     let sys = HydroSys::new(pos);
-    let flat = |c: usize| (layout.turbine_col(HydroCell::new(c), blk), multiplier);
+    let flat = |c: usize| {
+        (
+            layout.geometry.turbine_col(HydroCell::new(c), blk),
+            multiplier,
+        )
+    };
     match bus_id {
         Some(b) => ctx
             .hydro_cell_index
@@ -360,7 +365,10 @@ fn push_local_inflow_rate(
             .get(&ctx.hydros[plant_idx].id)
             .map_or(&[][..], Vec::as_slice);
         for &d_idx in diversion_into {
-            out.push((layout.diversion_col(HydroSys::new(d_idx), blk), 1.0));
+            out.push((
+                layout.geometry.diversion_col(HydroSys::new(d_idx), blk),
+                1.0,
+            ));
         }
     }
 }
@@ -423,9 +431,12 @@ fn push_release_columns(
 ) {
     let sys_up = HydroSys::new(u_idx);
     for cell in ctx.hydro_cell_index.cells_of(sys_up) {
-        out.push((layout.turbine_col(HydroCell::new(cell), blk), coeff));
+        out.push((
+            layout.geometry.turbine_col(HydroCell::new(cell), blk),
+            coeff,
+        ));
     }
-    out.push((layout.spillage_col(sys_up, blk), coeff));
+    out.push((layout.geometry.spillage_col(sys_up, blk), coeff));
 }
 
 /// Resolve `HydroEvaporation` to the evaporation-outflow column for the matching
@@ -478,14 +489,14 @@ fn resolve_hydro_outflow(
         return vec![];
     };
     let mut result = resolve_turbine_cells(hydro_id, None, blk, 1.0, ctx, layout);
-    result.push((layout.spillage_col(HydroSys::new(pos), blk), 1.0));
+    result.push((layout.geometry.spillage_col(HydroSys::new(pos), blk), 1.0));
     result
 }
 
 /// Resolve `HydroGeneration` by dispatching on the production model.
 ///
 /// - FPHA hydros: maps to the generation column at
-///   `layout.generation_col(FphaCellLocal::new(first.get() + offset), blk)`, one
+///   `layout.geometry.generation_col(FphaCellLocal::new(first.get() + offset), blk)`, one
 ///   pair per cell, or exactly one when `bus_id` names a cell.
 /// - Constant-productivity hydros: maps to the turbine column(s) scaled by
 ///   productivity, threading `bus_id` through [`resolve_turbine_cells`] — one
@@ -513,7 +524,9 @@ fn resolve_hydro_generation(
             let fpha_cell_start = layout.fpha_local_first_cell(fpha_local);
             let flat = |fpha_idx: usize| {
                 (
-                    layout.generation_col(FphaCellLocal::new(fpha_idx), blk),
+                    layout
+                        .geometry
+                        .generation_col(FphaCellLocal::new(fpha_idx), blk),
                     1.0,
                 )
             };
@@ -551,8 +564,8 @@ fn resolve_line_exchange(
     if let Some(pos) = ctx.positions.line(line_id) {
         let sys = LineSys::new(pos);
         vec![
-            (layout.line_fwd_col(sys, blk), 1.0),
-            (layout.line_rev_col(sys, blk), -1.0),
+            (layout.geometry.line_fwd_col(sys, blk), 1.0),
+            (layout.geometry.line_rev_col(sys, blk), -1.0),
         ]
     } else {
         vec![]
@@ -577,7 +590,7 @@ fn resolve_bus_deficit(
     }
 }
 
-/// Resolve `AnticipatedDecision` to `layout.anticipated_decision_col(local)`,
+/// Resolve `AnticipatedDecision` to `layout.geometry.anticipated_decision_col(local)`,
 /// the per-plant stage-level decision column.
 ///
 /// Returns an empty vec when `thermal_id` has no `ctx.positions.thermal` slot, or the
@@ -597,7 +610,7 @@ fn resolve_anticipated_decision(
         .anticipated_plants
         .local_of(ThermalSys::new(sys_pos))
     {
-        vec![(layout.anticipated_decision_col(local), 1.0)]
+        vec![(layout.geometry.anticipated_decision_col(local), 1.0)]
     } else {
         vec![]
     }
@@ -632,7 +645,9 @@ fn resolve_pumping_column(
     let Some(station) = ctx.pumping_stations.get(p_idx) else {
         return vec![];
     };
-    let col = layout.pumping_flow_col(PumpingSys::new(p_idx), blk);
+    let col = layout
+        .geometry
+        .pumping_flow_col(PumpingSys::new(p_idx), blk);
     vec![(col, coeff_fn(station))]
 }
 
@@ -670,7 +685,7 @@ fn resolve_contract_column(
         return vec![];
     }
     let (_, family_slot) = contract_family_slot(ctx.contracts, c_sys);
-    let col = layout.contract_col(family, family_slot, blk);
+    let col = layout.geometry.contract_col(family, family_slot, blk);
     vec![(col, 1.0)]
 }
 
@@ -693,7 +708,7 @@ fn resolve_hydro_spillage(
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
     resolve_block_column(ctx.positions.hydro(hydro_id), |pos| {
-        layout.spillage_col(HydroSys::new(pos), blk)
+        layout.geometry.spillage_col(HydroSys::new(pos), blk)
     })
 }
 
@@ -705,7 +720,7 @@ fn resolve_hydro_diversion(
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
     resolve_block_column(ctx.positions.hydro(hydro_id), |pos| {
-        layout.diversion_col(HydroSys::new(pos), blk)
+        layout.geometry.diversion_col(HydroSys::new(pos), blk)
     })
 }
 
@@ -717,7 +732,7 @@ fn resolve_thermal_generation(
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
     resolve_block_column(ctx.positions.thermal(thermal_id), |pos| {
-        layout.thermal_col(ThermalSys::new(pos), blk)
+        layout.geometry.thermal_col(ThermalSys::new(pos), blk)
     })
 }
 
@@ -729,7 +744,7 @@ fn resolve_line_direct(
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
     resolve_block_column(ctx.positions.line(line_id), |pos| {
-        layout.line_fwd_col(LineSys::new(pos), blk)
+        layout.geometry.line_fwd_col(LineSys::new(pos), blk)
     })
 }
 
@@ -741,7 +756,7 @@ fn resolve_line_reverse(
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
     resolve_block_column(ctx.positions.line(line_id), |pos| {
-        layout.line_rev_col(LineSys::new(pos), blk)
+        layout.geometry.line_rev_col(LineSys::new(pos), blk)
     })
 }
 
@@ -753,7 +768,7 @@ fn resolve_bus_excess(
     layout: &StageLayout<'_>,
 ) -> Vec<(usize, f64)> {
     resolve_block_column(ctx.positions.bus(bus_id), |pos| {
-        layout.excess_col(BusSys::new(pos), blk)
+        layout.geometry.excess_col(BusSys::new(pos), blk)
     })
 }
 

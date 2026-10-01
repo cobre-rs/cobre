@@ -1216,7 +1216,9 @@ fn layout_row_accessors_agree_with_the_stage_geometry_in_both_block_modes() {
         for h in 0..ctx.hydros.len() {
             for blk in 0..n_blks {
                 assert_eq!(
-                    layout.water_balance_row(HydroSys::new(h), BlockIdx::new(blk)),
+                    layout
+                        .geometry
+                        .water_balance_row(HydroSys::new(h), BlockIdx::new(blk)),
                     geometry.water_balance_row(HydroSys::new(h), BlockIdx::new(blk)),
                     "water_balance_row disagrees at hydro {h} block {blk} under {block_mode:?}"
                 );
@@ -1225,7 +1227,9 @@ fn layout_row_accessors_agree_with_the_stage_geometry_in_both_block_modes() {
         for bus in 0..ctx.buses.len() {
             for blk in 0..n_blks {
                 assert_eq!(
-                    layout.load_balance_row(BusSys::new(bus), BlockIdx::new(blk)),
+                    layout
+                        .geometry
+                        .load_balance_row(BusSys::new(bus), BlockIdx::new(blk)),
                     geometry.load_balance_row(BusSys::new(bus), BlockIdx::new(blk)),
                     "load_balance_row disagrees at bus {bus} block {blk} under {block_mode:?}"
                 );
@@ -1383,7 +1387,10 @@ fn geometry_column_accessors_agree_with_the_layout_in_both_block_modes() {
         for k in 0..=n_blks {
             let boundary = Boundary::from_index(k, n_blks);
             assert_eq!(
-                layout.storage_boundary_grid().col(ctx.state, h, boundary),
+                layout
+                    .geometry
+                    .storage_boundary_grid()
+                    .col(ctx.state, h, boundary),
                 geometry.storage_boundary_grid().col(ctx.state, h, boundary),
                 "storage boundary {k} disagrees under {block_mode:?}"
             );
@@ -1392,72 +1399,72 @@ fn geometry_column_accessors_agree_with_the_layout_in_both_block_modes() {
         for b in 0..n_blks {
             let blk = BlockIdx::new(b);
             assert_eq!(
-                layout.turbine_col(c, blk),
+                layout.geometry.turbine_col(c, blk),
                 geometry.turbine_col(c, blk),
                 "turbine_col disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.spillage_col(h, blk),
+                layout.geometry.spillage_col(h, blk),
                 geometry.spillage_col(h, blk),
                 "spillage_col disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.diversion_col(h, blk),
+                layout.geometry.diversion_col(h, blk),
                 geometry.diversion_col(h, blk),
                 "diversion_col disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.outflow_below_col(h, blk),
+                layout.geometry.outflow_below_col(h, blk),
                 geometry.outflow_below_col(h, blk),
                 "outflow_below_col disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.outflow_above_col(h, blk),
+                layout.geometry.outflow_above_col(h, blk),
                 geometry.outflow_above_col(h, blk),
                 "outflow_above_col disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.generation_col(fpha_cell, blk),
+                layout.geometry.generation_col(fpha_cell, blk),
                 geometry.generation_col(fpha_cell, blk),
                 "generation_col disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.thermal_col(t, blk),
+                layout.geometry.thermal_col(t, blk),
                 geometry.thermal_col(t, blk),
                 "thermal_col disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.line_fwd_col(l, blk),
+                layout.geometry.line_fwd_col(l, blk),
                 geometry.line_fwd_col(l, blk),
                 "line_fwd_col disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.line_rev_col(l, blk),
+                layout.geometry.line_rev_col(l, blk),
                 geometry.line_rev_col(l, blk),
                 "line_rev_col disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.excess_col(bus, blk),
+                layout.geometry.excess_col(bus, blk),
                 geometry.excess_col(bus, blk),
                 "excess_col disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.turbine_below_col(c, blk),
+                layout.geometry.turbine_below_col(c, blk),
                 geometry.turbine_below_col(c, blk),
                 "turbine_below_col disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.generation_below_col(c, blk),
+                layout.geometry.generation_below_col(c, blk),
                 geometry.generation_below_col(c, blk),
                 "generation_below_col disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.contract_col(ContractType::Import, 0, blk),
+                layout.geometry.contract_col(ContractType::Import, 0, blk),
                 geometry.contract_col(ContractType::Import, 0, blk),
                 "contract_col(Import) disagrees at block {b} under {block_mode:?}"
             );
             assert_eq!(
-                layout.contract_col(ContractType::Export, 0, blk),
+                layout.geometry.contract_col(ContractType::Export, 0, blk),
                 geometry.contract_col(ContractType::Export, 0, blk),
                 "contract_col(Export) disagrees at block {b} under {block_mode:?}"
             );
@@ -2231,10 +2238,10 @@ fn assert_block_strided_addresses(layout: &StageLayout) -> [usize; 6] {
             layout.min_generation_row(HydroCell::new(i), blk)
         }),
         check(n_blks, &geometry.thermal, "thermal", |i, blk| {
-            layout.thermal_col(ThermalSys::new(i), blk)
+            layout.geometry.thermal_col(ThermalSys::new(i), blk)
         }),
         check(n_blks, &geometry.excess, "excess", |i, blk| {
-            layout.excess_col(BusSys::new(i), blk)
+            layout.geometry.excess_col(BusSys::new(i), blk)
         }),
     ]
 }
@@ -3322,7 +3329,9 @@ fn contract_col_covers_each_contract_column_once() {
     ] {
         for slot in 0..n {
             for blk in 0..n_blks {
-                let col = layout.contract_col(contract_type, slot, BlockIdx::new(blk));
+                let col = layout
+                    .geometry
+                    .contract_col(contract_type, slot, BlockIdx::new(blk));
                 let oracle = range.start + slot * n_blks + blk;
                 assert_eq!(
                     col, oracle,
@@ -3425,52 +3434,72 @@ fn column_accessors_match_open_coded_formulas() {
     for entity in [0_usize, 1, 3] {
         for blk in 0..n_blks {
             assert_eq!(
-                layout.turbine_col(HydroCell::new(entity), BlockIdx::new(blk)),
+                layout
+                    .geometry
+                    .turbine_col(HydroCell::new(entity), BlockIdx::new(blk)),
                 layout.geometry.turbine.start + entity * n_blks + blk,
                 "turbine_col"
             );
             assert_eq!(
-                layout.spillage_col(HydroSys::new(entity), BlockIdx::new(blk)),
+                layout
+                    .geometry
+                    .spillage_col(HydroSys::new(entity), BlockIdx::new(blk)),
                 layout.geometry.spillage.start + entity * n_blks + blk,
                 "spillage_col"
             );
             assert_eq!(
-                layout.diversion_col(HydroSys::new(entity), BlockIdx::new(blk)),
+                layout
+                    .geometry
+                    .diversion_col(HydroSys::new(entity), BlockIdx::new(blk)),
                 layout.geometry.diversion.start + entity * n_blks + blk,
                 "diversion_col"
             );
             assert_eq!(
-                layout.generation_col(FphaCellLocal::new(entity), BlockIdx::new(blk)),
+                layout
+                    .geometry
+                    .generation_col(FphaCellLocal::new(entity), BlockIdx::new(blk)),
                 layout.geometry.generation.start + entity * n_blks + blk,
                 "generation_col"
             );
             assert_eq!(
-                layout.line_fwd_col(LineSys::new(entity), BlockIdx::new(blk)),
+                layout
+                    .geometry
+                    .line_fwd_col(LineSys::new(entity), BlockIdx::new(blk)),
                 layout.geometry.line_fwd.start + entity * n_blks + blk,
                 "line_fwd_col"
             );
             assert_eq!(
-                layout.line_rev_col(LineSys::new(entity), BlockIdx::new(blk)),
+                layout
+                    .geometry
+                    .line_rev_col(LineSys::new(entity), BlockIdx::new(blk)),
                 layout.geometry.line_rev.start + entity * n_blks + blk,
                 "line_rev_col"
             );
             assert_eq!(
-                layout.outflow_below_col(HydroSys::new(entity), BlockIdx::new(blk)),
+                layout
+                    .geometry
+                    .outflow_below_col(HydroSys::new(entity), BlockIdx::new(blk)),
                 layout.geometry.outflow_below_slack.start + entity * n_blks + blk,
                 "outflow_below_col"
             );
             assert_eq!(
-                layout.outflow_above_col(HydroSys::new(entity), BlockIdx::new(blk)),
+                layout
+                    .geometry
+                    .outflow_above_col(HydroSys::new(entity), BlockIdx::new(blk)),
                 layout.geometry.outflow_above_slack.start + entity * n_blks + blk,
                 "outflow_above_col"
             );
             assert_eq!(
-                layout.turbine_below_col(HydroCell::new(entity), BlockIdx::new(blk)),
+                layout
+                    .geometry
+                    .turbine_below_col(HydroCell::new(entity), BlockIdx::new(blk)),
                 layout.geometry.turbine_below_slack.start + entity * n_blks + blk,
                 "turbine_below_col"
             );
             assert_eq!(
-                layout.generation_below_col(HydroCell::new(entity), BlockIdx::new(blk)),
+                layout
+                    .geometry
+                    .generation_below_col(HydroCell::new(entity), BlockIdx::new(blk)),
                 layout.geometry.generation_below_slack.start + entity * n_blks + blk,
                 "generation_below_col"
             );
@@ -3904,7 +3933,9 @@ fn test_turbine_col_addresses_each_cell_of_a_split_plant() {
     let mut columns = Vec::with_capacity(9);
     for cell in 0..3 {
         for blk in 0..n_blks {
-            let col = layout.turbine_col(HydroCell::new(cell), BlockIdx::new(blk));
+            let col = layout
+                .geometry
+                .turbine_col(HydroCell::new(cell), BlockIdx::new(blk));
             assert!(
                 layout.geometry.turbine.contains(&col),
                 "cell {cell} block {blk}: column {col} must lie inside equipment.turbine"
@@ -3921,8 +3952,12 @@ fn test_turbine_col_addresses_each_cell_of_a_split_plant() {
     );
 
     for blk in 0..n_blks {
-        let cell1 = layout.turbine_col(HydroCell::new(1), BlockIdx::new(blk));
-        let cell2 = layout.turbine_col(HydroCell::new(2), BlockIdx::new(blk));
+        let cell1 = layout
+            .geometry
+            .turbine_col(HydroCell::new(1), BlockIdx::new(blk));
+        let cell2 = layout
+            .geometry
+            .turbine_col(HydroCell::new(2), BlockIdx::new(blk));
         assert_eq!(
             cell2 - cell1,
             n_blks,
@@ -3938,14 +3973,18 @@ fn test_turbine_col_addresses_each_cell_of_a_split_plant() {
         "cell and block indices must differ or the next assertion goes blind: \
          `cell * n_blks + blk` equals its own transposition whenever they are equal"
     );
-    let asserted_col = layout.turbine_col(HydroCell::new(cell_idx), BlockIdx::new(block_idx));
+    let asserted_col = layout
+        .geometry
+        .turbine_col(HydroCell::new(cell_idx), BlockIdx::new(block_idx));
     assert_eq!(
         asserted_col,
         layout.geometry.turbine.start + cell_idx * n_blks + block_idx
     );
     assert_ne!(
         asserted_col,
-        layout.turbine_col(HydroCell::new(hydro_idx), BlockIdx::new(block_idx)),
+        layout
+            .geometry
+            .turbine_col(HydroCell::new(hydro_idx), BlockIdx::new(block_idx)),
         "cell {cell_idx}'s column must differ from the column at raw hydro index {hydro_idx}"
     );
 }
@@ -4040,8 +4079,12 @@ fn test_generation_family_is_sized_by_fpha_cell() {
     );
 
     for blk in 0..n_blks {
-        let col1 = layout.generation_col(FphaCellLocal::new(1), BlockIdx::new(blk));
-        let col2 = layout.generation_col(FphaCellLocal::new(2), BlockIdx::new(blk));
+        let col1 = layout
+            .geometry
+            .generation_col(FphaCellLocal::new(1), BlockIdx::new(blk));
+        let col2 = layout
+            .geometry
+            .generation_col(FphaCellLocal::new(2), BlockIdx::new(blk));
         assert!(
             layout.geometry.generation.contains(&col2),
             "block {blk}: column {col2} must lie inside equipment.generation"
@@ -4116,7 +4159,7 @@ fn compare_column_addresses(
     for h in 0..geom.inflow_slack.len() {
         assert_eq!(
             geom.inflow_slack_col(HydroSys::new(h)),
-            layout.inflow_slack_col(HydroSys::new(h)),
+            layout.geometry.inflow_slack_col(HydroSys::new(h)),
             "inflow_slack_col mismatch at h={h}"
         );
         counts.inflow_slack += 1;
@@ -4124,7 +4167,7 @@ fn compare_column_addresses(
     for h in 0..geom.withdrawal_slack_neg.len() {
         assert_eq!(
             geom.withdrawal_slack_neg_col(HydroSys::new(h)),
-            layout.withdrawal_slack_neg_col(HydroSys::new(h)),
+            layout.geometry.withdrawal_slack_neg_col(HydroSys::new(h)),
             "withdrawal_slack_neg_col mismatch at h={h}"
         );
         counts.withdrawal_slack_neg += 1;
@@ -4132,7 +4175,7 @@ fn compare_column_addresses(
     for h in 0..geom.withdrawal_slack_pos.len() {
         assert_eq!(
             geom.withdrawal_slack_pos_col(HydroSys::new(h)),
-            layout.withdrawal_slack_pos_col(HydroSys::new(h)),
+            layout.geometry.withdrawal_slack_pos_col(HydroSys::new(h)),
             "withdrawal_slack_pos_col mismatch at h={h}"
         );
         counts.withdrawal_slack_pos += 1;
@@ -4140,7 +4183,9 @@ fn compare_column_addresses(
     for i in 0..geom.anticipated_decision.len() {
         assert_eq!(
             geom.anticipated_decision_col(AnticipatedLocal::new(i)),
-            layout.anticipated_decision_col(AnticipatedLocal::new(i)),
+            layout
+                .geometry
+                .anticipated_decision_col(AnticipatedLocal::new(i)),
             "anticipated_decision_col mismatch at i={i}"
         );
         counts.anticipated_decision += 1;
@@ -4148,7 +4193,9 @@ fn compare_column_addresses(
     for i in 0..geom.filling_target_col.len() {
         assert_eq!(
             geom.filling_target_slack_col(FillingTargetLocal::new(i)),
-            layout.filling_target_slack_col(FillingTargetLocal::new(i)),
+            layout
+                .geometry
+                .filling_target_slack_col(FillingTargetLocal::new(i)),
             "filling_target_slack_col mismatch at i={i}"
         );
         counts.filling_target_slack += 1;
@@ -4156,7 +4203,9 @@ fn compare_column_addresses(
     for i in 0..geom.filled_min_storage_floor_col.len() {
         assert_eq!(
             geom.filled_min_storage_floor_slack_col(FloorLocal::new(i)),
-            layout.filled_min_storage_floor_slack_col(FloorLocal::new(i)),
+            layout
+                .geometry
+                .filled_min_storage_floor_slack_col(FloorLocal::new(i)),
             "filled_min_storage_floor_slack_col mismatch at i={i}"
         );
         counts.filled_min_storage_floor_slack += 1;
@@ -4166,7 +4215,7 @@ fn compare_column_addresses(
             let blk = BlockIdx::new(blk);
             assert_eq!(
                 geom.ncs_generation_col(NcsSys::new(i), blk),
-                layout.ncs_generation_col(NcsSys::new(i), blk),
+                layout.geometry.ncs_generation_col(NcsSys::new(i), blk),
                 "ncs_generation_col mismatch at i={i}"
             );
             counts.ncs_generation += 1;
@@ -4177,7 +4226,7 @@ fn compare_column_addresses(
             let blk = BlockIdx::new(blk);
             assert_eq!(
                 geom.pumping_flow_col(PumpingSys::new(i), blk),
-                layout.pumping_flow_col(PumpingSys::new(i), blk),
+                layout.geometry.pumping_flow_col(PumpingSys::new(i), blk),
                 "pumping_flow_col mismatch at i={i}"
             );
             counts.pumping_flow += 1;

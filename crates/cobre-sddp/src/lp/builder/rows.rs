@@ -96,7 +96,9 @@ fn fill_parallel_water_rows(
     row_upper: &mut [f64],
 ) {
     for h_idx in 0..layout.state.hydro_count {
-        let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
+        let row = layout
+            .geometry
+            .water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
         if matches!(hydro_phase(&ctx.hydros[h_idx], stage.id), Phase::PreFilling) {
             row_lower[row] = 0.0;
             row_upper[row] = 0.0;
@@ -131,7 +133,9 @@ fn fill_parallel_water_rows(
             .hydro_bounds(h_idx, stage_idx)
             .water_withdrawal_m3s;
         let delta = layout.clock.zeta() * withdrawal_h;
-        let row_d = layout.water_balance_row(HydroSys::new(d_idx), BlockIdx::new(0));
+        let row_d = layout
+            .geometry
+            .water_balance_row(HydroSys::new(d_idx), BlockIdx::new(0));
         row_lower[row_d] -= delta;
         row_upper[row_d] -= delta;
     }
@@ -155,7 +159,9 @@ fn fill_chronological_water_rows(
     for h_idx in 0..layout.state.hydro_count {
         if matches!(hydro_phase(&ctx.hydros[h_idx], stage.id), Phase::PreFilling) {
             for blk in 0..n_blks {
-                let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(blk));
+                let row = layout
+                    .geometry
+                    .water_balance_row(HydroSys::new(h_idx), BlockIdx::new(blk));
                 row_lower[row] = 0.0;
                 row_upper[row] = 0.0;
             }
@@ -167,7 +173,9 @@ fn fill_chronological_water_rows(
             .hydro_bounds(h_idx, stage_idx)
             .water_withdrawal_m3s;
         for blk in 0..n_blks {
-            let row = layout.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(blk));
+            let row = layout
+                .geometry
+                .water_balance_row(HydroSys::new(h_idx), BlockIdx::new(blk));
             let tau_k = layout.clock.tau(BlockIdx::new(blk));
             let rhs = -(tau_k * withdrawal);
             row_lower[row] = rhs;
@@ -188,7 +196,9 @@ fn fill_chronological_water_rows(
             .water_withdrawal_m3s;
         for blk in 0..n_blks {
             let tau_k = layout.clock.tau(BlockIdx::new(blk));
-            let row_d = layout.water_balance_row(HydroSys::new(d_idx), BlockIdx::new(blk));
+            let row_d = layout
+                .geometry
+                .water_balance_row(HydroSys::new(d_idx), BlockIdx::new(blk));
             let delta = tau_k * withdrawal_h;
             row_lower[row_d] -= delta;
             row_upper[row_d] -= delta;
@@ -324,7 +334,9 @@ fn fill_load_balance_rows(
                 .resolved
                 .resolved_load_factors
                 .factor(b_idx, stage_idx, blk);
-            let row = layout.load_balance_row(BusSys::new(b_idx), BlockIdx::new(blk));
+            let row = layout
+                .geometry
+                .load_balance_row(BusSys::new(b_idx), BlockIdx::new(blk));
             let rhs = mean_mw * factor;
             row_lower[row] = rhs;
             row_upper[row] = rhs;

@@ -1269,7 +1269,7 @@ fn contract_family_slot_counts_per_direction() {
 /// contracts (`n_contract_import = 2`, `n_contract_export = 1`) and their real
 /// `layout.geometry.contract_import`/`contract_export` bases — the second
 /// import (id 30, per-family slot 1) at block 0 is
-/// `layout.contract_col(Import, 1, 0) = import_start + n_blks`.
+/// `layout.geometry.contract_col(Import, 1, 0) = import_start + n_blks`.
 #[test]
 fn contract_import_resolves_to_column_with_unit_coefficient() {
     let mut fx = default_fixture();

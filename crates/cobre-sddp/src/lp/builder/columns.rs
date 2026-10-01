@@ -213,7 +213,7 @@ fn fill_turbine_columns(
                     hb,
                     lookup,
                 );
-                let col = layout.turbine_col(cell, BlockIdx::new(blk));
+                let col = layout.geometry.turbine_col(cell, BlockIdx::new(blk));
                 // Never a group's own min_turbined_m3s: the cell's floor is the soft
                 // slack-backed min_turbine row (this cell's own group-sum), not a
                 // column floor, and a per-group hard floor would invent an asymmetry
@@ -249,7 +249,9 @@ fn fill_spillage_columns(
         let prefilling = matches!(hydro_phase(hydro, stage.id), Phase::PreFilling);
         let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
         for blk in 0..layout.clock.n_blks() {
-            let col = layout.spillage_col(HydroSys::new(h_idx), BlockIdx::new(blk));
+            let col = layout
+                .geometry
+                .spillage_col(HydroSys::new(h_idx), BlockIdx::new(blk));
             let (min_spill, max_spill) = if prefilling {
                 (0.0, 0.0)
             } else {
@@ -308,7 +310,9 @@ fn fill_diversion_columns(
                     hb.max_diversion_m3s.unwrap_or(0.0),
                 )
             };
-            let col = layout.diversion_col(HydroSys::new(h_idx), BlockIdx::new(blk));
+            let col = layout
+                .geometry
+                .diversion_col(HydroSys::new(h_idx), BlockIdx::new(blk));
             bufs.col_lower[col] = min_div;
             bufs.col_upper[col] = max_div;
             if max_div > 0.0 {
@@ -371,7 +375,9 @@ pub(super) fn fill_thermal_columns(
                 .resolved
                 .bounds
                 .thermal_bounds_at_block(t_idx, stage_idx, blk);
-            let col = layout.thermal_col(ThermalSys::new(t_idx), BlockIdx::new(blk));
+            let col = layout
+                .geometry
+                .thermal_col(ThermalSys::new(t_idx), BlockIdx::new(blk));
             if active {
                 bufs.col_lower[col] = tb.min_generation_mw;
                 bufs.col_upper[col] = tb.max_generation_mw;
@@ -428,7 +434,9 @@ pub(super) fn fill_anticipated_columns(
     let ring = DeliveryRing::anticipated(layout.state);
 
     for local_idx in 0..n_ant {
-        let col = layout.anticipated_decision_col(AnticipatedLocal::new(local_idx));
+        let col = layout
+            .geometry
+            .anticipated_decision_col(AnticipatedLocal::new(local_idx));
         bufs.col_lower[col] = 0.0;
         bufs.col_upper[col] = 0.0;
     }
@@ -443,7 +451,9 @@ pub(super) fn fill_anticipated_columns(
         if delivery_stage != res.target {
             return;
         }
-        let decision_col = layout.anticipated_decision_col(AnticipatedLocal::new(res.plant));
+        let decision_col = layout
+            .geometry
+            .anticipated_decision_col(AnticipatedLocal::new(res.plant));
         debug_assert!(
             delivery_stage > stage_idx,
             "a genuine decision's delivery stage must be strictly after the decision \
@@ -530,8 +540,12 @@ fn fill_line_columns(
                 .resolved
                 .bounds
                 .line_bounds_at_block(l_idx, stage_idx, blk);
-            let col_fwd = layout.line_fwd_col(LineSys::new(l_idx), BlockIdx::new(blk));
-            let col_rev = layout.line_rev_col(LineSys::new(l_idx), BlockIdx::new(blk));
+            let col_fwd = layout
+                .geometry
+                .line_fwd_col(LineSys::new(l_idx), BlockIdx::new(blk));
+            let col_rev = layout
+                .geometry
+                .line_rev_col(LineSys::new(l_idx), BlockIdx::new(blk));
             if active {
                 bufs.col_upper[col_fwd] = lb.direct_mw;
                 bufs.col_upper[col_rev] = lb.reverse_mw;
@@ -569,7 +583,9 @@ fn fill_deficit_and_excess_columns(
             }
         }
         for blk in 0..layout.clock.n_blks() {
-            let col_exc = layout.excess_col(BusSys::new(b_idx), BlockIdx::new(blk));
+            let col_exc = layout
+                .geometry
+                .excess_col(BusSys::new(b_idx), BlockIdx::new(blk));
             let block_hours = stage.blocks[blk].duration_hours;
             bufs.col_upper[col_exc] = f64::INFINITY;
             bufs.objective[col_exc] = bp.excess_cost * block_hours;
@@ -588,7 +604,7 @@ fn fill_inflow_slack_columns(
 ) {
     if !layout.geometry.inflow_slack.is_empty() {
         for h_idx in 0..layout.state.hydro_count {
-            let col = layout.inflow_slack_col(HydroSys::new(h_idx));
+            let col = layout.geometry.inflow_slack_col(HydroSys::new(h_idx));
             let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
             bufs.objective[col] = hp.inflow_nonnegativity_cost * total_stage_hours;
         }
@@ -630,7 +646,9 @@ fn fill_fpha_generation_columns(
                     hb,
                     lookup,
                 );
-                let col = layout.generation_col(FphaCellLocal::new(fpha_cell_base + offset), blk);
+                let col = layout
+                    .geometry
+                    .generation_col(FphaCellLocal::new(fpha_cell_base + offset), blk);
                 // Never a group's own min_generation_mw: see fill_turbine_columns's
                 // identical col_lower contract (min_generation stays the sole
                 // owner of the cell's soft floor).
@@ -727,7 +745,9 @@ fn fill_withdrawal_slack_columns(
         let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
         let t = hb.water_withdrawal_m3s;
 
-        let neg_col = layout.withdrawal_slack_neg_col(HydroSys::new(h_idx));
+        let neg_col = layout
+            .geometry
+            .withdrawal_slack_neg_col(HydroSys::new(h_idx));
         bufs.col_upper[neg_col] = if t > 0.0 {
             t
         } else if t < 0.0 {
@@ -737,7 +757,9 @@ fn fill_withdrawal_slack_columns(
         };
         bufs.objective[neg_col] = hp.water_withdrawal_violation_neg_cost * total_stage_hours;
 
-        let pos_col = layout.withdrawal_slack_pos_col(HydroSys::new(h_idx));
+        let pos_col = layout
+            .geometry
+            .withdrawal_slack_pos_col(HydroSys::new(h_idx));
         bufs.col_upper[pos_col] = if t > 0.0 {
             f64::INFINITY
         } else if t < 0.0 {
@@ -831,12 +853,12 @@ fn fill_block_family(
                 BlockSlackFamily::OutflowAbove => hb.max_outflow_m3s.is_some(),
             };
             let col = match family {
-                BlockSlackFamily::OutflowBelow => {
-                    layout.outflow_below_col(HydroSys::new(h_idx), BlockIdx::new(blk))
-                }
-                BlockSlackFamily::OutflowAbove => {
-                    layout.outflow_above_col(HydroSys::new(h_idx), BlockIdx::new(blk))
-                }
+                BlockSlackFamily::OutflowBelow => layout
+                    .geometry
+                    .outflow_below_col(HydroSys::new(h_idx), BlockIdx::new(blk)),
+                BlockSlackFamily::OutflowAbove => layout
+                    .geometry
+                    .outflow_above_col(HydroSys::new(h_idx), BlockIdx::new(blk)),
             };
             bufs.col_upper[col] = if active { f64::INFINITY } else { 0.0 };
             bufs.objective[col] = cost * stage.blocks[blk].duration_hours;
@@ -881,11 +903,11 @@ fn fill_cell_block_family(
                 };
                 let col = match family {
                     CellSlackFamily::TurbineBelow => {
-                        layout.turbine_below_col(cell, BlockIdx::new(blk))
+                        layout.geometry.turbine_below_col(cell, BlockIdx::new(blk))
                     }
-                    CellSlackFamily::GenerationBelow => {
-                        layout.generation_below_col(cell, BlockIdx::new(blk))
-                    }
+                    CellSlackFamily::GenerationBelow => layout
+                        .geometry
+                        .generation_below_col(cell, BlockIdx::new(blk)),
                 };
                 bufs.col_upper[col] = if cell_min > 0.0 { f64::INFINITY } else { 0.0 };
                 bufs.objective[col] = cost * block_hours;
@@ -917,7 +939,9 @@ fn fill_ncs_columns(
             .available_generation(ncs_sys_idx, stage_idx);
         let np = ctx.resolved.penalties.ncs_penalties(ncs_sys_idx, stage_idx);
         for blk in 0..layout.clock.n_blks() {
-            let col = layout.ncs_generation_col(NcsSys::new(ncs_sys_idx), BlockIdx::new(blk));
+            let col = layout
+                .geometry
+                .ncs_generation_col(NcsSys::new(ncs_sys_idx), BlockIdx::new(blk));
             if active {
                 let factor = ctx
                     .resolved
@@ -956,7 +980,9 @@ pub(super) fn fill_pumping_columns(
                 .resolved
                 .bounds
                 .pumping_bounds_at_block(p_sys, stage_idx, blk.get());
-            let col = layout.pumping_flow_col(PumpingSys::new(p_sys), blk);
+            let col = layout
+                .geometry
+                .pumping_flow_col(PumpingSys::new(p_sys), blk);
             if active {
                 bufs.col_lower[col] = pb.min_flow_m3s;
                 bufs.col_upper[col] = pb.max_flow_m3s;
@@ -1008,7 +1034,9 @@ fn fill_contract_columns(
                 .resolved
                 .bounds
                 .contract_bounds_at_block(c_sys, stage_idx, blk);
-            let col = layout.contract_col(contract_type, family_slot, BlockIdx::new(blk));
+            let col = layout
+                .geometry
+                .contract_col(contract_type, family_slot, BlockIdx::new(blk));
             if active {
                 bufs.col_lower[col] = cb.min_mw;
                 bufs.col_upper[col] = cb.max_mw;
@@ -1043,7 +1071,9 @@ fn fill_filling_target_columns(
         .iter()
         .enumerate()
     {
-        let col = layout.filling_target_slack_col(FillingTargetLocal::new(local_idx));
+        let col = layout
+            .geometry
+            .filling_target_slack_col(FillingTargetLocal::new(local_idx));
         let hp = ctx.resolved.penalties.hydro_penalties(h.get(), stage_idx);
         bufs.col_lower[col] = 0.0;
         bufs.col_upper[col] = f64::INFINITY;
@@ -1070,7 +1100,9 @@ fn fill_filled_min_storage_floor_columns(
         .iter()
         .enumerate()
     {
-        let col = layout.filled_min_storage_floor_slack_col(FloorLocal::new(local_idx));
+        let col = layout
+            .geometry
+            .filled_min_storage_floor_slack_col(FloorLocal::new(local_idx));
         let hp = ctx.resolved.penalties.hydro_penalties(h.get(), stage_idx);
         bufs.col_lower[col] = 0.0;
         bufs.col_upper[col] = f64::INFINITY;
@@ -2092,14 +2124,18 @@ mod filling_phase_gating_tests {
         fill_diversion_columns(&ctx, &stage, STAGE_IDX, &layout, &mut bufs);
         fill_fpha_generation_columns(&ctx, STAGE_IDX, &layout, &mut bufs);
         let offsets = [
-            layout.turbine_col(HydroCell::new(0), BlockIdx::new(0)),
+            layout
+                .geometry
+                .turbine_col(HydroCell::new(0), BlockIdx::new(0)),
             layout.geometry.diversion.start,
             // FPHA-local index 0 (the sole FPHA hydro); for a non-FPHA fixture
             // there is no generation column, so callers must not read this slot.
             if layout.geometry.fpha_hydro_indices.is_empty() {
                 usize::MAX
             } else {
-                layout.generation_col(FphaCellLocal::new(0), BlockIdx::new(0))
+                layout
+                    .geometry
+                    .generation_col(FphaCellLocal::new(0), BlockIdx::new(0))
             },
         ];
         (col_lower, col_upper, offsets)
@@ -3638,6 +3674,7 @@ mod block_family_slack_tests {
 
     use crate::time_value::TimeValue;
 
+    use super::super::layout::StageGeometry;
     use super::super::test_support::{two_block_stage, zero_hydro_penalties};
     use super::{ColumnBufs, StageLayout, TemplateBuildCtx, fill_operational_slack_columns};
 
@@ -3939,23 +3976,23 @@ mod block_family_slack_tests {
     }
 
     /// One hydro-keyed family's expected contract: its name, the activation
-    /// predicate over a `HydroSpec`, the `StageLayout` column accessor, and the
+    /// predicate over a `HydroSpec`, the `StageGeometry` column accessor, and the
     /// expected cost field.
-    struct FamilyCheck<'b> {
+    struct FamilyCheck {
         name: &'static str,
         predicate: fn(&HydroSpec) -> bool,
-        accessor: fn(&StageLayout<'b>, HydroSys, BlockIdx) -> usize,
+        accessor: fn(&StageGeometry, HydroSys, BlockIdx) -> usize,
         cost_of: fn(&HydroSpec) -> f64,
     }
 
     /// One cell-keyed family's expected contract — the min-floor mirror of
-    /// [`FamilyCheck`]: the `StageLayout` accessor now takes a [`HydroCell`],
+    /// [`FamilyCheck`]: the `StageGeometry` accessor now takes a [`HydroCell`],
     /// never a [`HydroSys`], since a plant's min-turbine/min-generation floor is
     /// now a per-cell sum, not a plant-level aggregate.
-    struct CellFamilyCheck<'b> {
+    struct CellFamilyCheck {
         name: &'static str,
         predicate: fn(&HydroSpec) -> bool,
-        accessor: fn(&StageLayout<'b>, HydroCell, BlockIdx) -> usize,
+        accessor: fn(&StageGeometry, HydroCell, BlockIdx) -> usize,
         cost_of: fn(&HydroSpec) -> f64,
     }
 
@@ -3989,13 +4026,13 @@ mod block_family_slack_tests {
             FamilyCheck {
                 name: "outflow_below",
                 predicate: |s| s.min_outflow_m3s > 0.0,
-                accessor: StageLayout::outflow_below_col,
+                accessor: StageGeometry::outflow_below_col,
                 cost_of: |s| s.outflow_below_cost,
             },
             FamilyCheck {
                 name: "outflow_above",
                 predicate: |s| s.max_outflow_m3s.is_some(),
-                accessor: StageLayout::outflow_above_col,
+                accessor: StageGeometry::outflow_above_col,
                 cost_of: |s| s.outflow_above_cost,
             },
         ];
@@ -4003,13 +4040,13 @@ mod block_family_slack_tests {
             CellFamilyCheck {
                 name: "turbine_below",
                 predicate: |s| s.min_turbined_m3s > 0.0,
-                accessor: StageLayout::turbine_below_col,
+                accessor: StageGeometry::turbine_below_col,
                 cost_of: |s| s.turbined_below_cost,
             },
             CellFamilyCheck {
                 name: "generation_below",
                 predicate: |s| s.min_generation_mw > 0.0,
-                accessor: StageLayout::generation_below_col,
+                accessor: StageGeometry::generation_below_col,
                 cost_of: |s| s.generation_below_cost,
             },
         ];
@@ -4023,7 +4060,11 @@ mod block_family_slack_tests {
                 let active = (family.predicate)(spec);
                 let cost = (family.cost_of)(spec);
                 for (blk, &hours) in BLOCK_HOURS.iter().enumerate() {
-                    let col = (family.accessor)(&layout, HydroSys::new(h_idx), BlockIdx::new(blk));
+                    let col = (family.accessor)(
+                        &layout.geometry,
+                        HydroSys::new(h_idx),
+                        BlockIdx::new(blk),
+                    );
                     let expected_upper = if active { f64::INFINITY } else { 0.0 };
                     assert_eq!(
                         col_upper[col], expected_upper,
@@ -4048,7 +4089,7 @@ mod block_family_slack_tests {
                 let cost = (family.cost_of)(spec);
                 let cell = HydroCell::new(h_idx);
                 for (blk, &hours) in BLOCK_HOURS.iter().enumerate() {
-                    let col = (family.accessor)(&layout, cell, BlockIdx::new(blk));
+                    let col = (family.accessor)(&layout.geometry, cell, BlockIdx::new(blk));
                     let expected_upper = if active { f64::INFINITY } else { 0.0 };
                     assert_eq!(
                         col_upper[col], expected_upper,
@@ -6555,7 +6596,11 @@ mod hydro_block_bound_tests {
         fill_fpha_generation_columns(&ctx, STAGE_IDX, &layout, &mut bufs);
 
         let upper: Vec<f64> = (0..N_BLKS)
-            .map(|blk| col_upper[layout.generation_col(FphaCellLocal::new(0), BlockIdx::new(blk))])
+            .map(|blk| {
+                col_upper[layout
+                    .geometry
+                    .generation_col(FphaCellLocal::new(0), BlockIdx::new(blk))]
+            })
             .collect();
         assert_eq!(
             upper,
@@ -7018,41 +7063,51 @@ mod cell_column_bound_tests {
         let cell_low = HydroCell::new(1);
         let cell_high = HydroCell::new(2);
 
-        let pad_col = layout.turbine_col(HydroCell::new(0), BlockIdx::new(0));
+        let pad_col = layout
+            .geometry
+            .turbine_col(HydroCell::new(0), BlockIdx::new(0));
         assert_eq!(
             col_upper[pad_col].to_bits(),
             200.0_f64.to_bits(),
             "the padding plant's single mirrored group must carry the plant's own box"
         );
 
-        let turb_low_0 = col_upper[layout.turbine_col(cell_low, BlockIdx::new(0))];
-        let turb_high_0 = col_upper[layout.turbine_col(cell_high, BlockIdx::new(0))];
+        let turb_low_0 = col_upper[layout.geometry.turbine_col(cell_low, BlockIdx::new(0))];
+        let turb_high_0 = col_upper[layout.geometry.turbine_col(cell_high, BlockIdx::new(0))];
         assert_eq!(turb_low_0.to_bits(), 5250.0_f64.to_bits());
         assert_eq!(turb_high_0.to_bits(), 3750.0_f64.to_bits());
         assert_eq!(
-            col_lower[layout.turbine_col(cell_low, BlockIdx::new(0))],
+            col_lower[layout.geometry.turbine_col(cell_low, BlockIdx::new(0))],
             0.0
         );
         assert_eq!(
-            col_lower[layout.turbine_col(cell_high, BlockIdx::new(0))],
+            col_lower[layout.geometry.turbine_col(cell_high, BlockIdx::new(0))],
             0.0
         );
 
-        let gen_low_0 = col_upper[layout.generation_col(FphaCellLocal::new(0), BlockIdx::new(0))];
-        let gen_high_0 = col_upper[layout.generation_col(FphaCellLocal::new(1), BlockIdx::new(0))];
+        let gen_low_0 = col_upper[layout
+            .geometry
+            .generation_col(FphaCellLocal::new(0), BlockIdx::new(0))];
+        let gen_high_0 = col_upper[layout
+            .geometry
+            .generation_col(FphaCellLocal::new(1), BlockIdx::new(0))];
         assert_eq!(gen_low_0.to_bits(), 7000.0_f64.to_bits());
         assert_eq!(gen_high_0.to_bits(), 5000.0_f64.to_bits());
         assert_eq!(
-            col_lower[layout.generation_col(FphaCellLocal::new(0), BlockIdx::new(0))],
+            col_lower[layout
+                .geometry
+                .generation_col(FphaCellLocal::new(0), BlockIdx::new(0))],
             0.0
         );
         assert_eq!(
-            col_lower[layout.generation_col(FphaCellLocal::new(1), BlockIdx::new(0))],
+            col_lower[layout
+                .geometry
+                .generation_col(FphaCellLocal::new(1), BlockIdx::new(0))],
             0.0
         );
 
-        let turb_low_2 = col_upper[layout.turbine_col(cell_low, BlockIdx::new(2))];
-        let turb_high_2 = col_upper[layout.turbine_col(cell_high, BlockIdx::new(2))];
+        let turb_low_2 = col_upper[layout.geometry.turbine_col(cell_low, BlockIdx::new(2))];
+        let turb_high_2 = col_upper[layout.geometry.turbine_col(cell_high, BlockIdx::new(2))];
         assert_eq!(
             turb_low_2.to_bits(),
             4000.0_f64.to_bits(),
@@ -7064,8 +7119,12 @@ mod cell_column_bound_tests {
             "the block-2 override must stay slack for cell 2's own (lower) group sum"
         );
 
-        let gen_low_2 = col_upper[layout.generation_col(FphaCellLocal::new(0), BlockIdx::new(2))];
-        let gen_high_2 = col_upper[layout.generation_col(FphaCellLocal::new(1), BlockIdx::new(2))];
+        let gen_low_2 = col_upper[layout
+            .geometry
+            .generation_col(FphaCellLocal::new(0), BlockIdx::new(2))];
+        let gen_high_2 = col_upper[layout
+            .geometry
+            .generation_col(FphaCellLocal::new(1), BlockIdx::new(2))];
         assert_eq!(
             gen_low_2.to_bits(),
             6000.0_f64.to_bits(),
@@ -7146,9 +7205,13 @@ mod cell_column_bound_tests {
         };
         fill_turbine_columns(&ctx, &stage, STAGE_IDX, &layout, &mut bufs);
 
-        let turb_a = col_upper[layout.turbine_col(cell_a, BlockIdx::new(0))];
-        let turb_b = col_upper[layout.turbine_col(HydroCell::new(1), BlockIdx::new(0))];
-        let turb_c = col_upper[layout.turbine_col(HydroCell::new(2), BlockIdx::new(0))];
+        let turb_a = col_upper[layout.geometry.turbine_col(cell_a, BlockIdx::new(0))];
+        let turb_b = col_upper[layout
+            .geometry
+            .turbine_col(HydroCell::new(1), BlockIdx::new(0))];
+        let turb_c = col_upper[layout
+            .geometry
+            .turbine_col(HydroCell::new(2), BlockIdx::new(0))];
         assert_eq!(
             turb_a.to_bits(),
             750.0_f64.to_bits(),
@@ -7166,7 +7229,10 @@ mod cell_column_bound_tests {
              sum-then-fold's min(100+10, 50+100) = 110, and not the plant's \
              resolved 110 that a group-term-dropped cap would return"
         );
-        assert_eq!(col_lower[layout.turbine_col(cell_a, BlockIdx::new(0))], 0.0);
+        assert_eq!(
+            col_lower[layout.geometry.turbine_col(cell_a, BlockIdx::new(0))],
+            0.0
+        );
     }
 
     /// A `PreFilling` split plant pins BOTH its cells' turbined columns to
@@ -7221,7 +7287,7 @@ mod cell_column_bound_tests {
         for cell_idx in [1, 2] {
             let cell = HydroCell::new(cell_idx);
             for blk in 0..N_BLKS {
-                let col = layout.turbine_col(cell, BlockIdx::new(blk));
+                let col = layout.geometry.turbine_col(cell, BlockIdx::new(blk));
                 assert_eq!(
                     col_upper[col], 0.0,
                     "cell {cell_idx} block {blk} must be pinned [0,0] while its plant is suspended"
@@ -7233,7 +7299,9 @@ mod cell_column_bound_tests {
             }
         }
 
-        let pad_col = layout.turbine_col(HydroCell::new(0), BlockIdx::new(0));
+        let pad_col = layout
+            .geometry
+            .turbine_col(HydroCell::new(0), BlockIdx::new(0));
         assert_eq!(
             col_upper[pad_col].to_bits(),
             200.0_f64.to_bits(),
@@ -7291,40 +7359,56 @@ mod cell_column_bound_tests {
         fill_turbine_columns(&ctx, &stage, STAGE_IDX, &layout, &mut bufs);
         fill_fpha_generation_columns(&ctx, STAGE_IDX, &layout, &mut bufs);
 
-        let turb_mw = col_upper[layout.turbine_col(HydroCell::new(0), BlockIdx::new(0))];
+        let turb_mw = col_upper[layout
+            .geometry
+            .turbine_col(HydroCell::new(0), BlockIdx::new(0))];
         assert_eq!(
             turb_mw.to_bits(),
             50.0_f64.to_bits(),
             "MW-binding plant: min(100, 50/1.0) = 50.0"
         );
         assert_eq!(
-            col_lower[layout.turbine_col(HydroCell::new(0), BlockIdx::new(0))],
+            col_lower[layout
+                .geometry
+                .turbine_col(HydroCell::new(0), BlockIdx::new(0))],
             0.0
         );
 
-        let turb_flow = col_upper[layout.turbine_col(HydroCell::new(1), BlockIdx::new(0))];
+        let turb_flow = col_upper[layout
+            .geometry
+            .turbine_col(HydroCell::new(1), BlockIdx::new(0))];
         assert_eq!(
             turb_flow.to_bits(),
             10.0_f64.to_bits(),
             "flow-binding plant: min(10, 100/1.0) = 10.0"
         );
         assert_eq!(
-            col_lower[layout.turbine_col(HydroCell::new(1), BlockIdx::new(0))],
+            col_lower[layout
+                .geometry
+                .turbine_col(HydroCell::new(1), BlockIdx::new(0))],
             0.0
         );
 
-        let turb_pad = col_upper[layout.turbine_col(HydroCell::new(2), BlockIdx::new(0))];
+        let turb_pad = col_upper[layout
+            .geometry
+            .turbine_col(HydroCell::new(2), BlockIdx::new(0))];
         assert_eq!(turb_pad.to_bits(), 200.0_f64.to_bits());
 
-        let turb_split_low = col_upper[layout.turbine_col(HydroCell::new(3), BlockIdx::new(0))];
-        let turb_split_high = col_upper[layout.turbine_col(HydroCell::new(4), BlockIdx::new(0))];
+        let turb_split_low = col_upper[layout
+            .geometry
+            .turbine_col(HydroCell::new(3), BlockIdx::new(0))];
+        let turb_split_high = col_upper[layout
+            .geometry
+            .turbine_col(HydroCell::new(4), BlockIdx::new(0))];
         assert_eq!(turb_split_low.to_bits(), 5250.0_f64.to_bits());
         assert_eq!(turb_split_high.to_bits(), 3750.0_f64.to_bits());
 
-        let gen_split_low =
-            col_upper[layout.generation_col(FphaCellLocal::new(0), BlockIdx::new(0))];
-        let gen_split_high =
-            col_upper[layout.generation_col(FphaCellLocal::new(1), BlockIdx::new(0))];
+        let gen_split_low = col_upper[layout
+            .geometry
+            .generation_col(FphaCellLocal::new(0), BlockIdx::new(0))];
+        let gen_split_high = col_upper[layout
+            .geometry
+            .generation_col(FphaCellLocal::new(1), BlockIdx::new(0))];
         assert_eq!(gen_split_low.to_bits(), 7000.0_f64.to_bits());
         assert_eq!(gen_split_high.to_bits(), 5000.0_f64.to_bits());
     }
@@ -7399,19 +7483,24 @@ mod cell_column_bound_tests {
         };
         fill_turbine_columns(&ctx, &stage2, 2, &layout2, &mut bufs2);
 
-        let overridden_block1 = col_upper2[layout2.turbine_col(cell_overridden, BlockIdx::new(1))];
+        let overridden_block1 = col_upper2[layout2
+            .geometry
+            .turbine_col(cell_overridden, BlockIdx::new(1))];
         assert_eq!(
             overridden_block1.to_bits(),
             30.0_f64.to_bits(),
             "(stage 2, block 1) must take the override"
         );
-        let overridden_block0 = col_upper2[layout2.turbine_col(cell_overridden, BlockIdx::new(0))];
+        let overridden_block0 = col_upper2[layout2
+            .geometry
+            .turbine_col(cell_overridden, BlockIdx::new(0))];
         assert_eq!(
             overridden_block0.to_bits(),
             100.0_f64.to_bits(),
             "the same cell at block 0 must keep the declared value"
         );
-        let sibling_block1 = col_upper2[layout2.turbine_col(cell_sibling, BlockIdx::new(1))];
+        let sibling_block1 =
+            col_upper2[layout2.geometry.turbine_col(cell_sibling, BlockIdx::new(1))];
         assert_eq!(
             sibling_block1.to_bits(),
             60.0_f64.to_bits(),
@@ -7427,7 +7516,9 @@ mod cell_column_bound_tests {
             objective: &mut objective0,
         };
         fill_turbine_columns(&ctx, &stage0, 0, &layout0, &mut bufs0);
-        let other_stage_block1 = col_upper0[layout0.turbine_col(cell_overridden, BlockIdx::new(1))];
+        let other_stage_block1 = col_upper0[layout0
+            .geometry
+            .turbine_col(cell_overridden, BlockIdx::new(1))];
         assert_eq!(
             other_stage_block1.to_bits(),
             100.0_f64.to_bits(),
@@ -7518,22 +7609,25 @@ mod cell_column_bound_tests {
         };
         fill_fpha_generation_columns(&ctx, 2, &layout2, &mut bufs2);
 
-        let overridden_block1 =
-            col_upper2[layout2.generation_col(FphaCellLocal::new(1), BlockIdx::new(1))];
+        let overridden_block1 = col_upper2[layout2
+            .geometry
+            .generation_col(FphaCellLocal::new(1), BlockIdx::new(1))];
         assert_eq!(
             overridden_block1.to_bits(),
             30.0_f64.to_bits(),
             "(stage 2, block 1) must take the override"
         );
-        let overridden_block0 =
-            col_upper2[layout2.generation_col(FphaCellLocal::new(1), BlockIdx::new(0))];
+        let overridden_block0 = col_upper2[layout2
+            .geometry
+            .generation_col(FphaCellLocal::new(1), BlockIdx::new(0))];
         assert_eq!(
             overridden_block0.to_bits(),
             100.0_f64.to_bits(),
             "the same cell at block 0 must keep the declared value"
         );
-        let sibling_block1 =
-            col_upper2[layout2.generation_col(FphaCellLocal::new(0), BlockIdx::new(1))];
+        let sibling_block1 = col_upper2[layout2
+            .geometry
+            .generation_col(FphaCellLocal::new(0), BlockIdx::new(1))];
         assert_eq!(
             sibling_block1.to_bits(),
             60.0_f64.to_bits(),
@@ -7549,8 +7643,9 @@ mod cell_column_bound_tests {
             objective: &mut objective0,
         };
         fill_fpha_generation_columns(&ctx, 0, &layout0, &mut bufs0);
-        let other_stage_block1 =
-            col_upper0[layout0.generation_col(FphaCellLocal::new(1), BlockIdx::new(1))];
+        let other_stage_block1 = col_upper0[layout0
+            .geometry
+            .generation_col(FphaCellLocal::new(1), BlockIdx::new(1))];
         assert_eq!(
             other_stage_block1.to_bits(),
             100.0_f64.to_bits(),
@@ -7687,7 +7782,9 @@ mod cell_column_bound_tests {
         };
         fill_turbine_columns(&ctx, &stage, STAGE_IDX, &layout, &mut bufs);
 
-        let turb = col_upper[layout.turbine_col(HydroCell::new(0), BlockIdx::new(0))];
+        let turb = col_upper[layout
+            .geometry
+            .turbine_col(HydroCell::new(0), BlockIdx::new(0))];
         assert_eq!(
             turb.to_bits(),
             60.0_f64.to_bits(),

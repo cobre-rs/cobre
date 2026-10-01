@@ -3951,7 +3951,9 @@ fn chronological_water_balance_chained_rows() {
     );
     assert_eq!(
         entry(
-            layout.turbine_col(HydroCell::new(h), BlockIdx::new(0)),
+            layout
+                .geometry
+                .turbine_col(HydroCell::new(h), BlockIdx::new(0)),
             row0
         ),
         tau[0]
@@ -3973,7 +3975,9 @@ fn chronological_water_balance_chained_rows() {
     );
     assert_eq!(
         entry(
-            layout.turbine_col(HydroCell::new(h), BlockIdx::new(1)),
+            layout
+                .geometry
+                .turbine_col(HydroCell::new(h), BlockIdx::new(1)),
             row1
         ),
         tau[1]
@@ -4028,18 +4032,30 @@ fn chronological_water_balance_telescopes_to_parallel() {
     // block's τ_k sum reproduces the parallel ζ-scaled flow coefficient.
     for blk in 0..n_blks {
         assert_telescopes(
-            par_layout.turbine_col(HydroCell::new(h), BlockIdx::new(blk)),
-            chr_layout.turbine_col(HydroCell::new(h), BlockIdx::new(blk)),
+            par_layout
+                .geometry
+                .turbine_col(HydroCell::new(h), BlockIdx::new(blk)),
+            chr_layout
+                .geometry
+                .turbine_col(HydroCell::new(h), BlockIdx::new(blk)),
             "turbine",
         );
         assert_telescopes(
-            par_layout.spillage_col(HydroSys::new(h), BlockIdx::new(blk)),
-            chr_layout.spillage_col(HydroSys::new(h), BlockIdx::new(blk)),
+            par_layout
+                .geometry
+                .spillage_col(HydroSys::new(h), BlockIdx::new(blk)),
+            chr_layout
+                .geometry
+                .spillage_col(HydroSys::new(h), BlockIdx::new(blk)),
             "spillage",
         );
         assert_telescopes(
-            par_layout.diversion_col(HydroSys::new(h), BlockIdx::new(blk)),
-            chr_layout.diversion_col(HydroSys::new(h), BlockIdx::new(blk)),
+            par_layout
+                .geometry
+                .diversion_col(HydroSys::new(h), BlockIdx::new(blk)),
+            chr_layout
+                .geometry
+                .diversion_col(HydroSys::new(h), BlockIdx::new(blk)),
             "diversion",
         );
     }
@@ -4141,7 +4157,7 @@ fn stage_layout_geometry_field_equals_layout_source_at_k3() {
     assert_eq!(geometry.thermal, layout.geometry.thermal, "thermal");
     assert_eq!(
         geometry.anticipated_decision,
-        layout.anticipated_decision(),
+        layout.geometry.anticipated_decision.clone(),
         "anticipated_decision"
     );
     assert_eq!(geometry.line_fwd, layout.geometry.line_fwd, "line_fwd");
@@ -4203,22 +4219,22 @@ fn stage_layout_geometry_field_equals_layout_source_at_k3() {
     );
     assert_eq!(
         geometry.filling_target,
-        layout.filling_target(),
+        layout.geometry.filling_target.clone(),
         "filling_target"
     );
     assert_eq!(
         geometry.filling_target_col,
-        layout.filling_target_col(),
+        layout.geometry.filling_target_col.clone(),
         "filling_target_col"
     );
     assert_eq!(
         geometry.filled_min_storage_floor,
-        layout.filled_min_storage_floor(),
+        layout.geometry.filled_min_storage_floor.clone(),
         "filled_min_storage_floor"
     );
     assert_eq!(
         geometry.filled_min_storage_floor_col,
-        layout.filled_min_storage_floor_col(),
+        layout.geometry.filled_min_storage_floor_col.clone(),
         "filled_min_storage_floor_col"
     );
     assert_eq!(geometry.n_blks, layout.clock.n_blks(), "n_blks");
@@ -4477,27 +4493,27 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
         );
         assert_eq!(
             geometry.anticipated_decision,
-            layout.anticipated_decision(),
+            layout.geometry.anticipated_decision.clone(),
             "stage {stage_idx}: anticipated_decision"
         );
         assert_eq!(
             geometry.filling_target,
-            layout.filling_target(),
+            layout.geometry.filling_target.clone(),
             "stage {stage_idx}: filling_target"
         );
         assert_eq!(
             geometry.filling_target_col,
-            layout.filling_target_col(),
+            layout.geometry.filling_target_col.clone(),
             "stage {stage_idx}: filling_target_col"
         );
         assert_eq!(
             geometry.filled_min_storage_floor,
-            layout.filled_min_storage_floor(),
+            layout.geometry.filled_min_storage_floor.clone(),
             "stage {stage_idx}: filled_min_storage_floor"
         );
         assert_eq!(
             geometry.filled_min_storage_floor_col,
-            layout.filled_min_storage_floor_col(),
+            layout.geometry.filled_min_storage_floor_col.clone(),
             "stage {stage_idx}: filled_min_storage_floor_col"
         );
 
@@ -4596,7 +4612,7 @@ fn chronological_d06_gamma_v_on_both_block_columns() {
 
     for k in 1..=n_blks {
         let blk = k - 1;
-        let row = layout.row_fpha_start() + blk;
+        let row = layout.geometry.fpha.start + blk;
         assert_eq!(
             entry(
                 layout.block_storage_col(HydroSys::new(h), Boundary::from_index(k - 1, n_blks)),
@@ -4957,13 +4973,17 @@ fn chronological_prefilling_d38_d42_per_block() {
             "PreFilling block {k}: frozen-identity RHS upper == 0"
         );
 
-        let spill_pre = layout.spillage_col(HydroSys::new(h_pre), BlockIdx::new(blk));
+        let spill_pre = layout
+            .geometry
+            .spillage_col(HydroSys::new(h_pre), BlockIdx::new(blk));
         assert_eq!(
             (t.col_lower[spill_pre], t.col_upper[spill_pre]),
             (0.0, 0.0),
             "PreFilling block {k}: spillage frozen [0,0] (no dam to spill from, D38/D39/D42)"
         );
-        let turb_pre = layout.turbine_col(HydroCell::new(h_pre), BlockIdx::new(blk));
+        let turb_pre = layout
+            .geometry
+            .turbine_col(HydroCell::new(h_pre), BlockIdx::new(blk));
         assert_eq!(
             (t.col_lower[turb_pre], t.col_upper[turb_pre]),
             (0.0, 0.0),
@@ -4971,7 +4991,9 @@ fn chronological_prefilling_d38_d42_per_block() {
         );
 
         // A Filling hydro's spillage is the legitimate D40 relief valve: free upward.
-        let spill_fill = layout.spillage_col(HydroSys::new(h_fill), BlockIdx::new(blk));
+        let spill_fill = layout
+            .geometry
+            .spillage_col(HydroSys::new(h_fill), BlockIdx::new(blk));
         assert_eq!(
             t.col_lower[spill_fill], 0.0,
             "Filling block {k}: spillage lower == 0"
@@ -5043,7 +5065,9 @@ fn chronological_filling_target_on_final_storage() {
     );
 
     for blk in 0..n_blks {
-        let spill = chr_layout.spillage_col(HydroSys::new(h_fill), BlockIdx::new(blk));
+        let spill = chr_layout
+            .geometry
+            .spillage_col(HydroSys::new(h_fill), BlockIdx::new(blk));
         assert_eq!(
             (chr_t.col_lower[spill], chr_t.col_upper[spill]),
             (0.0, f64::INFINITY),

@@ -2941,10 +2941,6 @@ mod filling_phase_gating_tests {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::similar_names,
-    reason = "test locals mirror the paired column and row names the assertions compare"
-)]
 mod anticipated_objective_tests {
     use crate::test_support::ctx_fixture::CtxFixture;
 
@@ -3540,9 +3536,8 @@ mod anticipated_objective_tests {
         let mut fixtures = PostStudyAnchorFixtures::new(0, &[]);
         let ctx = fixtures.make_ctx();
 
-        let state = ctx.state;
         let stage = two_block_stage(0, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
-        let layout = StageLayout::new(&ctx, state, &stage, 0);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 0, &layout);
         let decision_col = layout.geometry.anticipated_decision.start;
@@ -3574,9 +3569,8 @@ mod anticipated_objective_tests {
         let mut fixtures = PostStudyAnchorFixtures::new(2, &[(0, 42.0, 10.0, 50.0)]);
         let ctx = fixtures.make_ctx();
 
-        let state = ctx.state;
         let stage = two_block_stage(1, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
-        let layout = StageLayout::new(&ctx, state, &stage, 1);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, 1);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 1, &layout);
         let decision_col = layout.geometry.anticipated_decision.start;
@@ -3607,9 +3601,8 @@ mod anticipated_objective_tests {
         let mut fixtures = PostStudyAnchorFixtures::new(2, &[]);
         let ctx = fixtures.make_ctx();
 
-        let state = ctx.state;
         let stage = two_block_stage(1, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
-        let layout = StageLayout::new(&ctx, state, &stage, 1);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, 1);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 1, &layout);
         let decision_col = layout.geometry.anticipated_decision.start;
@@ -3636,9 +3629,8 @@ mod anticipated_objective_tests {
         let mut fixtures = PostStudyAnchorFixtures::new(2, &[(0, 42.0, 30.0, 30.0)]);
         let ctx = fixtures.make_ctx();
 
-        let state = ctx.state;
         let stage = two_block_stage(1, [PSA_STUDY_HOURS / 2.0, PSA_STUDY_HOURS / 2.0]);
-        let layout = StageLayout::new(&ctx, state, &stage, 1);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, 1);
 
         let (col_lower, col_upper, _objective) = fill_stage_columns(&ctx, &stage, 1, &layout);
         let decision_col = layout.geometry.anticipated_decision.start;

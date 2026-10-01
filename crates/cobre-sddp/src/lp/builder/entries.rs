@@ -2019,10 +2019,6 @@ mod parameter_resolution_tests {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::similar_names,
-    reason = "test locals mirror the paired column and row names the assertions compare"
-)]
 mod zero_cost_tests {
 
     use chrono::NaiveDate;
@@ -2032,11 +2028,11 @@ mod zero_cost_tests {
         ThermalBlockBounds, ThermalStageBounds,
     };
 
-    use crate::indexer::{BlockIdx, StateSpace};
+    use crate::indexer::BlockIdx;
     use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution};
 
+    use crate::test_support::anticipated_plants_at;
     use crate::test_support::ctx_fixture::CtxFixture;
-    use crate::test_support::{anticipated_plants_at, constant_lead_resolution};
     use crate::time_value::{PostStudyResolved, TimeValue};
 
     use super::super::columns::{fill_stage_columns, fill_thermal_columns};
@@ -2406,17 +2402,15 @@ mod zero_cost_tests {
         fixtures.base.bounds = AntFixtures::bounds_with_n_stages(1, 0, 1);
         let ctx = fixtures.make_ctx(0, vec![0], &[0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let resolution = constant_lead_resolution(&[0], 1);
-        let state = StateSpace::new(0, 0, Vec::new(), vec![0], resolution, &[]);
         assert_eq!(
-            state.n_anticipated, 1,
+            ctx.state.n_anticipated, 1,
             "fixture sanity: one anticipated plant"
         );
         assert_eq!(
-            state.k_max, 0,
+            ctx.state.k_max, 0,
             "fixture sanity: a lead-0 plant's ring is empty"
         );
-        let layout = StageLayout::new(&ctx, &state, &stage, 0);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_fishing_entries(&ctx, &stage, 0, &layout, &mut col_entries);
@@ -2782,27 +2776,18 @@ mod zero_cost_tests {
     fn k0_sub_stage_lead_emits_no_anticipated_rows_or_fishing_coupling() {
         let mut fixtures = AntFixtures::new();
         fixtures.base.bounds = AntFixtures::bounds_with_n_stages(4, 0, 1);
-        let ctx = fixtures.make_ctx(0, vec![0], &[0], 1);
-
-        let resolution = AnticipatedResolution::resolve(
+        fixtures.base.anticipated_resolution = AnticipatedResolution::resolve(
             &[LeadTime::Time(720.0)],
             DeliveryAxis {
                 study_stage_hours: &[744.0, 744.0, 744.0, 744.0],
                 post_study_stage_hours: &[],
             },
         );
-        let state = StateSpace::new(
-            ctx.hydros.len(),
-            ctx.par_lp.max_order(),
-            Vec::new(),
-            ctx.state.anticipated_lead_stages.clone(),
-            resolution,
-            &vec![0; ctx.hydros.len()],
-        );
+        let ctx = fixtures.make_ctx(0, vec![0], &[0], 1);
 
         for stage_idx in 0..4 {
             let stage = two_block_stage(stage_idx, [372.0, 372.0]);
-            let layout = StageLayout::new(&ctx, &state, &stage, stage_idx);
+            let layout = StageLayout::new(&ctx, ctx.state, &stage, stage_idx);
             assert_eq!(
                 layout.anticipated.fishing_rows.len(),
                 0,
@@ -2864,17 +2849,15 @@ mod zero_cost_tests {
         fixtures.base.bounds = AntFixtures::bounds_with_n_stages(2, 0, 1);
         let ctx = fixtures.make_ctx(0, vec![0], &[0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let resolution = constant_lead_resolution(&[0], 2);
-        let state = StateSpace::new(0, 0, Vec::new(), vec![0], resolution, &[]);
         assert_eq!(
-            state.n_anticipated, 1,
+            ctx.state.n_anticipated, 1,
             "fixture sanity: one anticipated plant"
         );
         assert_eq!(
-            state.k_max, 0,
+            ctx.state.k_max, 0,
             "fixture sanity: a lead-0 plant's ring is empty"
         );
-        let layout = StageLayout::new(&ctx, &state, &stage, 0);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
         assert_eq!(
             layout.anticipated.fishing_rows.len(),
@@ -2927,8 +2910,7 @@ mod zero_cost_tests {
         );
         let ctx = fixtures.make_ctx(3, vec![3], &[0], 1);
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let state = ctx.state;
-        let layout = StageLayout::new(&ctx, state, &stage, 0);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_slot_definition_entries(&layout, &mut col_entries);
@@ -3050,8 +3032,7 @@ mod zero_cost_tests {
         );
         ctx.time_value = &time_value;
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let state = ctx.state;
-        let layout = StageLayout::new(&ctx, state, &stage, 0);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_state_out_def_entries(0, &layout, &mut col_entries);
@@ -3102,8 +3083,7 @@ mod zero_cost_tests {
         );
         ctx.time_value = &time_value;
         let stage = two_block_stage(0, [372.0, 372.0]);
-        let state = ctx.state;
-        let layout = StageLayout::new(&ctx, state, &stage, 0);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_slot_definition_entries(&layout, &mut col_entries);
@@ -3149,8 +3129,7 @@ mod zero_cost_tests {
         );
         ctx.time_value = &time_value;
         let stage = two_block_stage(2, [372.0, 372.0]);
-        let state = ctx.state;
-        let layout = StageLayout::new(&ctx, state, &stage, 2);
+        let layout = StageLayout::new(&ctx, ctx.state, &stage, 2);
 
         let mut col_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); layout.num_cols];
         fill_anticipated_fishing_entries(&ctx, &stage, 2, &layout, &mut col_entries);
@@ -9269,8 +9248,7 @@ mod pumping_water_tests {
             two_block_stage(usize::try_from(RET_PREFILLING_ID).unwrap(), [300.0, 444.0]);
         stage.block_mode = BlockMode::Chronological;
         let stage = Box::leak(Box::new(stage));
-        let state = ctx.state;
-        let layout = StageLayout::new(ctx, state, stage, 0);
+        let layout = StageLayout::new(ctx, ctx.state, stage, 0);
         let (row_lower, row_upper) = super::super::rows::fill_stage_rows(ctx, stage, 0, &layout);
         let csc = {
             let mut entries = build_stage_matrix_entries(ctx, stage, 0, &layout);
@@ -9539,8 +9517,7 @@ mod pumping_water_tests {
         }
         stage.block_mode = block_mode;
         let stage = Box::leak(Box::new(stage));
-        let state = ctx.state;
-        let layout = StageLayout::new(ctx, state, stage, 0);
+        let layout = StageLayout::new(ctx, ctx.state, stage, 0);
         let (row_lower, row_upper) = super::super::rows::fill_stage_rows(ctx, stage, 0, &layout);
         let cols = super::super::columns::fill_stage_columns(ctx, stage, 0, &layout);
         let csc = {

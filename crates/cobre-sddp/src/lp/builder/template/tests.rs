@@ -3,8 +3,7 @@
     clippy::cast_sign_loss,
     clippy::needless_range_loop,
     clippy::doc_markdown,
-    clippy::similar_names,
-    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, the test reads non-negative CSC offsets, the loop index addresses parallel arrays, test docs name LP symbols that are not code identifiers, and test locals mirror the paired column and row names the assertions compare"
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, the test reads non-negative CSC offsets, the loop index addresses parallel arrays, and test docs name LP symbols that are not code identifiers"
 )]
 
 use chrono::NaiveDate;
@@ -3287,11 +3286,10 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
         inputs,
     );
     let ctx = Box::leak(Box::new(ctx));
-    let state = ctx.state;
     let stage = &system.stages()[0];
 
-    let template = super::build_single_stage_template(ctx, state, stage, 0).template;
-    let layout = StageLayout::new(ctx, state, stage, 0);
+    let template = super::build_single_stage_template(ctx, ctx.state, stage, 0).template;
+    let layout = StageLayout::new(ctx, ctx.state, stage, 0);
     (layout, template)
 }
 
@@ -3901,11 +3899,10 @@ fn block_layout_and_template(
         inputs,
     );
     let ctx = Box::leak(Box::new(ctx));
-    let state = ctx.state;
     let stage = &system.stages()[0];
 
-    let template = super::build_single_stage_template(ctx, state, stage, 0).template;
-    let layout = StageLayout::new(ctx, state, stage, 0);
+    let template = super::build_single_stage_template(ctx, ctx.state, stage, 0).template;
+    let layout = StageLayout::new(ctx, ctx.state, stage, 0);
     let tau: Vec<f64> = stage
         .blocks
         .iter()
@@ -4919,11 +4916,10 @@ fn filling_block_layout_and_template(
         inputs,
     );
     let ctx = Box::leak(Box::new(ctx));
-    let state = ctx.state;
     let stage = &system.stages()[0];
 
-    let template = super::build_single_stage_template(ctx, state, stage, 0).template;
-    let layout = StageLayout::new(ctx, state, stage, 0);
+    let template = super::build_single_stage_template(ctx, ctx.state, stage, 0).template;
+    let layout = StageLayout::new(ctx, ctx.state, stage, 0);
     (layout, template, (*ctx.filling_v_target).clone())
 }
 

@@ -1,7 +1,6 @@
 #![expect(
     clippy::too_many_lines,
-    clippy::similar_names,
-    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, and test locals mirror the paired column and row names the assertions compare"
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
 )]
 
 use std::collections::HashMap;
@@ -4167,12 +4166,15 @@ fn row_address_pins_cover_every_family() {
 
     // Transit-bucket definition: one downstream plant, one reachable lag.
     let mut transit_fixtures = ZeroEntityFixtures::new();
+    transit_fixtures.base.topology.column_order = vec![(HydroSys::new(0), 1)];
     transit_fixtures.base.topology.per_stage_mask = vec![vec![1]];
     let transit_ctx = transit_fixtures.make_ctx(vec![], &[]);
-    let transit_state =
-        state_layout_with_transit_buckets(0, 0, vec![(HydroSys::new(0), 1)], vec![]);
+    assert_eq!(
+        transit_ctx.state.n_buckets, 1,
+        "the context's own state must carry the bucket this case addresses"
+    );
     let transit_stage = minimal_stage();
-    let transit_layout = StageLayout::new(&transit_ctx, &transit_state, &transit_stage, 0);
+    let transit_layout = StageLayout::new(&transit_ctx, transit_ctx.state, &transit_stage, 0);
     let transit_counts = assert_row_addresses(&transit_layout);
     for (total, count) in totals.iter_mut().zip(transit_counts) {
         *total += count;
@@ -4323,7 +4325,6 @@ fn two_sided_real_layout_allocates_minus_slack_column() {
     };
     let ctx = fixture.ctx();
 
-    let state = state_layout(0, 0);
     let stage = Stage {
         index: 0,
         id: 0,
@@ -4347,7 +4348,7 @@ fn two_sided_real_layout_allocates_minus_slack_column() {
         },
     };
 
-    let layout = StageLayout::new(&ctx, &state, &stage, 0);
+    let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
     assert_eq!(
         layout.generic_constraint_rows.len(),

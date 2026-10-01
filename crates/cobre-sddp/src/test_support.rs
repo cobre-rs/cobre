@@ -39,7 +39,6 @@ use cobre_io::{
     EntitySlot, GraphManifest, ManifestEdge, ManifestNode, PolicyCutRecord, ProducerBlock,
     StageCutsPayload, decode_slot_date, encode_slot_date, write_policy_checkpoint,
 };
-#[cfg(test)]
 use cobre_stochastic::par::precompute::PrecomputedPar;
 use cobre_stochastic::{
     ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
@@ -656,16 +655,12 @@ fn geometry_stage(n_blks: usize) -> Stage {
 ///
 /// `fpha_hydro_indices` / `fpha_planes` are parallel (equal length). Builds the
 /// production `TemplateBuildCtx`/[`StateSpace`]/[`Stage`] the dimensions
-/// describe and delegates to `StageLayout::new`/`StageLayout::geometry` — the
-/// single owner of the offset arithmetic.
+/// describe and delegates to `StageLayout::new` — the single owner of the
+/// offset arithmetic.
 #[must_use]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "fpha_hydro_indices/evap_hydro_indices stay owned Vec<usize> — the signature is a stability contract its call sites depend on — even though the body only borrows them (StageLayout::new re-derives the authoritative membership from ctx.hydros/production_models/evaporation_models, not from the caller's raw list)"
-)]
-#[expect(
-    clippy::similar_names,
-    reason = "state next to stage: both names are established (the StageLayout/StageData field is state, the per-stage input is stage), so renaming either would obscure intent rather than clarify it — mirrors build_single_stage_template"
 )]
 pub fn geometry(
     dims: &GeometryDims,
@@ -738,15 +733,17 @@ pub fn geometry(
         PostStudyResolved::default(),
     );
 
+    let par_lp = geometry_par(dims.max_par_order, &hydros);
     let mut fixture = CtxFixture {
         hydros,
         thermals,
         lines,
         buses,
         hydro_cell_index,
+        par_lp,
         production_models,
         evaporation_models,
-        anticipated_lead_stages: anticipated_lead_stages.clone(),
+        anticipated_lead_stages,
         anticipated_plants: dims.anticipated_plants.clone(),
         has_penalty: dims.has_inflow_penalty,
         bounds,
@@ -760,14 +757,34 @@ pub fn geometry(
     let empty_positions = EntityPositions::from_slices([], [], [], [], [], []);
     ctx.positions = &empty_positions;
 
-    let state = state_layout_full(
-        dims.hydro_count,
-        dims.max_par_order,
-        anticipated_lead_stages,
-    );
     let stage = geometry_stage(dims.n_blks);
 
-    StageLayout::new(&ctx, &state, &stage, 0).geometry
+    StageLayout::new(&ctx, ctx.state, &stage, 0).geometry
+}
+
+/// A PAR(`order`) model for every hydro in `hydros` (finite placeholder
+/// coefficients), so a [`CtxFixture`] built over them derives a state with
+/// `order` dense lags per hydro.
+#[expect(
+    clippy::expect_used,
+    reason = "geometry_stage carries a season_id, the one input PrecomputedPar::build rejects an AR model for lacking"
+)]
+fn geometry_par(order: usize, hydros: &[Hydro]) -> PrecomputedPar {
+    let hydro_ids: Vec<EntityId> = hydros.iter().map(|hydro| hydro.id).collect();
+    let models: Vec<InflowModel> = hydro_ids
+        .iter()
+        .map(|&hydro_id| InflowModel {
+            hydro_id,
+            stage_id: 0,
+            mean_m3s: 1.0,
+            std_m3s: 1.0,
+            ar_coefficients: vec![0.1; order],
+            residual_std_ratio: 1.0,
+            annual: None,
+        })
+        .collect();
+    PrecomputedPar::build(&models, &[geometry_stage(1)], &hydro_ids, None)
+        .expect("geometry_par: placeholder PAR models are valid")
 }
 
 /// Build a [`StageGeometry`] carrying only a load-balance row family

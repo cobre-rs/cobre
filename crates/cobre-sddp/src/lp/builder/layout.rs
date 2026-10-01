@@ -96,7 +96,7 @@ pub(crate) struct TemplateBuildCtx<'a> {
     // still thread the state layout as their own separate parameter alongside
     // this ctx.
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "test-support")),
         expect(dead_code, reason = "read only by tests and fixtures so far")
     )]
     pub(crate) state: &'a StateSpace,

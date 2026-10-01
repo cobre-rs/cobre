@@ -62,7 +62,7 @@ pub use delivery_ring::DeliveryRing;
 pub use layout::StageGeometry;
 pub use patch::PatchBuffer;
 pub use state_box::StateBox;
-pub use template::{StageTemplates, build_stage_templates};
+pub use template::StageTemplates;
 
 // --- Crate-internal re-exports ---
 pub(crate) use build_inputs::LpBuildInputs;
@@ -80,7 +80,7 @@ pub(crate) use state_box::build_state_box;
 pub(crate) use template::canonical::{
     FactGroups, encode_stage_templates_facts, encode_time_value_facts,
 };
-pub(crate) use template::models_from_normal;
+pub(crate) use template::{build_stage_templates, models_from_normal};
 
 // ---------------------------------------------------------------------------
 // Shared constants

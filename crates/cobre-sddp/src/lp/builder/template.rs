@@ -290,12 +290,8 @@ pub(crate) fn models_from_normal<M>(
 /// constraint row is added per evaporation hydro with
 /// `row_lower == row_upper == intercept_m3s`.
 ///
-#[expect(
-    private_interfaces,
-    reason = "time_value borrows the crate-private owner until this function's visibility narrows"
-)]
 #[must_use]
-pub fn build_stage_templates(
+pub(crate) fn build_stage_templates(
     system: &System,
     par_lp: &PrecomputedPar,
     production_models: &ProductionModelSet,

@@ -11,7 +11,7 @@
 //!   pinned via [`crate::indexer::StateSpace::state_to_lp_incoming_column`]
 //!   column bounds, never a fixing row. The per-stage equipment geometry lives
 //!   on [`StageGeometry`].
-//! - [`builder`] — [`build_stage_templates`] assembles the CSC structural LP,
+//! - [`builder`] — [`build_stage_templates`](builder::build_stage_templates) assembles the CSC structural LP,
 //!   bounds, and objective for each stage once at startup; its crate-private
 //!   `generic_constraints` submodule lowers user-declared generic constraints
 //!   onto the indexed column layout. The FPHA generation constraint carries
@@ -23,4 +23,4 @@
 pub mod builder;
 pub mod indexer;
 
-pub use builder::{StageGeometry, StageTemplates, build_stage_templates};
+pub use builder::{StageGeometry, StageTemplates};

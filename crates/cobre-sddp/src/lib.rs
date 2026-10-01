@@ -92,7 +92,7 @@ pub use cut::{CutPool, FutureCostFunction};
 pub use error::SddpError;
 pub use fixed_delivery_echo::build_fixed_delivery_rows;
 pub use generic_constraint_echo::build_generic_constraint_echo_rows;
-pub use lp::builder::{StageTemplates, build_stage_templates};
+pub use lp::builder::StageTemplates;
 pub use policy::policy_export::{ReservedInflowLagLayout, reserve_boundary_inflow_lag_slots};
 pub use policy::policy_load::{
     BoundaryInjection, BoundaryLoadRequest, FullFcf, LEGACY_COST_SCALE_FACTOR,

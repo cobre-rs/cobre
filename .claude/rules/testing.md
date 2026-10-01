@@ -86,6 +86,38 @@ rule; the rules below are the Cobre-specific ones.
     cold") — so a multi-opening cross-scheduler bit-identity gate is not a
     gateable contract, even where a fixture happens to pass it today.
 
+## Pinned expected values — every numeric oracle states its source
+
+A value recorded from a run pins whatever the code computed, including a defect.
+A pinned lower bound taken from a degenerate fixture once passed while the cut mask
+was wrong. So every numeric expected value that a test compares a solve or a built LP
+against is one of these three:
+
+- **Derived.** The value is written in the test as an expression or closed form over
+  the study's named constants. It never comes from the code under test or from the
+  builder's own templates.
+  - Label the constant or helper with a `/// derived:` doc line naming the closed form.
+    `closed_form_total_cost` in `tests/anticipated_core.rs` is the model.
+  - A derived oracle also gets a non-degeneracy twin when the fixture could pass by
+    symmetry. The twin has the feature off, a zero rate or equal hours, and has its own
+    derived value, which must differ.
+- **Hybrid.** The derived core is asserted on its own, and the remainder is bounded.
+  Label it `/// hybrid:`.
+- **Characterization.** The value is recorded from a run. It is allowed only with both
+  of these, and is labelled `/// characterization:`:
+  - a non-degeneracy guard: a feature-off twin that must give a different value;
+  - a companion invariant, such as `LB <= UB` or a binding constraint.
+
+Rules that follow:
+
+- **A recorded value that moves after a formulation change is a finding.** Never
+  re-record it. Derive the new value, or route the change as a defect.
+- **Literals asserted against a hand-built unit fixture are derived by construction.**
+  This covers a coefficient, a column index or a bound the test itself laid out: the
+  fixture is the derivation, and no label is needed. Keep an independent literal
+  oracle there instead of reading the owner (`StageGeometry`, `StateSpace`), which
+  would pin the code against itself.
+
 ## Re-baselining parity hashes
 
 - Baselines live in TWO committed dirs under `crates/cobre-sddp/tests/fixtures/`:

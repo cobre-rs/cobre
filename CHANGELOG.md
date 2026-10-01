@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stages and hydros is refused at setup.** It previously ran silently as a
   zero-inflow model; the error names both shapes.
 
+- **BREAKING — under historical inflow sampling, a study whose backward pass
+  cannot build a valid historical opening tree is refused at setup.** The
+  opening tree's library now goes through the same validation as the forward
+  pass's: a stage without a season, a study with no complete historical
+  window, and a standardized inflow that is not finite are reported as setup
+  errors. They were previously admitted silently.
+
 ### Fixed
 
 - **A generic constraint's `hydro_inflow` term now accounts for water travel

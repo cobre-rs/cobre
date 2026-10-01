@@ -2780,48 +2780,89 @@ fn seasonal_reference_volume_supports_nonzero_start_season() {
     );
 }
 
-// ── Degenerate FPHA detection tests ───────────────────────────────────────────
+fn resolve_single_computed_hydro(hydro: Hydro) -> ResolveProductionResult {
+    let artifacts = cobre_io::CaseArtifacts {
+        production_models: vec![computed_fpha_config(0)],
+        hydro_geometry: make_sobradinho_geometry_rows(0),
+        ..Default::default()
+    };
+    let system = SystemBuilder::new()
+        .buses(vec![make_bus()])
+        .hydros(vec![hydro])
+        .stages(vec![make_stage(0), make_stage(1)])
+        .build()
+        .expect("computed-FPHA system builds");
+    super::resolve_production_models_from_artifacts(&system, &artifacts, false)
+        .expect("resolve must succeed for a computed-FPHA case")
+}
 
 #[test]
-fn is_degenerate_for_fpha_returns_true_when_max_turbined_zero() {
-    let mut hydro = make_computed_hydro(0);
+fn computed_fpha_without_turbine_capacity_resolves_to_zero_productivity() {
+    let mut hydro = make_sobradinho_computed_hydro(0);
     hydro.max_turbined_m3s = 0.0;
 
-    assert!(
-        is_degenerate_for_fpha(&hydro),
-        "should detect degenerate when max_turbined_m3s == 0"
+    let (set, _, provenance, export_rows, _, fpha_fit_deviations, _) =
+        resolve_single_computed_hydro(hydro);
+
+    for stage_idx in 0..2 {
+        assert!(
+            matches!(
+                set.model(0, stage_idx),
+                ResolvedProductionModel::ConstantProductivity { productivity } if *productivity == 0.0
+            ),
+            "stage {stage_idx}: got {:?}",
+            set.model(0, stage_idx)
+        );
+    }
+    assert_eq!(
+        provenance,
+        vec![(EntityId::from(0), ProductionModelSource::NoTurbineCapacity)]
     );
+    assert!(export_rows.is_empty() && fpha_fit_deviations.is_empty());
 }
 
 #[test]
-fn is_degenerate_for_fpha_returns_true_when_max_generation_zero() {
-    let mut hydro = make_computed_hydro(0);
+fn computed_fpha_without_generation_capacity_still_fits_planes() {
+    let mut hydro = make_sobradinho_computed_hydro(0);
     hydro.max_generation_mw = 0.0;
 
+    let (set, _, provenance, _, _, _, _) = resolve_single_computed_hydro(hydro);
+
     assert!(
-        is_degenerate_for_fpha(&hydro),
-        "should detect degenerate when max_generation_mw == 0"
+        matches!(
+            set.model(0, 0),
+            ResolvedProductionModel::Fpha { planes, .. } if !planes.is_empty()
+        ),
+        "got {:?}",
+        set.model(0, 0)
+    );
+    assert_eq!(
+        provenance,
+        vec![(
+            EntityId::from(0),
+            ProductionModelSource::ComputedFromGeometry
+        )]
     );
 }
 
 #[test]
-fn is_degenerate_for_fpha_returns_true_when_both_zero() {
-    let mut hydro = make_computed_hydro(0);
+fn computed_fpha_without_turbine_capacity_still_requires_its_prerequisites() {
+    let mut hydro = make_sobradinho_computed_hydro(0);
     hydro.max_turbined_m3s = 0.0;
-    hydro.max_generation_mw = 0.0;
+    hydro.tailrace = None;
+    let artifacts = cobre_io::CaseArtifacts {
+        production_models: vec![computed_fpha_config(0)],
+        hydro_geometry: make_sobradinho_geometry_rows(0),
+        ..Default::default()
+    };
+    let system = SystemBuilder::new()
+        .buses(vec![make_bus()])
+        .hydros(vec![hydro])
+        .stages(vec![make_stage(0)])
+        .build()
+        .expect("computed-FPHA system builds");
 
-    assert!(
-        is_degenerate_for_fpha(&hydro),
-        "should detect degenerate when both are zero"
-    );
-}
-
-#[test]
-fn is_degenerate_for_fpha_returns_false_when_normal_bounds() {
-    let hydro = make_computed_hydro(0); // max_turbined=500, max_generation=1000
-
-    assert!(
-        !is_degenerate_for_fpha(&hydro),
-        "should NOT detect degenerate when bounds are normal"
-    );
+    let err = super::resolve_production_models_from_artifacts(&system, &artifacts, false)
+        .expect_err("a missing tailrace must still be rejected");
+    assert!(err.to_string().contains("tailrace"), "got: {err}");
 }

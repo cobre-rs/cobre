@@ -34,7 +34,7 @@ pub fn build_hydro_model_summary(
     for (hydro_pos, (entity_id, source)) in result.provenance.production_sources.iter().enumerate()
     {
         match source {
-            ProductionModelSource::DefaultConstant => {
+            ProductionModelSource::DefaultConstant | ProductionModelSource::NoTurbineCapacity => {
                 n_constant += 1;
             }
             ProductionModelSource::PrecomputedHyperplanes

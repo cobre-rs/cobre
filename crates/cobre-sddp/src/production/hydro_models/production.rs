@@ -36,23 +36,6 @@ use crate::fpha_fitting::{
     ForebayTable, FphaDeviationPoint, FphaFitDeviation, FphaFitResult, TailraceFamilies,
     TailraceSource, build_tailrace_families_map, fit_fpha_planes,
 };
-
-// ── Degenerate FPHA detection ────────────────────────────────────────────────
-
-/// Tolerance for detecting effectively-zero turbining/generation bounds.
-/// Values at or below this threshold trigger the degenerate FPHA fallback.
-const FPHA_DEGENERATE_THRESHOLD: f64 = 1e-9;
-
-/// Returns `true` when the hydro has degenerate bounds that prevent FPHA fitting.
-///
-/// A hydro with `max_turbined_m3s <= threshold` or `max_generation_mw <= threshold`
-/// would produce a coplanar/collinear cloud in `build_grid`, causing `convex_hull_3d`
-/// to fail. The caller should fall back to `ConstantProductivity` instead.
-fn is_degenerate_for_fpha(hydro: &Hydro) -> bool {
-    hydro.max_turbined_m3s <= FPHA_DEGENERATE_THRESHOLD
-        || hydro.max_generation_mw <= FPHA_DEGENERATE_THRESHOLD
-}
-
 // ── FPHA production model resolution ─────────────────────────────────────────
 
 /// Return type for [`resolve_production_models_from_artifacts`]. Export rows are non-empty only
@@ -201,6 +184,15 @@ pub fn resolve_production_models_from_artifacts(
         })
         .collect::<Result<Vec<_>, SddpError>>()?;
     for (hydro, fit) in system.hydros().iter().zip(fits) {
+        if fit.provenance.1 == ProductionModelSource::NoTurbineCapacity {
+            tracing::warn!(
+                "hydro {} (id={}) requests computed FPHA but has no turbine capacity \
+                 (max_turbined_m3s = {}); modeling it with zero productivity",
+                hydro.name,
+                hydro.id.0,
+                hydro.max_turbined_m3s
+            );
+        }
         provenance.push(fit.provenance);
         export_rows.extend(fit.export_rows);
         fpha_deviation_point_rows.extend(fit.deviation_point_rows);
@@ -262,6 +254,13 @@ struct PerHydroFit {
     deviation_point_rows: Vec<FphaDeviationPointRow>,
 }
 
+/// At or below this turbine capacity the fitting grid's flow axis collapses onto
+/// `q = 0` and no plane survives, so a computed-FPHA plant resolves to zero
+/// productivity instead. A zero MW capacity alone is NOT degenerate: fitting
+/// drops a non-positive ceiling and the generation column's own bound holds
+/// output at zero.
+const MIN_FITTABLE_MAX_TURBINED_M3S: f64 = 1e-9;
+
 /// Resolve every study-stage production model for ONE hydro, returning the
 /// per-hydro result by value with no shared `&mut` capture.
 ///
@@ -291,17 +290,16 @@ fn fit_one_hydro(
 
     let source = determine_source(hydro, config_entry)?;
 
-    // Degenerate FPHA fallback: when max_turbined or max_generation are zero,
-    // the fitting pipeline would fail (coplanar cloud). Return constant-productivity
-    // with zero output instead — semantically correct since no generation is possible.
-    if source == ProductionModelSource::ComputedFromGeometry && is_degenerate_for_fpha(hydro) {
-        let stage_models: Vec<ResolvedProductionModel> = (0..n_stages)
-            .map(|_| ResolvedProductionModel::ConstantProductivity { productivity: 0.0 })
-            .collect();
-
+    if source == ProductionModelSource::ComputedFromGeometry
+        && hydro.max_turbined_m3s <= MIN_FITTABLE_MAX_TURBINED_M3S
+    {
+        validate_computed_prerequisites(hydro, geometry_map)?;
         return Ok(PerHydroFit {
-            stage_models,
-            provenance: (hydro.id, ProductionModelSource::ComputedFromGeometry),
+            stage_models: vec![
+                ResolvedProductionModel::ConstantProductivity { productivity: 0.0 };
+                n_stages
+            ],
+            provenance: (hydro.id, ProductionModelSource::NoTurbineCapacity),
             export_rows: Vec::new(),
             fpha_deviations: Vec::new(),
             deviation_point_rows: Vec::new(),

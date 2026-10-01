@@ -233,6 +233,9 @@ pub enum ProductionModelSource {
     PrecomputedHyperplanes,
     /// FPHA hyperplanes computed from reservoir geometry during preprocessing.
     ComputedFromGeometry,
+    /// Computed FPHA was requested, but the plant has no turbine capacity to fit,
+    /// so it resolves to zero productivity and a `tracing::warn!` names it.
+    NoTurbineCapacity,
 }
 
 /// Source of the evaporation model used for a given hydro plant.
@@ -905,11 +908,16 @@ mod tests {
             serde_json::to_string(&ProductionModelSource::ComputedFromGeometry).unwrap(),
             "\"computed_from_geometry\""
         );
+        assert_eq!(
+            serde_json::to_string(&ProductionModelSource::NoTurbineCapacity).unwrap(),
+            "\"no_turbine_capacity\""
+        );
 
         for source in [
             ProductionModelSource::DefaultConstant,
             ProductionModelSource::PrecomputedHyperplanes,
             ProductionModelSource::ComputedFromGeometry,
+            ProductionModelSource::NoTurbineCapacity,
         ] {
             let json = serde_json::to_string(&source).unwrap();
             let back: ProductionModelSource = serde_json::from_str(&json).unwrap();

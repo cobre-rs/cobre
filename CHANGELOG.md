@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A hydro plant with no turbine capacity no longer aborts the run when its
+  production model is computed FPHA.** Setup used to fail with "fitting
+  pipeline produced zero valid hyperplanes" for a plant with
+  `max_turbined_m3s` of zero, such as a reservoir with no generating units.
+  The plant is now modeled with zero productivity, the run summary counts it
+  as a constant-productivity plant, and a warning names it. A plant with
+  turbine capacity but a zero `max_generation_mw` still gets its fitted FPHA
+  planes.
+
 - **A generic constraint's `hydro_inflow` term now accounts for water travel
   time.** It used to add the whole same-block turbined and spilled flow of an
   upstream plant, even when that water takes hours to arrive. It also left out

@@ -5755,6 +5755,54 @@ fn d53_hydro_cell_min_floor_binds_under_water_starvation() {
     );
 }
 
+/// D57: a computed-FPHA hydro with no turbine capacity resolves to zero
+/// productivity instead of aborting the fit, and is reported as a constant
+/// plant. The thermal serves the whole load; the reservoir fills to its cap and
+/// spills only the inflow it cannot hold.
+#[test]
+fn d57_computed_fpha_without_turbine_capacity_trains_at_zero_generation() {
+    const HOURS: f64 = 730.0;
+    const HM3_PER_M3S_HOUR: f64 = 0.0036;
+    const LOAD_MW: f64 = 80.0;
+    const THERMAL_COST: f64 = 50.0;
+    const SPILLAGE_COST: f64 = 0.01;
+    const V_INIT_HM3: f64 = 100.0;
+    const V_MAX_HM3: f64 = 200.0;
+    const INFLOW_M3S: [f64; 2] = [40.0, 10.0];
+
+    /// derived: Σ_t (c_th·L + c_s·spill_t)·H, where stage 0 spills the inflow
+    /// above the free volume (V_max − V_0)/(H·k) and the full stage 1 spills all of it.
+    fn closed_form_total_cost() -> f64 {
+        let spill_m3s = [
+            INFLOW_M3S[0] - (V_MAX_HM3 - V_INIT_HM3) / (HOURS * HM3_PER_M3S_HOUR),
+            INFLOW_M3S[1],
+        ];
+        spill_m3s
+            .iter()
+            .map(|spill| (THERMAL_COST * LOAD_MW + SPILLAGE_COST * spill) * HOURS)
+            .sum()
+    }
+
+    let case_dir = Path::new("../../examples/deterministic/d57-fpha-zero-turbine-capacity");
+    let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
+    let hydro_models = prepare_hydro_models(&system, case_dir, false)
+        .expect("a hydro with no turbine capacity must not abort the fit");
+    let summary = cobre_sddp::build_hydro_model_summary(&hydro_models, &system);
+    assert_eq!(
+        (summary.n_constant, summary.n_fpha),
+        (1, 0),
+        "D57: the plant must be reported as constant, not FPHA"
+    );
+
+    let result = run_deterministic(case_dir);
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D57: gap={:.2e}",
+        result.final_gap
+    );
+    assert_cost(result.final_lb, closed_form_total_cost(), 1e-2, "D57");
+}
+
 /// Chronological-blocks telescoping ⇒ parallel bound-agreement anchor.
 ///
 /// Pins the "telescoping ⇒ parallel agreement when interiors are inert" contract

@@ -5,7 +5,7 @@
       "description": "One post-horizon calendar stage: a `[start_date, start_date + duration_hours)`\nsegment. `end_date` is not declared; it is derived downstream.",
       "properties": {
         "duration_hours": {
-          "description": "Stage duration [h]. Must be finite and `> 0.0`.",
+          "description": "Stage duration \\[h\\]. Must be finite and `> 0.0`.",
           "format": "double",
           "type": "number"
         },

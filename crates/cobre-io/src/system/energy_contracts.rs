@@ -100,7 +100,7 @@ pub(crate) struct RawContract {
     /// Stage index when the contract expires. Absent or null = never expires.
     #[serde(default)]
     exit_stage_id: Option<i32>,
-    /// Contract price per `MWh`. May be negative for export revenue [$/`MWh`].
+    /// Contract price per `MWh`. May be negative for export revenue \[$/`MWh`\].
     price_per_mwh: f64,
     /// Nested limits object with min and max MW bounds.
     limits: RawContractLimits,
@@ -126,9 +126,9 @@ pub(crate) enum RawContractType {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawContractLimits {
-    /// Minimum contracted power [MW].
+    /// Minimum contracted power \[MW\].
     min_mw: f64,
-    /// Maximum contracted power [MW].
+    /// Maximum contracted power \[MW\].
     max_mw: f64,
 }
 

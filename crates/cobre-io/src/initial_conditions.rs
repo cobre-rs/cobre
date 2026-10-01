@@ -116,10 +116,10 @@ pub(crate) struct RawInitialConditions {
     #[serde(rename = "$schema")]
     _schema: Option<String>,
 
-    /// Initial reservoir volumes for operating hydros [hm³].
+    /// Initial reservoir volumes for operating hydros \[hm³\].
     storage: Vec<RawHydroStorage>,
 
-    /// Initial reservoir volumes for filling hydros [hm³].
+    /// Initial reservoir volumes for filling hydros \[hm³\].
     /// A filling hydro may not also appear in `storage`.
     filling_storage: Vec<RawHydroStorage>,
 
@@ -155,7 +155,7 @@ pub(crate) struct RawInitialConditions {
 struct RawHydroStorage {
     /// Hydro plant identifier. Must be unique within its array.
     hydro_id: i32,
-    /// Reservoir volume [hm³]. Must be >= 0.0.
+    /// Reservoir volume \[hm³\]. Must be >= 0.0.
     value_hm3: f64,
 }
 

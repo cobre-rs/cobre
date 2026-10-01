@@ -1,8 +1,8 @@
 //! Local (single-process) communication backend.
 //!
 //! `LocalBackend` is a zero-sized type, always available without feature flags.
-//! It implements [`Communicator`](crate::Communicator) and
-//! [`LocalCommunicator`](crate::LocalCommunicator) with identity-copy semantics
+//! It implements [`Communicator`] and
+//! [`LocalCommunicator`] with identity-copy semantics
 //! for data-moving operations and no-op semantics for synchronization.
 
 use crate::ExecutionTopology;

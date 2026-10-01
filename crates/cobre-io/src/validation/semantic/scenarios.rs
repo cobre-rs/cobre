@@ -523,7 +523,7 @@ pub(super) fn check_external_scheme_has_files(data: &ParsedData, ctx: &mut Valid
 /// values (keyed by resolved study index, `scenario_id`, and entity id), the
 /// entity ids present, and the per-stage raw column count `raw_c(t)` (the
 /// distinct `scenario_id` count at that stage — the canonical, cross-class-agreed
-/// count [`check_node_graph`]'s pointer bound quantifies over).
+/// count [`check_node_graph`](super::stages::check_node_graph)'s pointer bound quantifies over).
 struct ClassExternal {
     name: &'static str,
     file: &'static str,

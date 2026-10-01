@@ -91,7 +91,7 @@ pub(crate) struct RawLine {
     exit_stage_id: Option<i32>,
     /// Nested capacity object with direct and reverse MW limits.
     capacity: RawLineCapacity,
-    /// Optional entity-level exchange cost override [$/`MWh`].
+    /// Optional entity-level exchange cost override \[$/`MWh`\].
     /// When absent, falls back to global `line_exchange_cost`.
     #[serde(default)]
     exchange_cost: Option<f64>,
@@ -105,9 +105,9 @@ pub(crate) struct RawLine {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawLineCapacity {
-    /// Maximum flow from source to target [MW].
+    /// Maximum flow from source to target \[MW\].
     direct_mw: f64,
-    /// Maximum flow from target to source [MW].
+    /// Maximum flow from target to source \[MW\].
     reverse_mw: f64,
 }
 

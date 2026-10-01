@@ -19,7 +19,7 @@
         },
         "exchange_cost": {
           "default": null,
-          "description": "Optional entity-level exchange cost override [$/`MWh`].\nWhen absent, falls back to global `line_exchange_cost`.",
+          "description": "Optional entity-level exchange cost override \\[$/`MWh`\\].\nWhen absent, falls back to global `line_exchange_cost`.",
           "format": "double",
           "type": [
             "number",
@@ -80,12 +80,12 @@
       "description": "Intermediate type for the nested capacity sub-object.",
       "properties": {
         "direct_mw": {
-          "description": "Maximum flow from source to target [MW].",
+          "description": "Maximum flow from source to target \\[MW\\].",
           "format": "double",
           "type": "number"
         },
         "reverse_mw": {
-          "description": "Maximum flow from target to source [MW].",
+          "description": "Maximum flow from target to source \\[MW\\].",
           "format": "double",
           "type": "number"
         }

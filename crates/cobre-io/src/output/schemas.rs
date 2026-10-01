@@ -802,8 +802,8 @@ pub(crate) struct SchemaRegistryEntry {
 
 /// The single owner of the output-schema family: every `*_schema()` function
 /// in this module appears here exactly once. The gate test
-/// [`one_spelling_per_axis_across_every_output_schema`] and
-/// [`super::dictionary::variables_csv_schemas`] both derive from this table
+/// `one_spelling_per_axis_across_every_output_schema` and
+/// `dictionary::variables_csv_schemas` both derive from this table
 /// rather than maintaining their own copies of the schema set.
 pub(crate) const OUTPUT_SCHEMAS: &[SchemaRegistryEntry] = &[
     SchemaRegistryEntry {

@@ -57,7 +57,7 @@
           "type": "integer"
         },
         "cost_per_mwh": {
-          "description": "Marginal cost of generation [$/`MWh`]. Must be ≥ 0.0.",
+          "description": "Marginal cost of generation \\[$/`MWh`\\]. Must be ≥ 0.0.",
           "format": "double",
           "type": "number"
         },
@@ -112,12 +112,12 @@
       "description": "Intermediate type for the generation bounds sub-object.",
       "properties": {
         "max_mw": {
-          "description": "Maximum generation (installed capacity) [MW].",
+          "description": "Maximum generation (installed capacity) \\[MW\\].",
           "format": "double",
           "type": "number"
         },
         "min_mw": {
-          "description": "Minimum generation (minimum stable load) [MW].",
+          "description": "Minimum generation (minimum stable load) \\[MW\\].",
           "format": "double",
           "type": "number"
         }

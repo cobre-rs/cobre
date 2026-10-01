@@ -5,7 +5,7 @@
       "description": "Volume fitting window restricting the range used for FPHA hyperplane\ncomputation.\n\nAbsolute bounds (`volume_min_hm3` / `volume_max_hm3`) and percentile bounds\n(`volume_min_percentile` / `volume_max_percentile`) are mutually exclusive:\nset one pair or the other, not both for the same bound.",
       "properties": {
         "volume_max_hm3": {
-          "description": "Explicit maximum volume for fitting [hm³]. Mutually exclusive with\n`volume_max_percentile`.",
+          "description": "Explicit maximum volume for fitting \\[hm³\\]. Mutually exclusive with\n`volume_max_percentile`.",
           "format": "double",
           "type": [
             "number",
@@ -21,7 +21,7 @@
           ]
         },
         "volume_min_hm3": {
-          "description": "Explicit minimum volume for fitting [hm³]. Mutually exclusive with\n`volume_min_percentile`.",
+          "description": "Explicit minimum volume for fitting \\[hm³\\]. Mutually exclusive with\n`volume_min_percentile`.",
           "format": "double",
           "type": [
             "number",
@@ -224,7 +224,7 @@
           ]
         },
         "volume_hm3": {
-          "description": "Absolute reference volume [hm³]. Mutually exclusive with `percentile`.\nWhen present must be finite and `> 0.0`.",
+          "description": "Absolute reference volume \\[hm³\\]. Mutually exclusive with `percentile`.\nWhen present must be finite and `> 0.0`.",
           "format": "double",
           "type": [
             "number",

@@ -45,7 +45,7 @@
           "type": "string"
         },
         "price_per_mwh": {
-          "description": "Contract price per `MWh`. May be negative for export revenue [$/`MWh`].",
+          "description": "Contract price per `MWh`. May be negative for export revenue \\[$/`MWh`\\].",
           "format": "double",
           "type": "number"
         },
@@ -70,12 +70,12 @@
       "description": "Intermediate type for the nested limits sub-object.",
       "properties": {
         "max_mw": {
-          "description": "Maximum contracted power [MW].",
+          "description": "Maximum contracted power \\[MW\\].",
           "format": "double",
           "type": "number"
         },
         "min_mw": {
-          "description": "Minimum contracted power [MW].",
+          "description": "Minimum contracted power \\[MW\\].",
           "format": "double",
           "type": "number"
         }

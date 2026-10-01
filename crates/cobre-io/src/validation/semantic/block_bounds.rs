@@ -239,7 +239,7 @@ fn check_row(
 
 /// Rule 49: rejects a bound-override row whose `stage_id` names no declared study
 /// stage, across the six bound families. Admission is membership in the
-/// declared id set — the same map [`resolve_bounds`] keys on — never a
+/// declared id set — the same map [`resolve_bounds`](crate::resolution::resolve_bounds) keys on — never a
 /// `[0, n)` position test: study ids may be gapped or start at 1. NCS is
 /// excluded because the Layer-3 referential check already owns its stage axis.
 pub(super) fn check_bound_stage_id_range(data: &ParsedData, ctx: &mut ValidationContext) {

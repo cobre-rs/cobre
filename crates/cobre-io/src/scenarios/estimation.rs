@@ -918,7 +918,7 @@ fn first_study_stage_with_season(stages: &[Stage]) -> Option<(&Stage, usize)> {
 /// those seasons, the season-aware estimators have no place to attach the
 /// out-of-window lag statistics, and the precompute silently zeroes them.
 ///
-/// This helper emits one pre-study [`Stage`](cobre_core::temporal::Stage) per
+/// This helper emits one pre-study [`Stage`] per
 /// lag `k = 1..=min(max_order, cycle_len-1)`, at the descending negative id
 /// `first_study_stage.id - k` and the season [`prestudy_season_for_lag`]
 /// resolves, but **only** when that season is not already among the study

@@ -85,7 +85,7 @@ pub(crate) struct RawThermal {
     /// Stage index when the plant is decommissioned. Absent or null = never.
     #[serde(default)]
     exit_stage_id: Option<i32>,
-    /// Marginal cost of generation [$/`MWh`]. Must be ≥ 0.0.
+    /// Marginal cost of generation \[$/`MWh`\]. Must be ≥ 0.0.
     cost_per_mwh: f64,
     /// Generation bounds.
     generation: RawThermalGeneration,
@@ -99,9 +99,9 @@ pub(crate) struct RawThermal {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawThermalGeneration {
-    /// Minimum generation (minimum stable load) [MW].
+    /// Minimum generation (minimum stable load) \[MW\].
     min_mw: f64,
-    /// Maximum generation (installed capacity) [MW].
+    /// Maximum generation (installed capacity) \[MW\].
     max_mw: f64,
 }
 

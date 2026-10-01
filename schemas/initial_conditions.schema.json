@@ -72,7 +72,7 @@
           "type": "integer"
         },
         "value_hm3": {
-          "description": "Reservoir volume [hm³]. Must be >= 0.0.",
+          "description": "Reservoir volume \\[hm³\\]. Must be >= 0.0.",
           "format": "double",
           "type": "number"
         }
@@ -127,7 +127,7 @@
       ]
     },
     "filling_storage": {
-      "description": "Initial reservoir volumes for filling hydros [hm³].\nA filling hydro may not also appear in `storage`.",
+      "description": "Initial reservoir volumes for filling hydros \\[hm³\\].\nA filling hydro may not also appear in `storage`.",
       "items": {
         "$ref": "#/$defs/RawHydroStorage"
       },
@@ -155,7 +155,7 @@
       "type": "array"
     },
     "storage": {
-      "description": "Initial reservoir volumes for operating hydros [hm³].",
+      "description": "Initial reservoir volumes for operating hydros \\[hm³\\].",
       "items": {
         "$ref": "#/$defs/RawHydroStorage"
       },

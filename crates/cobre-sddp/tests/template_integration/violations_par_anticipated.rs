@@ -1988,9 +1988,9 @@ fn mixed_lead_long_lead_late_decisions_target_post_study_delivery() {
 #[test]
 fn discounted_anticipated_simulation_books_present_value_at_delivery() {
     let (system, config) = discounted_anticipated_study();
-    // The fixture's own config leaves simulation disabled (it backs the
-    // training-side LP/manifest snapshot); enable it here, sampling a single
-    // deterministic scenario (std_m3s == 0.0, branching_factor == 1).
+    // The fixture's own config leaves simulation disabled; enable it here,
+    // sampling a single deterministic scenario (std_m3s == 0.0,
+    // branching_factor == 1).
     let config = Config {
         simulation: IoSimulationConfig {
             enabled: true,

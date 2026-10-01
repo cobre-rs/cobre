@@ -1,4 +1,4 @@
-//! Gates every stored Benders cut with a validity, tightness, and mask-soundness oracle, independent of the template snapshot manifest.
+//! Gates every stored Benders cut with a validity, tightness, and mask-soundness oracle.
 
 #![allow(
     clippy::unwrap_used,

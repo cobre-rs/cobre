@@ -398,9 +398,8 @@ pub fn for_each_deck_in_both_block_modes(
 }
 
 /// Visits every committed deck (skipping [`SLOW_DECKS`] unless `slow-tests` is
-/// enabled), then every [`in_code_studies::keyed_setups`] entry, then every
-/// [`in_code_studies::structural_studies`] entry, building one [`System`] and
-/// [`StudySetup`] at a time; returns the total visit count.
+/// enabled), then every [`in_code_studies::structural_studies`] entry, building
+/// one [`System`] and [`StudySetup`] at a time; returns the total visit count.
 pub fn for_each_study(mut visit: impl FnMut(&str, &System, &StudySetup)) -> usize {
     let slow_tests_enabled = cfg!(feature = "slow-tests");
     let mut count = 0;
@@ -412,10 +411,6 @@ pub fn for_each_study(mut visit: impl FnMut(&str, &System, &StudySetup)) -> usiz
         visit(&deck.key, &system, &setup);
         count += 1;
     }
-    for (key, system, setup) in in_code_studies::keyed_setups() {
-        visit(&key, &system, &setup);
-        count += 1;
-    }
     for (key, system, setup) in in_code_studies::structural_studies() {
         visit(&key, &system, &setup);
         count += 1;
@@ -425,8 +420,7 @@ pub fn for_each_study(mut visit: impl FnMut(&str, &System, &StudySetup)) -> usiz
 
 /// [`for_each_study`]'s visit count, for a caller confirming its sweep saw
 /// every study: every committed deck minus its [`SLOW_DECKS`] skips, plus
-/// every [`in_code_studies::keyed_setups`] and
-/// [`in_code_studies::structural_studies`] entry.
+/// every [`in_code_studies::structural_studies`] entry.
 #[must_use]
 pub fn expected_study_count() -> usize {
     let slow_tests_enabled = cfg!(feature = "slow-tests");
@@ -438,9 +432,7 @@ pub fn expected_study_count() -> usize {
             .filter(|deck| SLOW_DECKS.contains(&deck.key.as_str()))
             .count()
     };
-    committed_decks().len() - skipped
-        + in_code_studies::keyed_setups().len()
-        + in_code_studies::structural_studies().len()
+    committed_decks().len() - skipped + in_code_studies::structural_studies().len()
 }
 
 /// Build a [`StochasticContext`] for an in-code `System`, hermetic (no external

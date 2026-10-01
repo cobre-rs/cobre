@@ -88,9 +88,9 @@ pub fn committed_decks() -> Vec<Deck> {
     decks
 }
 
-/// Deck keys gated out of every committed-deck sweep (the template-snapshot
-/// manifest, the permutation and patch-ownership checks, the cut oracles, and
-/// the non-root setup-rebuild parity test) unless the `slow-tests` feature is
+/// Deck keys gated out of every committed-deck sweep (the permutation and
+/// patch-ownership checks, the cut oracles, and the non-root setup-rebuild
+/// parity test) unless the `slow-tests` feature is
 /// enabled: a deck whose `fresh_setup_with` build exceeds 5 seconds in the
 /// debug test profile. `examples/4ree` measures well under that threshold, so
 /// no deck is currently gated.

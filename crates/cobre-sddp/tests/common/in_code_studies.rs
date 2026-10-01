@@ -1,7 +1,6 @@
 //! In-code `System`/`Config` fixtures for the stage-LP builder test suite.
 //! `discounted_anticipated_study` and `parallel_multiblock_evaporation_study`
-//! back the template snapshot manifest (`tests/template_snapshot.rs`), each
-//! isolating a stage-LP builder axis no committed deck combines.
+//! each isolate a stage-LP builder axis no committed deck combines.
 //! `stochastic_parallel_study` backs the one-hot patch-ownership sweep
 //! (`tests/patch_ownership_sweep.rs`), supplying the stochastic load and NCS
 //! noise no committed deck exercises.
@@ -1729,8 +1728,8 @@ pub fn chronological_noise_study(spec: &ChronologicalNoiseSpec) -> (cobre_core::
 /// in-code study sets one), so the withdrawal term in the chronological
 /// water-row RHS is no longer multiplied by zero here.
 ///
-/// Each build's builder is called twice — see [`keyed_setups`]'s doc comment
-/// for why.
+/// Each build's builder is called twice — see [`structural_studies`]'s doc
+/// comment for why.
 #[must_use]
 pub fn chronological_pumping_pair() -> (
     (cobre_core::System, StudySetup),
@@ -1760,40 +1759,6 @@ pub fn chronological_pumping_pair() -> (
         (chrono_system, chrono_setup),
         (parallel_system, parallel_setup),
     )
-}
-
-/// The manifest's in-code study set, keyed exactly as
-/// `tests/template_snapshot.rs`'s former `in_code_decks()`: each isolates a
-/// stage-LP builder axis no committed deck combines.
-///
-/// Each study's builder is called twice — once for the returned `System`,
-/// once for the `System` `build_setup_in_code*` consumes by value — since
-/// `cobre_core::System` has no `Clone` impl and every builder here is a pure,
-/// deterministic function of its literal inputs, so the two calls yield
-/// equal systems.
-#[must_use]
-pub fn keyed_setups() -> Vec<(String, cobre_core::System, StudySetup)> {
-    let (system, config) = discounted_anticipated_study();
-    let (system_for_setup, _) = discounted_anticipated_study();
-    let (evap_system, evap_config, _) = parallel_multiblock_evaporation_study();
-    let (evap_system_for_setup, _, evap_hydro_models_for_setup) =
-        parallel_multiblock_evaporation_study();
-    vec![
-        (
-            "in-code/discounted-anticipated".to_string(),
-            system,
-            super::build_setup_in_code(system_for_setup, &config),
-        ),
-        (
-            "in-code/parallel-multiblock-evaporation".to_string(),
-            evap_system,
-            super::build_setup_in_code_with_models(
-                evap_system_for_setup,
-                &evap_config,
-                evap_hydro_models_for_setup,
-            ),
-        ),
-    ]
 }
 
 const TWO_HYDRO_EVAP_N_STAGES: usize = 2;
@@ -2061,20 +2026,28 @@ pub fn two_hydro_evaporation_study() -> (cobre_core::System, Config, PrepareHydr
     (system, build_config(), hydro_models)
 }
 
-/// The in-code studies the structural sweep (`for_each_study`) visits beyond
-/// the manifest's [`keyed_setups`]: [`mixed_lead_anticipated_study`]'s
-/// two anticipated lanes, [`two_hydro_evaporation_study`]'s
-/// nonzero-position evaporating hydro, and [`parallel_inflow_slack_study`]'s
-/// multi-block parallel inflow slack: the smallest in-code study that
-/// reaches the inflow-slack-per-block mutation check, unreachable on
-/// every committed deck and every other in-code study. None joins
-/// `keyed_setups()` — doing so would move the template-snapshot manifest,
-/// which stays byte-identical.
+/// The in-code studies the structural sweep (`for_each_study`) visits after the
+/// committed decks, in visit order: [`discounted_anticipated_study`] and
+/// [`parallel_multiblock_evaporation_study`], each isolating a stage-LP builder
+/// axis no committed deck combines; [`mixed_lead_anticipated_study`]'s two
+/// anticipated lanes; [`two_hydro_evaporation_study`]'s nonzero-position
+/// evaporating hydro; and [`parallel_inflow_slack_study`]'s multi-block
+/// parallel inflow slack: the smallest in-code study that reaches the
+/// inflow-slack-per-block mutation check, unreachable on every committed deck
+/// and every other in-code study.
 ///
-/// Each study's builder is called twice — see [`keyed_setups`]'s doc comment
-/// for why.
+/// Each study's builder is called twice — once for the returned `System`,
+/// once for the `System` `build_setup_in_code*` consumes by value — since
+/// `cobre_core::System` has no `Clone` impl and every builder here is a pure,
+/// deterministic function of its literal inputs, so the two calls yield
+/// equal systems.
 #[must_use]
 pub fn structural_studies() -> Vec<(String, cobre_core::System, StudySetup)> {
+    let (discounted_system, discounted_config) = discounted_anticipated_study();
+    let (discounted_system_for_setup, _) = discounted_anticipated_study();
+    let (parallel_evap_system, parallel_evap_config, _) = parallel_multiblock_evaporation_study();
+    let (parallel_evap_system_for_setup, _, parallel_evap_hydro_models_for_setup) =
+        parallel_multiblock_evaporation_study();
     let (mixed_lead_system, mixed_lead_config) = mixed_lead_anticipated_study(false);
     let (mixed_lead_system_for_setup, _) = mixed_lead_anticipated_study(false);
     let (evap_system, evap_config, _) = two_hydro_evaporation_study();
@@ -2082,6 +2055,20 @@ pub fn structural_studies() -> Vec<(String, cobre_core::System, StudySetup)> {
     let (slack_system, slack_config) = parallel_inflow_slack_study();
     let (slack_system_for_setup, _) = parallel_inflow_slack_study();
     vec![
+        (
+            "in-code/discounted-anticipated".to_string(),
+            discounted_system,
+            super::build_setup_in_code(discounted_system_for_setup, &discounted_config),
+        ),
+        (
+            "in-code/parallel-multiblock-evaporation".to_string(),
+            parallel_evap_system,
+            super::build_setup_in_code_with_models(
+                parallel_evap_system_for_setup,
+                &parallel_evap_config,
+                parallel_evap_hydro_models_for_setup,
+            ),
+        ),
         (
             "structural/mixed-lead-anticipated".to_string(),
             mixed_lead_system,

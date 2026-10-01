@@ -291,7 +291,7 @@ fn resolve_hydro_inflow(
 
     let upstream = ctx.cascade.upstream(hydro_id);
     let has_release_columns =
-        !layout.equipment.turbine.is_empty() && !layout.equipment.spillage.is_empty();
+        !layout.geometry.turbine.is_empty() && !layout.geometry.spillage.is_empty();
 
     let mut result = Vec::with_capacity(2 + 2 * upstream.len());
 
@@ -354,7 +354,7 @@ fn push_local_inflow_rate(
         1.0,
     ));
 
-    if !layout.equipment.diversion.is_empty() {
+    if !layout.geometry.diversion.is_empty() {
         let diversion_into = ctx
             .diversion_upstream
             .get(&ctx.hydros[plant_idx].id)
@@ -450,6 +450,7 @@ fn resolve_hydro_evaporation(
     // Linear scan: cold template-build path over a handful of evap hydros, so an
     // O(1) reverse map is not warranted (unlike `resolve_anticipated_decision`).
     let Some(local_idx) = layout
+        .geometry
         .evap_hydro_indices
         .iter()
         .position(|&p| p.get() == sys_pos)

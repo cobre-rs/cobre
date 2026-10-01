@@ -495,7 +495,7 @@ fn make_pumping_station(
 /// `ThermalGeneration` column arithmetic across the `block_id`/position axes
 /// the per-arm coverage requires: one `block_id = None`, one `block_id = Some`,
 /// and one `position != 0`. All resolve through `resolve_thermal_generation`
-/// with `layout.equipment.thermal.start = 49`, `n_blks = 3`.
+/// with `layout.geometry.thermal.start = 49`, `n_blks = 3`.
 #[test]
 fn thermal_generation_column_arithmetic() {
     let mut fx = default_fixture();
@@ -736,7 +736,7 @@ fn resolve_turbine_bus_selector_picks_one_cell() {
     );
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let n_blks = layout.clock.n_blks();
-    let turbine_start = layout.equipment.turbine.start;
+    let turbine_start = layout.geometry.turbine.start;
 
     let picked = call(
         VariableRef::HydroTurbined {
@@ -785,7 +785,7 @@ fn resolve_generation_bus_selector_on_constant_productivity_picks_one_cell() {
     let mut ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let n_blks = layout.clock.n_blks();
-    let turbine_start = layout.equipment.turbine.start;
+    let turbine_start = layout.geometry.turbine.start;
 
     let productivity = 2.5;
     let prod = ProductionModelSet::new(
@@ -878,7 +878,7 @@ fn resolve_generation_bus_selector_maps_to_the_cells_fpha_column() {
 
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
     let n_blks = layout.clock.n_blks();
-    let generation_start = layout.equipment.generation.start;
+    let generation_start = layout.geometry.generation.start;
 
     let picked = call(
         VariableRef::HydroGeneration {
@@ -971,7 +971,7 @@ fn hydro_evaporation_parallel_every_block_resolves_stage_slot() {
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     assert_eq!(
-        layout.evap_indices.len(),
+        layout.geometry.evap_indices.len(),
         1,
         "a parallel stage reserves exactly one evaporation slot per evaporating hydro"
     );
@@ -1024,8 +1024,7 @@ fn hydro_evaporation_parallel_every_block_resolves_stage_slot() {
 /// (`col_pumping_start .. col_pumping_start + n_pumping * n_blks`) — the range
 /// every resolved `PumpingFlow`/`PumpingPower` column must fall inside.
 fn pumping_col_range(layout: &StageLayout<'_>) -> Range<usize> {
-    let start = layout.equipment.col_pumping_start;
-    start..start + layout.equipment.n_pumping * layout.clock.n_blks()
+    layout.geometry.pumping_flow.clone()
 }
 
 /// `PumpingFlow{station, Some(blk)}` → the block-major flow column × 1.0.
@@ -1036,7 +1035,7 @@ fn pumping_flow_resolves_to_flow_column_with_unit_coeff() {
     let mut fx = default_fixture();
     let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let col_pumping_start = layout.equipment.col_pumping_start;
+    let col_pumping_start = layout.geometry.pumping_flow.start;
     let n_blks = layout.clock.n_blks();
 
     let result = call(
@@ -1065,7 +1064,7 @@ fn pumping_power_resolves_to_flow_column_with_consumption_coeff() {
     let mut fx = default_fixture();
     let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let col_pumping_start = layout.equipment.col_pumping_start;
+    let col_pumping_start = layout.geometry.pumping_flow.start;
     let n_blks = layout.clock.n_blks();
 
     let blk = 1;
@@ -1103,7 +1102,7 @@ fn pumping_flow_none_resolves_per_block() {
     let mut fx = default_fixture();
     let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let col_pumping_start = layout.equipment.col_pumping_start;
+    let col_pumping_start = layout.geometry.pumping_flow.start;
     let n_blks = layout.clock.n_blks();
     let range = pumping_col_range(&layout);
 
@@ -1142,7 +1141,7 @@ fn pumping_power_none_resolves_per_block_with_consumption() {
     let mut fx = default_fixture();
     let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let col_pumping_start = layout.equipment.col_pumping_start;
+    let col_pumping_start = layout.geometry.pumping_flow.start;
     let n_blks = layout.clock.n_blks();
     let range = pumping_col_range(&layout);
 
@@ -1268,7 +1267,7 @@ fn contract_family_slot_counts_per_direction() {
 
 /// Two imports + one export, on the default fixture's own REAL declared
 /// contracts (`n_contract_import = 2`, `n_contract_export = 1`) and their real
-/// `layout.equipment.contract_import`/`contract_export` bases — the second
+/// `layout.geometry.contract_import`/`contract_export` bases — the second
 /// import (id 30, per-family slot 1) at block 0 is
 /// `layout.contract_col(Import, 1, 0) = import_start + n_blks`.
 #[test]
@@ -1287,10 +1286,10 @@ fn contract_import_resolves_to_column_with_unit_coefficient() {
         &layout,
     );
 
-    let import_start = layout.equipment.contract_import.start;
+    let import_start = layout.geometry.contract_import.start;
     let expected_col = import_start + 1 * layout.clock.n_blks() + 0;
     assert_eq!(result, vec![(expected_col, 1.0)]);
-    assert!(layout.equipment.contract_import.contains(&expected_col));
+    assert!(layout.geometry.contract_import.contains(&expected_col));
 }
 
 /// The variable's own coefficient is `+1.0`; the injection/withdrawal sign is
@@ -1313,10 +1312,10 @@ fn contract_export_resolves_to_column_with_unit_coefficient() {
         &layout,
     );
 
-    let export_start = layout.equipment.contract_export.start;
+    let export_start = layout.geometry.contract_export.start;
     let expected_col = export_start + 0 * layout.clock.n_blks() + 2;
     assert_eq!(result, vec![(expected_col, 1.0)]);
-    assert!(layout.equipment.contract_export.contains(&expected_col));
+    assert!(layout.geometry.contract_export.contains(&expected_col));
 }
 
 /// An unknown contract id misses `contract_pos` and resolves to empty — the
@@ -1640,9 +1639,9 @@ fn anticipated_decision_maps_to_correct_column() {
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
 
     assert_eq!(
-        layout.anticipated.col_anticipated_decision_start, 9,
+        layout.geometry.anticipated_decision.start, 9,
         "anticipated_decision.start should be 9, got {}",
-        layout.anticipated.col_anticipated_decision_start
+        layout.geometry.anticipated_decision.start
     );
 
     let result = call(
@@ -1735,7 +1734,7 @@ fn anticipated_decision_unknown_entity_returns_empty() {
 /// Each single-column family's resolver (`resolve_hydro_spillage`,
 /// `resolve_hydro_diversion`, `resolve_thermal_generation`,
 /// `resolve_line_direct`, `resolve_line_reverse`, `resolve_bus_excess`) lands
-/// inside its matching `layout.equipment.<family>` range — the contract
+/// inside its matching `layout.geometry.<family>` range — the contract
 /// `resolve_block_column` upholds for every one of its six callers.
 #[test]
 fn single_column_resolvers_land_inside_their_equipment_range() {
@@ -1749,42 +1748,42 @@ fn single_column_resolvers_land_inside_their_equipment_range() {
                 hydro_id: EntityId(20),
                 block_id: Some(1),
             },
-            &layout.equipment.spillage,
+            &layout.geometry.spillage,
         ),
         (
             VariableRef::HydroDiversion {
                 hydro_id: EntityId(20),
                 block_id: Some(1),
             },
-            &layout.equipment.diversion,
+            &layout.geometry.diversion,
         ),
         (
             VariableRef::ThermalGeneration {
                 thermal_id: EntityId(5),
                 block_id: Some(1),
             },
-            &layout.equipment.thermal,
+            &layout.geometry.thermal,
         ),
         (
             VariableRef::LineDirect {
                 line_id: EntityId(50),
                 block_id: Some(1),
             },
-            &layout.equipment.line_fwd,
+            &layout.geometry.line_fwd,
         ),
         (
             VariableRef::LineReverse {
                 line_id: EntityId(50),
                 block_id: Some(1),
             },
-            &layout.equipment.line_rev,
+            &layout.geometry.line_rev,
         ),
         (
             VariableRef::BusExcess {
                 bus_id: EntityId(100),
                 block_id: Some(1),
             },
-            &layout.equipment.excess,
+            &layout.geometry.excess,
         ),
     ];
 
@@ -1841,7 +1840,7 @@ fn hydro_spillage_maps_to_spillage_column() {
     assert_eq!(result, vec![(25 + 3 * 3 + 1, 1.0)]);
 }
 
-/// `layout.equipment.diversion.start = 37`. For hydro pos=1 (EntityId 20),
+/// `layout.geometry.diversion.start = 37`. For hydro pos=1 (EntityId 20),
 /// n_blks=3, block=2 the flat block-major address is `37 + 1*3 + 2 = 42` with
 /// the unit coefficient.
 #[test]
@@ -2091,7 +2090,7 @@ fn chronological_default_fixture() -> ResolverFixture {
 
 /// `VariableRef::HydroStorageInitial`/`HydroStorageFinal` resolve to the S⁰/
 /// interior/Sᴷ boundary columns, each computed from the layout's own owners
-/// (`fx.state.storage_in`/`storage`, `layout.equipment.storage_internal_start`)
+/// (`fx.state.storage_in`/`storage`, `layout.geometry.storage_internal_start`)
 /// independently of `StorageBoundaryGrid::col` itself, so a regression in its
 /// match arms fails this test, not just an identity of the owner with itself.
 ///
@@ -2104,7 +2103,7 @@ fn hydro_storage_boundary_resolves_each_boundary() {
     let mut fx = chronological_default_fixture();
     let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let storage_internal_start = layout.equipment.storage_internal_start;
+    let storage_internal_start = layout.geometry.storage_internal_start;
 
     // Hydro EntityId(10) at pos 0; K = 3.
     let initial_0 = call(
@@ -2188,7 +2187,7 @@ fn hydro_storage_final_shares_interior_column_with_next_initial() {
     let mut fx = chronological_default_fixture();
     let ctx = fx.base.ctx();
     let layout = StageLayout::new(&ctx, &fx.state, &fx.stage, 0);
-    let storage_internal_start = layout.equipment.storage_internal_start;
+    let storage_internal_start = layout.geometry.storage_internal_start;
 
     let final_0 = call(
         VariableRef::HydroStorageFinal {

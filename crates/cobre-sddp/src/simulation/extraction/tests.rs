@@ -7,27 +7,18 @@
 
 use std::collections::HashMap;
 
-use chrono::NaiveDate;
-
 use super::{
     EntityCounts, HydroReverseLookup, SimulationHydroResult, SolutionView, StageExtractionSpec,
     accumulate_category_costs, assign_scenarios, extract_anticipated_lanes, extract_contracts,
     extract_generic_violations, extract_pumping_stations, extract_stage_result,
     extract_stub_collections,
 };
-use cobre_core::{
-    Block, BlockMode, ConstraintExpression, ContractType, GenericConstraint, NoiseMethod,
-    ResolvedGenericConstraintBounds, ScenarioSourceConfig, SlackConfig, Stage, StageRiskConfig,
-    StageStateConfig,
-};
+use cobre_core::{BlockMode, ContractType};
 
 use crate::energy_conversion::EnergyConversionSet;
 use crate::horizon_mode::HorizonMode;
-use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
 use crate::lead_time::{AnticipatedResolution, PointResolution};
-use crate::lp::builder::{
-    GenericConstraintRowEntry, StageGeometry, StageLayout, evaporation_slot_count,
-};
+use crate::lp::builder::{GenericConstraintRowEntry, StageGeometry, evaporation_slot_count};
 use crate::lp::indexer::{
     AnticipatedPlants, BlockRowFamily, FillingTargetLocal, FloorLocal, FphaLocal, HydroCellIndex,
     HydroSys, StateSpace, StudyDimensions,
@@ -35,8 +26,6 @@ use crate::lp::indexer::{
 use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
 use crate::test_support;
 use crate::test_support::anticipated_plants_at;
-use crate::test_support::ctx_fixture::CtxFixture;
-use crate::time_value::{PostStudyResolved, TimeValue};
 
 // -------------------------------------------------------------------------
 // HydroReverseLookup per-stage membership
@@ -7271,94 +7260,4 @@ fn two_sided_slack_disabled_reports_zero_and_contributes_nothing() {
     assert_eq!(results[0].slack_value, 0.0);
     assert_eq!(results[0].slack_cost, 0.0);
     assert_eq!(total_cost, 0.0);
-}
-
-/// Regression guard for the one-slack-allocation defect: a two-sided entry
-/// produced by the REAL layout path (`allocate_generic_slack_cols`, via
-/// `StageLayout::new`) must carry `slack_minus_col == Some(_)`. Asserts the
-/// CORRECT case, not the broken one, so this fails if
-/// `allocate_generic_slack_cols` ever regresses to allocating a minus column
-/// only for a specific label instead of deriving two-sidedness from the row's
-/// own endpoint pair. Sourced from the real layout rather than hand-built: a
-/// hand-built entry would assert nothing about allocation.
-// Rationale: clippy::similar_names flags `state` next to `stage`; both names are
-// established (mirrors `test_support::geometry`), so renaming either would
-// obscure intent rather than clarify it.
-#[allow(clippy::similar_names)]
-#[test]
-fn two_sided_real_layout_allocates_minus_slack_column() {
-    let constraint = GenericConstraint {
-        id: cobre_core::EntityId(1),
-        name: "gc_range_test".to_string(),
-        description: None,
-        expression: ConstraintExpression { terms: vec![] },
-        slack: SlackConfig {
-            enabled: true,
-            penalty: Some(10.0),
-        },
-        bound_lower_affine: None,
-        bound_upper_affine: None,
-    };
-
-    let id_map: HashMap<i32, usize> = [(1, 0)].into_iter().collect();
-    let raw_bounds = vec![(1i32, 0i32, Some(0i32), Some(5.0_f64), Some(20.0_f64))];
-    let resolved_generic_bounds =
-        ResolvedGenericConstraintBounds::new(&id_map, raw_bounds.into_iter());
-
-    let mut fixture = CtxFixture {
-        hydro_cell_index: test_support::identity_hydro_cell_index(0),
-        production_models: ProductionModelSet::new(Vec::new(), &[], 1),
-        evaporation_models: EvaporationModelSet::new(Vec::new()),
-        generic_constraints: vec![constraint],
-        resolved_generic_bounds,
-        time_value: TimeValue::from_parts(
-            vec![],
-            vec![1.0],
-            vec![730.0],
-            vec![0],
-            PostStudyResolved::default(),
-        ),
-        ..CtxFixture::default()
-    };
-    let ctx = fixture.ctx();
-
-    let state = test_support::state_layout(0, 0);
-    let stage = Stage {
-        index: 0,
-        id: 0,
-        start_date: NaiveDate::default(),
-        end_date: NaiveDate::default(),
-        season_id: Some(0),
-        blocks: vec![Block {
-            index: 0,
-            name: "BLK0".to_string(),
-            duration_hours: 730.0,
-        }],
-        block_mode: BlockMode::Parallel,
-        state_config: StageStateConfig {
-            storage: false,
-            inflow_lags: false,
-        },
-        risk_config: StageRiskConfig::Expectation,
-        scenario_config: ScenarioSourceConfig {
-            branching_factor: 1,
-            noise_method: NoiseMethod::Saa,
-        },
-    };
-
-    let layout = StageLayout::new(&ctx, &state, &stage, 0);
-
-    assert_eq!(
-        layout.generic_constraint_rows.len(),
-        1,
-        "one active (constraint, block) row"
-    );
-    let entry = &layout.generic_constraint_rows[0];
-    assert_eq!(entry.bound_lower, Some(5.0));
-    assert_eq!(entry.bound_upper, Some(20.0));
-    assert!(entry.slack_plus_col.is_some());
-    assert!(
-        entry.slack_minus_col.is_some(),
-        "a two-sided row with slack enabled must allocate a DISTINCT minus-slack column"
-    );
 }

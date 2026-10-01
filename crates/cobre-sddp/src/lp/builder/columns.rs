@@ -14,7 +14,9 @@ use super::hydro_state::{
     GroupBoundLookup, cell_max_generation, cell_max_turbined, cell_min_generation,
     cell_min_turbined, hydro_phase,
 };
-use super::layout::{StageLayout, TemplateBuildCtx, contract_family_slot};
+use super::layout::{
+    StageLayout, TemplateBuildCtx, contract_direction_counts, contract_family_slot,
+};
 
 /// Fill column lower/upper bounds and objective coefficients for one stage.
 pub(super) fn fill_stage_columns(
@@ -213,7 +215,7 @@ fn fill_turbine_columns(
                 );
                 let col = layout.turbine_col(cell, BlockIdx::new(blk));
                 // Never a group's own min_turbined_m3s: the cell's floor is the soft
-                // slack-backed min_turbine_rows row (this cell's own group-sum), not a
+                // slack-backed min_turbine row (this cell's own group-sum), not a
                 // column floor, and a per-group hard floor would invent an asymmetry
                 // with its own maximum.
                 bufs.col_lower[col] = 0.0;
@@ -583,7 +585,7 @@ fn fill_inflow_slack_columns(
     total_stage_hours: f64,
     bufs: &mut ColumnBufs<'_>,
 ) {
-    if !layout.slack.inflow_slack.is_empty() {
+    if !layout.geometry.inflow_slack.is_empty() {
         for h_idx in 0..layout.state.hydro_count {
             let col = layout.inflow_slack_col(HydroSys::new(h_idx));
             let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);
@@ -604,7 +606,7 @@ fn fill_fpha_generation_columns(
     layout: &StageLayout,
     bufs: &mut ColumnBufs<'_>,
 ) {
-    for (local_idx, &h) in layout.fpha_hydro_indices.iter().enumerate() {
+    for (local_idx, &h) in layout.geometry.fpha_hydro_indices.iter().enumerate() {
         let local_idx = FphaLocal::new(local_idx);
         let hydro = &ctx.hydros[h.get()];
         let fpha_cell_base = layout.fpha_local_first_cell(local_idx).get();
@@ -629,7 +631,7 @@ fn fill_fpha_generation_columns(
                 );
                 let col = layout.generation_col(FphaCellLocal::new(fpha_cell_base + offset), blk);
                 // Never a group's own min_generation_mw: see fill_turbine_columns's
-                // identical col_lower contract (min_generation_rows stays the sole
+                // identical col_lower contract (min_generation stays the sole
                 // owner of the cell's soft floor).
                 bufs.col_lower[col] = 0.0;
                 bufs.col_upper[col] = gen_upper;
@@ -653,7 +655,7 @@ fn fill_evaporation_columns(
     layout: &StageLayout,
     bufs: &mut ColumnBufs<'_>,
 ) {
-    for (local_idx, &h) in layout.evap_hydro_indices.iter().enumerate() {
+    for (local_idx, &h) in layout.geometry.evap_hydro_indices.iter().enumerate() {
         let local_idx = EvapLocal::new(local_idx);
         let (q_max_abs, hp) = match ctx.evaporation_models.model(h.get()) {
             EvaporationModel::Linearized { coefficients, .. } => {
@@ -991,9 +993,10 @@ fn fill_contract_columns(
         let active =
             commissioning_active(contract.entry_stage_id, contract.exit_stage_id, stage.id);
         let (contract_type, family_slot) = contract_family_slot(ctx.contracts, c_sys);
+        let (n_contract_import, n_contract_export) = contract_direction_counts(ctx.contracts);
         let family_count = match contract_type {
-            ContractType::Import => layout.equipment.n_contract_import,
-            ContractType::Export => layout.equipment.n_contract_export,
+            ContractType::Import => n_contract_import,
+            ContractType::Export => n_contract_export,
         };
         debug_assert!(
             family_slot < family_count,
@@ -1034,7 +1037,7 @@ fn fill_filling_target_columns(
     bufs: &mut ColumnBufs<'_>,
 ) {
     for (local_idx, &h) in layout
-        .filling
+        .geometry
         .filling_target_hydro_indices
         .iter()
         .enumerate()
@@ -1061,7 +1064,7 @@ fn fill_filled_min_storage_floor_columns(
     bufs: &mut ColumnBufs<'_>,
 ) {
     for (local_idx, &h) in layout
-        .filling
+        .geometry
         .filled_min_storage_floor_hydro_indices
         .iter()
         .enumerate()
@@ -1323,7 +1326,7 @@ mod interior_storage_bound_tests {
         // family's start (`turbine`, allocated immediately after it); empty in
         // parallel mode and at K = 1.
         let interior: Vec<usize> =
-            (layout.equipment.storage_internal_start..layout.equipment.turbine.start).collect();
+            (layout.geometry.storage_internal_start..layout.geometry.turbine.start).collect();
         RawFill {
             col_lower,
             col_upper,
@@ -1474,7 +1477,7 @@ mod interior_storage_bound_tests {
             let l = StageLayout::new(&par_ctx, par_ctx.state, &stage, STAGE_IDX);
             (
                 l.block_storage_col(HydroSys::new(0), Boundary::Outgoing),
-                l.equipment.storage_internal_start == l.equipment.turbine.start,
+                l.geometry.storage_internal_start == l.geometry.turbine.start,
             )
         };
         assert!(
@@ -1746,7 +1749,7 @@ mod diversion_bound_tests {
             col_lower,
             col_upper,
             layout.clock.n_blks(),
-            layout.equipment.diversion.start,
+            layout.geometry.diversion.start,
         )
     }
 
@@ -2089,10 +2092,10 @@ mod filling_phase_gating_tests {
         fill_fpha_generation_columns(&ctx, STAGE_IDX, &layout, &mut bufs);
         let offsets = [
             layout.turbine_col(HydroCell::new(0), BlockIdx::new(0)),
-            layout.equipment.diversion.start,
+            layout.geometry.diversion.start,
             // FPHA-local index 0 (the sole FPHA hydro); for a non-FPHA fixture
             // there is no generation column, so callers must not read this slot.
-            if layout.fpha_hydro_indices.is_empty() {
+            if layout.geometry.fpha_hydro_indices.is_empty() {
                 usize::MAX
             } else {
                 layout.generation_col(FphaCellLocal::new(0), BlockIdx::new(0))
@@ -2142,7 +2145,7 @@ mod filling_phase_gating_tests {
         (
             col_lower,
             col_upper,
-            layout.equipment.spillage.start,
+            layout.geometry.spillage.start,
             layout.clock.n_blks(),
         )
     }
@@ -2660,8 +2663,8 @@ mod filling_phase_gating_tests {
             objective: &mut objective,
         };
         super::fill_filling_target_columns(&ctx, STAGE_IDX, &layout, &mut bufs);
-        let n_targets = layout.filling.filling_target_hydro_indices.len();
-        let col_start = layout.filling.col_filling_target_start;
+        let n_targets = layout.geometry.filling_target_hydro_indices.len();
+        let col_start = layout.geometry.filling_target_col.start;
         (
             col_lower,
             col_upper,
@@ -2795,8 +2798,8 @@ mod filling_phase_gating_tests {
             objective: &mut objective,
         };
         super::fill_filled_min_storage_floor_columns(&ctx, STAGE_IDX, &layout, &mut bufs);
-        let n_floors = layout.filling.filled_min_storage_floor_hydro_indices.len();
-        let col_start = layout.filling.col_filled_min_storage_floor_start;
+        let n_floors = layout.geometry.filled_min_storage_floor_hydro_indices.len();
+        let col_start = layout.geometry.filled_min_storage_floor_col.start;
         (
             col_lower,
             col_upper,
@@ -3067,7 +3070,7 @@ mod anticipated_objective_tests {
         // Anticipated thermal (t_idx 0) objective stays at the 0.0 default; its
         // per-block bounds are still written by fill_thermal_columns.
         for blk in 0..n_blks {
-            let col = layout.equipment.thermal.start + blk;
+            let col = layout.geometry.thermal.start + blk;
             assert_eq!(
                 objective[col], 0.0,
                 "anticipated thermal objective must be 0.0 at col {col}",
@@ -3079,7 +3082,7 @@ mod anticipated_objective_tests {
         }
         // Control: standard thermal (t_idx 1) is priced as cost * block_hours.
         for blk in 0..n_blks {
-            let col = layout.equipment.thermal.start + n_blks + blk;
+            let col = layout.geometry.thermal.start + n_blks + blk;
             let expected = STD_COST_PER_MWH * stage.blocks[blk].duration_hours;
             assert_eq!(
                 objective[col], expected,
@@ -3088,7 +3091,7 @@ mod anticipated_objective_tests {
         }
         // The anticipated decision column carries the commit cost, in stage-0
         // units: cost_per_mwh(delivery) * total_hours[delivery] * relative_discount.
-        let decision_col = layout.anticipated.col_anticipated_decision_start;
+        let decision_col = layout.geometry.anticipated_decision.start;
         let expected_npv = DELIVERY_COST_PER_MWH
             * ctx.time_value.delivery_total_hours(DELIVERY_STAGE)
             * ctx
@@ -3254,7 +3257,7 @@ mod anticipated_objective_tests {
         let layout = StageLayout::new(&ctx, ctx.state, &stage, 0);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 0, &layout);
-        let decision_col = layout.anticipated.col_anticipated_decision_start;
+        let decision_col = layout.geometry.anticipated_decision.start;
 
         let delivery = 1_usize;
         let (min_g, max_g, cost) = per_stage[delivery];
@@ -3505,7 +3508,7 @@ mod anticipated_objective_tests {
         let layout = StageLayout::new(&ctx, state, &stage, 0);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 0, &layout);
-        let decision_col = layout.anticipated.col_anticipated_decision_start;
+        let decision_col = layout.geometry.anticipated_decision.start;
 
         let delivery = 2_usize;
         let (min_g, max_g, cost) = PSA_IN_STUDY[delivery];
@@ -3539,7 +3542,7 @@ mod anticipated_objective_tests {
         let layout = StageLayout::new(&ctx, state, &stage, 1);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 1, &layout);
-        let decision_col = layout.anticipated.col_anticipated_decision_start;
+        let decision_col = layout.geometry.anticipated_decision.start;
 
         let delivery = 3_usize;
         assert_eq!(
@@ -3572,7 +3575,7 @@ mod anticipated_objective_tests {
         let layout = StageLayout::new(&ctx, state, &stage, 1);
 
         let (col_lower, col_upper, objective) = fill_stage_columns(&ctx, &stage, 1, &layout);
-        let decision_col = layout.anticipated.col_anticipated_decision_start;
+        let decision_col = layout.geometry.anticipated_decision.start;
 
         assert_eq!(
             col_lower[decision_col], 0.0,
@@ -3601,7 +3604,7 @@ mod anticipated_objective_tests {
         let layout = StageLayout::new(&ctx, state, &stage, 1);
 
         let (col_lower, col_upper, _objective) = fill_stage_columns(&ctx, &stage, 1, &layout);
-        let decision_col = layout.anticipated.col_anticipated_decision_start;
+        let decision_col = layout.geometry.anticipated_decision.start;
 
         assert_eq!(
             col_lower[decision_col], 30.0,
@@ -4565,8 +4568,8 @@ mod contract_column_tests {
             col_lower,
             col_upper,
             objective,
-            layout.equipment.contract_import.start,
-            layout.equipment.contract_export.start,
+            layout.geometry.contract_import.start,
+            layout.geometry.contract_export.start,
         )
     }
 
@@ -4798,7 +4801,7 @@ mod thermal_block_bound_tests {
             col_lower,
             col_upper,
             objective,
-            layout.equipment.thermal.start,
+            layout.geometry.thermal.start,
         )
     }
 
@@ -5275,11 +5278,11 @@ mod line_contract_pumping_block_bound_tests {
         fill_contract_columns(&ctx, &stage, stage_idx, &layout, &mut bufs);
 
         let offsets = FillOffsets {
-            line_fwd_start: layout.equipment.line_fwd.start,
-            line_rev_start: layout.equipment.line_rev.start,
-            pumping_start: layout.equipment.col_pumping_start,
-            contract_import_start: layout.equipment.contract_import.start,
-            contract_export_start: layout.equipment.contract_export.start,
+            line_fwd_start: layout.geometry.line_fwd.start,
+            line_rev_start: layout.geometry.line_rev.start,
+            pumping_start: layout.geometry.pumping_flow.start,
+            contract_import_start: layout.geometry.contract_import.start,
+            contract_export_start: layout.geometry.contract_export.start,
             n_blks: layout.clock.n_blks(),
         };
 
@@ -5965,16 +5968,16 @@ mod hydro_block_bound_tests {
         fill_operational_violation_rows(&ctx, stage_idx, &layout, &mut row_lower, &mut row_upper);
 
         let offsets = FillOffsets {
-            turbine: layout.equipment.turbine.start,
-            diversion: layout.equipment.diversion.start,
-            outflow_below: layout.slack.oper_violation.outflow_below_slack.start,
-            outflow_above: layout.slack.oper_violation.outflow_above_slack.start,
-            turbine_below: layout.slack.oper_violation.turbine_below_slack.start,
-            generation_below: layout.slack.oper_violation.generation_below_slack.start,
-            min_outflow_row: layout.slack.oper_violation.min_outflow_rows.start,
-            max_outflow_row: layout.slack.oper_violation.max_outflow_rows.start,
-            min_turbine_row: layout.slack.oper_violation.min_turbine_rows.start,
-            min_generation_row: layout.slack.oper_violation.min_generation_rows.start,
+            turbine: layout.geometry.turbine.start,
+            diversion: layout.geometry.diversion.start,
+            outflow_below: layout.geometry.outflow_below_slack.start,
+            outflow_above: layout.geometry.outflow_above_slack.start,
+            turbine_below: layout.geometry.turbine_below_slack.start,
+            generation_below: layout.geometry.generation_below_slack.start,
+            min_outflow_row: layout.oper_violation.min_outflow.start,
+            max_outflow_row: layout.oper_violation.max_outflow.start,
+            min_turbine_row: layout.oper_violation.min_turbine.start,
+            min_generation_row: layout.oper_violation.min_generation.start,
             n_blks: layout.clock.n_blks(),
         };
 
@@ -6535,7 +6538,7 @@ mod hydro_block_bound_tests {
         let ctx = fixtures.make_ctx();
         let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         assert_eq!(
-            layout.fpha_hydro_indices.len(),
+            layout.geometry.fpha_hydro_indices.len(),
             1,
             "fixture hydro must classify as FPHA"
         );
@@ -7202,7 +7205,7 @@ mod cell_column_bound_tests {
         let stage = three_block_stage(usize::try_from(PREFILLING_ID).expect("non-negative"));
         let layout = StageLayout::new(&ctx, ctx.state, &stage, STAGE_IDX);
         assert!(
-            layout.fpha_hydro_indices.is_empty(),
+            layout.geometry.fpha_hydro_indices.is_empty(),
             "the suspended FPHA plant must be excluded from fpha_hydro_indices during PreFilling"
         );
 
@@ -7435,7 +7438,7 @@ mod cell_column_bound_tests {
     /// generation column family: that test only calls `fill_turbine_columns`,
     /// so it cannot exercise `cell_max_generation`'s override read. Three
     /// `ConstantProductivity` fillers keep the main plant the sole FPHA hydro
-    /// (`layout.fpha_hydro_indices == [HydroSys::new(3)]`), reusing the same
+    /// (`layout.geometry.fpha_hydro_indices == [HydroSys::new(3)]`), reusing the same
     /// mutually-distinct-index fixture shape: `hydro_idx` (3), `cell_idx` (4),
     /// `group_pos` (0), `group_id` (77), `bus_idx` (900), `stage_idx` (2), and
     /// `block_idx` (1) are mutually distinct on the overridden entry. Only
@@ -7502,7 +7505,7 @@ mod cell_column_bound_tests {
         let stage2 = three_block_stage(2);
         let layout2 = StageLayout::new(&ctx, ctx.state, &stage2, 2);
         assert_eq!(
-            layout2.fpha_hydro_indices,
+            layout2.geometry.fpha_hydro_indices,
             vec![HydroSys::new(3)],
             "only the main plant is FPHA; the three fillers stay ConstantProductivity"
         );
@@ -7853,7 +7856,7 @@ mod ncs_objective_tests {
         fill_ncs_columns(&ctx, &stage, stage_idx, &layout, &mut bufs);
 
         let offsets = FillOffsets {
-            col_ncs_start: layout.equipment.col_ncs_start,
+            col_ncs_start: layout.geometry.ncs_generation.start,
             n_blks: layout.clock.n_blks(),
         };
 

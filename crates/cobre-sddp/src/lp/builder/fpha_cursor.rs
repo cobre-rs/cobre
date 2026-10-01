@@ -50,7 +50,7 @@ pub(super) fn for_each_fpha_plane<F>(
     let n_blks = layout.clock.n_blks();
     let grid = layout.block_grid();
     let mut fpha_block_start = layout.row_fpha_start();
-    for (local_idx, &h) in layout.fpha_hydro_indices.iter().enumerate() {
+    for (local_idx, &h) in layout.geometry.fpha_hydro_indices.iter().enumerate() {
         let planes = match ctx.production_models.model(h.get(), stage_idx) {
             ResolvedProductionModel::Fpha { planes, .. } => planes,
             ResolvedProductionModel::ConstantProductivity { .. } => {

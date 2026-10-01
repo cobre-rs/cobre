@@ -240,7 +240,7 @@ fn fill_filling_target_rows(
     row_upper: &mut [f64],
 ) {
     for (local_idx, &h) in layout
-        .filling
+        .geometry
         .filling_target_hydro_indices
         .iter()
         .enumerate()
@@ -286,7 +286,7 @@ fn fill_filled_min_storage_floor_rows(
     row_upper: &mut [f64],
 ) {
     for (local_idx, &h) in layout
-        .filling
+        .geometry
         .filled_min_storage_floor_hydro_indices
         .iter()
         .enumerate()
@@ -366,7 +366,7 @@ fn fill_evaporation_rows(
     row_upper: &mut [f64],
 ) {
     let n_evap_slots = layout.n_evap_slots;
-    for (local_idx, &h) in layout.evap_hydro_indices.iter().enumerate() {
+    for (local_idx, &h) in layout.geometry.evap_hydro_indices.iter().enumerate() {
         match ctx.evaporation_models.model(h.get()) {
             EvaporationModel::Linearized { coefficients, .. } => {
                 debug_assert!(

@@ -752,7 +752,7 @@ pub fn geometry(
         ..CtxFixture::default()
     };
     let mut ctx = fixture.ctx();
-    // geometry() never resolves an EntityId through a position map —
+    // Geometry allocation never resolves an EntityId through a position map —
     // restore the empty-positions default over the derived (non-empty
     // hydro/bus) one.
     let empty_positions = EntityPositions::from_slices([], [], [], [], [], []);
@@ -765,7 +765,7 @@ pub fn geometry(
     );
     let stage = geometry_stage(dims.n_blks);
 
-    StageLayout::new(&ctx, &state, &stage, 0).geometry(BlockMode::Parallel)
+    StageLayout::new(&ctx, &state, &stage, 0).geometry
 }
 
 /// Build a [`StageGeometry`] carrying only a load-balance row family

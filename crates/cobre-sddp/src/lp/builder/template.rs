@@ -172,10 +172,7 @@ pub(super) fn build_single_stage_template(
         row_scale: Vec::new(),
     };
 
-    // Snapshot the per-stage equipment geometry BEFORE moving `layout`'s owned
-    // `generic_constraint_rows` Vec into the output: `geometry` only borrows
-    // `layout`, so it must run while `layout` is intact.
-    let equipment_geometry = layout.geometry(stage.block_mode);
+    let equipment_geometry = layout.geometry.clone();
 
     StageBuildOutput {
         template,

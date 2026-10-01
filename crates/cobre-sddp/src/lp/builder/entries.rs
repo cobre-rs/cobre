@@ -195,15 +195,14 @@ fn fill_parallel_water_entries(
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
+    let geom = &layout.geometry;
     let n_h = layout.state.hydro_count;
     let n_blks = layout.clock.n_blks();
     let zeta = layout.clock.zeta();
 
     for h_idx in 0..n_h {
         let hydro = &ctx.hydros[h_idx];
-        let row = layout
-            .geometry
-            .water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
+        let row = geom.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
         let storage_out_col = layout
             .state
             .storage_outgoing_col(HydroSys::new(h_idx))
@@ -235,18 +234,12 @@ fn fill_parallel_water_entries(
         for blk in 0..n_blks {
             let tau_h = layout.clock.tau(BlockIdx::new(blk));
             for c in ctx.hydro_cell_index.cells_of(HydroSys::new(h_idx)) {
-                let col_turbine = layout
-                    .geometry
-                    .turbine_col(HydroCell::new(c), BlockIdx::new(blk));
+                let col_turbine = geom.turbine_col(HydroCell::new(c), BlockIdx::new(blk));
                 col_entries[col_turbine].push((row, tau_h));
             }
-            let col_spillage = layout
-                .geometry
-                .spillage_col(HydroSys::new(h_idx), BlockIdx::new(blk));
+            let col_spillage = geom.spillage_col(HydroSys::new(h_idx), BlockIdx::new(blk));
             col_entries[col_spillage].push((row, tau_h));
-            let col_diversion = layout
-                .geometry
-                .diversion_col(HydroSys::new(h_idx), BlockIdx::new(blk));
+            let col_diversion = geom.diversion_col(HydroSys::new(h_idx), BlockIdx::new(blk));
             col_entries[col_diversion].push((row, tau_h));
             for &up_id in ctx.cascade.upstream(hydro.id) {
                 if let Some(u_idx) = ctx.positions.hydro(up_id) {
@@ -265,9 +258,7 @@ fn fill_parallel_water_entries(
             }
             if let Some(sources) = ctx.diversion_upstream.get(&hydro.id) {
                 for &d_idx in sources {
-                    let col_div = layout
-                        .geometry
-                        .diversion_col(HydroSys::new(d_idx), BlockIdx::new(blk));
+                    let col_div = geom.diversion_col(HydroSys::new(d_idx), BlockIdx::new(blk));
                     col_entries[col_div].push((row, -tau_h));
                 }
             }
@@ -281,26 +272,18 @@ fn fill_parallel_water_entries(
         if matches!(hydro_phase(&ctx.hydros[h_idx], stage.id), Phase::PreFilling) {
             continue;
         }
-        let row = layout
-            .geometry
-            .water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
-        if !layout.geometry.inflow_slack.is_empty() {
-            col_entries[layout.geometry.inflow_slack_col(HydroSys::new(h_idx))].push((row, -zeta));
+        let row = geom.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(0));
+        if !geom.inflow_slack.is_empty() {
+            col_entries[geom.inflow_slack_col(HydroSys::new(h_idx))].push((row, -zeta));
         }
-        col_entries[layout
-            .geometry
-            .withdrawal_slack_neg_col(HydroSys::new(h_idx))]
-        .push((row, -zeta));
-        col_entries[layout
-            .geometry
-            .withdrawal_slack_pos_col(HydroSys::new(h_idx))]
-        .push((row, zeta));
+        col_entries[geom.withdrawal_slack_neg_col(HydroSys::new(h_idx))].push((row, -zeta));
+        col_entries[geom.withdrawal_slack_pos_col(HydroSys::new(h_idx))].push((row, zeta));
     }
 
-    for (local_idx, &h) in layout.geometry.evap_hydro_indices.iter().enumerate() {
+    for (local_idx, &h) in geom.evap_hydro_indices.iter().enumerate() {
         let col_evaporation_flow =
             layout.evap_flow_col(EvapLocal::new(local_idx), BlockIdx::new(0));
-        let row = layout.geometry.water_balance_row(h, BlockIdx::new(0));
+        let row = geom.water_balance_row(h, BlockIdx::new(0));
         col_entries[col_evaporation_flow].push((row, zeta));
     }
 }
@@ -833,6 +816,7 @@ pub(super) fn fill_pumping_water_entries(
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
+    let geom = &layout.geometry;
     let n_blks = layout.clock.n_blks();
     for (p_sys, station) in ctx.pumping_stations.iter().enumerate() {
         // Per-side guards are defense-in-depth (`validate_pumping_station_refs` guarantees
@@ -843,22 +827,14 @@ pub(super) fn fill_pumping_water_entries(
         for blk in 0..n_blks {
             let blk_idx = BlockIdx::new(blk);
             let tau_h = layout.clock.tau(blk_idx);
-            let col = layout
-                .geometry
-                .pumping_flow_col(PumpingSys::new(p_sys), blk_idx);
+            let col = geom.pumping_flow_col(PumpingSys::new(p_sys), blk_idx);
             if let Some(s_idx) = source {
-                col_entries[col].push((
-                    layout
-                        .geometry
-                        .water_balance_row(HydroSys::new(s_idx), blk_idx),
-                    tau_h,
-                ));
+                col_entries[col]
+                    .push((geom.water_balance_row(HydroSys::new(s_idx), blk_idx), tau_h));
             }
             if let Some(d_idx) = destination {
                 col_entries[col].push((
-                    layout
-                        .geometry
-                        .water_balance_row(HydroSys::new(d_idx), blk_idx),
+                    geom.water_balance_row(HydroSys::new(d_idx), blk_idx),
                     -tau_h,
                 ));
             }
@@ -883,6 +859,7 @@ pub(super) fn fill_load_balance_entries(
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
+    let geom = &layout.geometry;
     let n_blks = layout.clock.n_blks();
 
     for h_idx in 0..ctx.hydros.len() {
@@ -895,8 +872,8 @@ pub(super) fn fill_load_balance_entries(
                     if let Some(b_idx) = ctx.positions.bus(ctx.hydro_cell_index.bus_of(cell)) {
                         let cell_local = FphaCellLocal::new(cell_base + offset);
                         for blk in (0..n_blks).map(BlockIdx::new) {
-                            let row = layout.geometry.load_balance_row(BusSys::new(b_idx), blk);
-                            let col = layout.geometry.generation_col(cell_local, blk);
+                            let row = geom.load_balance_row(BusSys::new(b_idx), blk);
+                            let col = geom.generation_col(cell_local, blk);
                             col_entries[col].push((row, 1.0));
                         }
                     }
@@ -907,8 +884,8 @@ pub(super) fn fill_load_balance_entries(
                     let cell = HydroCell::new(c);
                     if let Some(b_idx) = ctx.positions.bus(ctx.hydro_cell_index.bus_of(cell)) {
                         for blk in (0..n_blks).map(BlockIdx::new) {
-                            let row = layout.geometry.load_balance_row(BusSys::new(b_idx), blk);
-                            let col = layout.geometry.turbine_col(cell, blk);
+                            let row = geom.load_balance_row(BusSys::new(b_idx), blk);
+                            let col = geom.turbine_col(cell, blk);
                             col_entries[col].push((row, rho));
                         }
                     }
@@ -921,8 +898,8 @@ pub(super) fn fill_load_balance_entries(
     for (t_idx, thermal) in ctx.thermals.iter().enumerate() {
         if let Some(b_idx) = ctx.positions.bus(thermal.bus_id) {
             for blk in (0..n_blks).map(BlockIdx::new) {
-                let row = layout.geometry.load_balance_row(BusSys::new(b_idx), blk);
-                let col = layout.geometry.thermal_col(ThermalSys::new(t_idx), blk);
+                let row = geom.load_balance_row(BusSys::new(b_idx), blk);
+                let col = geom.thermal_col(ThermalSys::new(t_idx), blk);
                 col_entries[col].push((row, 1.0));
             }
         }
@@ -932,15 +909,15 @@ pub(super) fn fill_load_balance_entries(
         let src_idx = ctx.positions.bus(line.source_bus_id);
         let tgt_idx = ctx.positions.bus(line.target_bus_id);
         for blk in (0..n_blks).map(BlockIdx::new) {
-            let col_fwd = layout.geometry.line_fwd_col(LineSys::new(l_idx), blk);
-            let col_rev = layout.geometry.line_rev_col(LineSys::new(l_idx), blk);
+            let col_fwd = geom.line_fwd_col(LineSys::new(l_idx), blk);
+            let col_rev = geom.line_rev_col(LineSys::new(l_idx), blk);
             if let Some(tgt) = tgt_idx {
-                let row = layout.geometry.load_balance_row(BusSys::new(tgt), blk);
+                let row = geom.load_balance_row(BusSys::new(tgt), blk);
                 col_entries[col_fwd].push((row, 1.0));
                 col_entries[col_rev].push((row, -1.0));
             }
             if let Some(src) = src_idx {
-                let row = layout.geometry.load_balance_row(BusSys::new(src), blk);
+                let row = geom.load_balance_row(BusSys::new(src), blk);
                 col_entries[col_fwd].push((row, -1.0));
                 col_entries[col_rev].push((row, 1.0));
             }
@@ -951,10 +928,8 @@ pub(super) fn fill_load_balance_entries(
     for (p_sys, station) in ctx.pumping_stations.iter().enumerate() {
         if let Some(b_idx) = ctx.positions.bus(station.bus_id) {
             for blk in (0..n_blks).map(BlockIdx::new) {
-                let row = layout.geometry.load_balance_row(BusSys::new(b_idx), blk);
-                let col = layout
-                    .geometry
-                    .pumping_flow_col(PumpingSys::new(p_sys), blk);
+                let row = geom.load_balance_row(BusSys::new(b_idx), blk);
+                let col = geom.pumping_flow_col(PumpingSys::new(p_sys), blk);
                 col_entries[col].push((row, -station.consumption_mw_per_m3s));
             }
         }
@@ -971,10 +946,8 @@ pub(super) fn fill_load_balance_entries(
         };
         if let Some(b_idx) = ctx.positions.bus(contract.bus_id) {
             for blk in (0..n_blks).map(BlockIdx::new) {
-                let row = layout.geometry.load_balance_row(BusSys::new(b_idx), blk);
-                let col = layout
-                    .geometry
-                    .contract_col(contract_type, family_slot, blk);
+                let row = geom.load_balance_row(BusSys::new(b_idx), blk);
+                let col = geom.contract_col(contract_type, family_slot, blk);
                 col_entries[col].push((row, sign));
             }
         }
@@ -982,12 +955,12 @@ pub(super) fn fill_load_balance_entries(
 
     for (b_idx, bus) in ctx.buses.iter().enumerate() {
         for blk in (0..n_blks).map(BlockIdx::new) {
-            let row = layout.geometry.load_balance_row(BusSys::new(b_idx), blk);
+            let row = geom.load_balance_row(BusSys::new(b_idx), blk);
             for seg_idx in 0..bus.deficit_segments.len() {
                 let col_def = layout.deficit_col(BusSys::new(b_idx), seg_idx, blk);
                 col_entries[col_def].push((row, 1.0));
             }
-            let col_exc = layout.geometry.excess_col(BusSys::new(b_idx), blk);
+            let col_exc = geom.excess_col(BusSys::new(b_idx), blk);
             col_entries[col_exc].push((row, -1.0));
         }
     }
@@ -1016,6 +989,7 @@ pub(super) fn fill_fpha_entries(
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
+    let geom = &layout.geometry;
     for_each_fpha_plane(ctx, stage_idx, layout, |visit, plane| {
         let (col_v_in, col_v) = match stage.block_mode {
             BlockMode::Parallel => (
@@ -1033,9 +1007,9 @@ pub(super) fn fill_fpha_entries(
                 ),
             ),
         };
-        let col_q = layout.geometry.turbine_col(visit.cell, visit.blk);
-        let col_s = layout.geometry.spillage_col(visit.plant, visit.blk);
-        let col_g = layout.geometry.generation_col(visit.cell_local, visit.blk);
+        let col_q = geom.turbine_col(visit.cell, visit.blk);
+        let col_s = geom.spillage_col(visit.plant, visit.blk);
+        let col_g = geom.generation_col(visit.cell_local, visit.blk);
         // Apportion the plane's flow-independent part by this cell's share of the
         // plant's declared turbine capacity; γ_q stays unscaled on the cell's own
         // flow (only `A ≡ γ₀ + γ_V·V̄ + γ_s·s` fails the homogeneity that makes
@@ -1299,6 +1273,7 @@ pub(super) fn fill_operational_violation_entries(
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
 ) {
+    let geom = &layout.geometry;
     let n_blks = layout.clock.n_blks();
 
     for h_idx in 0..layout.state.hydro_count {
@@ -1306,27 +1281,27 @@ pub(super) fn fill_operational_violation_entries(
         for blk in (0..n_blks).map(BlockIdx::new) {
             let row = layout.min_outflow_row(hydro, blk);
             for c in ctx.hydro_cell_index.cells_of(hydro) {
-                let col_q = layout.geometry.turbine_col(HydroCell::new(c), blk);
+                let col_q = geom.turbine_col(HydroCell::new(c), blk);
                 col_entries[col_q].push((row, 1.0));
             }
-            let col_s = layout.geometry.spillage_col(hydro, blk);
+            let col_s = geom.spillage_col(hydro, blk);
             col_entries[col_s].push((row, 1.0));
             // Diversion `d` is intentionally NOT coupled into either outflow row —
             // both bind the non-diverted `q + s` (see the fn doc); re-adding it is
             // the wrong-but-compiling bound.
-            let col_slack = layout.geometry.outflow_below_col(hydro, blk);
+            let col_slack = geom.outflow_below_col(hydro, blk);
             col_entries[col_slack].push((row, 1.0));
         }
 
         for blk in (0..n_blks).map(BlockIdx::new) {
             let row = layout.max_outflow_row(hydro, blk);
             for c in ctx.hydro_cell_index.cells_of(hydro) {
-                let col_q = layout.geometry.turbine_col(HydroCell::new(c), blk);
+                let col_q = geom.turbine_col(HydroCell::new(c), blk);
                 col_entries[col_q].push((row, 1.0));
             }
-            let col_s = layout.geometry.spillage_col(hydro, blk);
+            let col_s = geom.spillage_col(hydro, blk);
             col_entries[col_s].push((row, 1.0));
-            let col_slack = layout.geometry.outflow_above_col(hydro, blk);
+            let col_slack = geom.outflow_above_col(hydro, blk);
             col_entries[col_slack].push((row, -1.0));
         }
 
@@ -1337,9 +1312,9 @@ pub(super) fn fill_operational_violation_entries(
             let cell = HydroCell::new(c);
             for blk in (0..n_blks).map(BlockIdx::new) {
                 let row = layout.min_turbine_row(cell, blk);
-                let col_q = layout.geometry.turbine_col(cell, blk);
+                let col_q = geom.turbine_col(cell, blk);
                 col_entries[col_q].push((row, 1.0));
-                let col_slack = layout.geometry.turbine_below_col(cell, blk);
+                let col_slack = geom.turbine_below_col(cell, blk);
                 col_entries[col_slack].push((row, 1.0));
             }
         }
@@ -1358,11 +1333,10 @@ pub(super) fn fill_operational_violation_entries(
                     let cell = HydroCell::new(c);
                     for blk in (0..n_blks).map(BlockIdx::new) {
                         let row = layout.min_generation_row(cell, blk);
-                        let col_g = layout
-                            .geometry
-                            .generation_col(FphaCellLocal::new(fpha_base + offset), blk);
+                        let col_g =
+                            geom.generation_col(FphaCellLocal::new(fpha_base + offset), blk);
                         col_entries[col_g].push((row, 1.0));
-                        let col_slack = layout.geometry.generation_below_col(cell, blk);
+                        let col_slack = geom.generation_below_col(cell, blk);
                         col_entries[col_slack].push((row, 1.0));
                     }
                 }
@@ -1372,9 +1346,9 @@ pub(super) fn fill_operational_violation_entries(
                     let cell = HydroCell::new(c);
                     for blk in (0..n_blks).map(BlockIdx::new) {
                         let row = layout.min_generation_row(cell, blk);
-                        let col_q = layout.geometry.turbine_col(cell, blk);
+                        let col_q = geom.turbine_col(cell, blk);
                         col_entries[col_q].push((row, rho));
-                        let col_slack = layout.geometry.generation_below_col(cell, blk);
+                        let col_slack = geom.generation_below_col(cell, blk);
                         col_entries[col_slack].push((row, 1.0));
                     }
                 }
@@ -1384,7 +1358,7 @@ pub(super) fn fill_operational_violation_entries(
                     let cell = HydroCell::new(c);
                     for blk in (0..n_blks).map(BlockIdx::new) {
                         let row = layout.min_generation_row(cell, blk);
-                        let col_slack = layout.geometry.generation_below_col(cell, blk);
+                        let col_slack = geom.generation_below_col(cell, blk);
                         col_entries[col_slack].push((row, 1.0));
                     }
                 }

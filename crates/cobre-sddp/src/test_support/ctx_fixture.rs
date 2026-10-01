@@ -133,9 +133,10 @@ impl Default for CtxFixture {
 
 impl CtxFixture {
     /// Derives `positions`, `state`, and `study_dims` from this fixture's own
-    /// slices, the way [`EntityPositions::build`]/`build_study_dimensions` do;
-    /// every other field is copied through unchanged. `&mut self`: all three
-    /// are recomputed into `self`'s own fields on every call, so
+    /// slices, the way [`EntityPositions::build`]/`build_study_dimensions` do,
+    /// and `time_value`'s one-step discount factors as one `1.0` per `bounds`
+    /// stage; every other field is copied through unchanged. `&mut self`: all
+    /// four are recomputed into `self`'s own fields on every call, so
     /// [`TemplateBuildCtx::positions`]/`state`/`study_dims` can borrow a
     /// backing store with `self`'s own lifetime. `state` attaches
     /// `self.anticipated_resolution` as-is when a test set it explicitly (it
@@ -160,6 +161,14 @@ impl CtxFixture {
             self.anticipated_resolution.clone()
         };
         self.state = self.build_state(resolution);
+        let (_, cumulative, calendar, post_study) = self.time_value.canonical_fields();
+        self.time_value = TimeValue::from_parts(
+            vec![1.0; self.bounds.n_stages()],
+            cumulative.to_vec(),
+            calendar.total_hours().to_vec(),
+            calendar.stage_ids().to_vec(),
+            post_study.clone(),
+        );
         self.study_dims = StudyDimensions {
             max_deficit_segments: self
                 .buses

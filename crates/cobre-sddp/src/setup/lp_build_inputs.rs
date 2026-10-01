@@ -128,16 +128,10 @@ fn resolve_deterministic_load_models(system: &System, load_bus_ids: &[EntityId])
 
 /// `load_bus_ids`' bus-slice positions, in `load_bus_ids`' own (`EntityId`-
 /// sorted) order.
-fn resolve_load_bus_indices(system: &System, load_bus_ids: &[EntityId]) -> Vec<usize> {
-    let bus_pos: BTreeMap<EntityId, usize> = system
-        .buses()
-        .iter()
-        .enumerate()
-        .map(|(i, b)| (b.id, i))
-        .collect();
+fn resolve_load_bus_indices(positions: &EntityPositions, load_bus_ids: &[EntityId]) -> Vec<usize> {
     load_bus_ids
         .iter()
-        .filter_map(|id| bus_pos.get(id).copied())
+        .filter_map(|id| positions.bus(*id))
         .collect()
 }
 
@@ -192,11 +186,12 @@ pub(crate) fn resolve_lp_build_inputs<'a>(
     resolved_parameters: &'a ResolvedParameters,
 ) -> LpBuildInputs<'a> {
     let n_study = system.stages().iter().filter(|s| s.id >= 0).count();
+    let positions = EntityPositions::build(system);
     LpBuildInputs {
-        positions: EntityPositions::build(system),
+        load_bus_indices: resolve_load_bus_indices(&positions, load_bus_ids),
+        positions,
         filling_v_target: resolve_filling_v_target(system),
         deterministic_load_models: resolve_deterministic_load_models(system, load_bus_ids),
-        load_bus_indices: resolve_load_bus_indices(system, load_bus_ids),
         diversion_upstream: resolve_diversion_upstream(system.hydros()),
         hydro_productivities_per_stage: resolve_hydro_productivities_per_stage(
             n_study,

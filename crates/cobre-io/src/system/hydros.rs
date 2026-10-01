@@ -162,9 +162,9 @@ pub(crate) struct RawHydro {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct RawReservoir {
-    /// Minimum operational storage (dead volume) [hm³].
+    /// Minimum operational storage (dead volume) \[hm³\].
     min_storage_hm3: f64,
-    /// Maximum operational storage [hm³].
+    /// Maximum operational storage \[hm³\].
     max_storage_hm3: f64,
 }
 
@@ -203,9 +203,9 @@ pub(crate) enum RawGeneration {
         min_turbined_m3s: f64,
         /// Maximum turbined flow [m³/s].
         max_turbined_m3s: f64,
-        /// Minimum electrical generation [MW].
+        /// Minimum electrical generation \[MW\].
         min_generation_mw: f64,
-        /// Maximum electrical generation [MW].
+        /// Maximum electrical generation \[MW\].
         max_generation_mw: f64,
     },
     /// Head-dependent productivity linearized around an operating point.
@@ -219,9 +219,9 @@ pub(crate) enum RawGeneration {
         min_turbined_m3s: f64,
         /// Maximum turbined flow [m³/s].
         max_turbined_m3s: f64,
-        /// Minimum electrical generation [MW].
+        /// Minimum electrical generation \[MW\].
         min_generation_mw: f64,
-        /// Maximum electrical generation [MW].
+        /// Maximum electrical generation \[MW\].
         max_generation_mw: f64,
     },
     /// Full production function with head-area-productivity tables (FPHA model).
@@ -234,9 +234,9 @@ pub(crate) enum RawGeneration {
         min_turbined_m3s: f64,
         /// Maximum turbined flow [m³/s].
         max_turbined_m3s: f64,
-        /// Minimum electrical generation [MW].
+        /// Minimum electrical generation \[MW\].
         min_generation_mw: f64,
-        /// Maximum electrical generation [MW].
+        /// Maximum electrical generation \[MW\].
         max_generation_mw: f64,
     },
 }
@@ -298,7 +298,7 @@ pub(crate) enum RawTailrace {
 pub(crate) struct RawTailracePoint {
     /// Total outflow at this point [m³/s].
     outflow_m3s: f64,
-    /// Downstream water level (tailrace height) at this outflow [m].
+    /// Downstream water level (tailrace height) at this outflow \[m\].
     height_m: f64,
 }
 
@@ -314,7 +314,7 @@ pub(crate) enum RawHydraulicLosses {
     },
     /// Constant head loss independent of flow or head.
     Constant {
-        /// Fixed head loss [m].
+        /// Fixed head loss \[m\].
         value_m: f64,
     },
 }
@@ -339,7 +339,7 @@ pub(crate) struct RawEvaporation {
     /// Monthly evaporation coefficients [mm/month], one per calendar month.
     /// Index 0 = January, index 11 = December.
     coefficients_mm: Vec<f64>,
-    /// Monthly reservoir reference volumes [hm³] used as the linearization
+    /// Monthly reservoir reference volumes \[hm³\] used as the linearization
     /// reference point for evaporation, one per calendar month.
     /// Index 0 = January, index 11 = December.
     /// Absent = no reference volume override; the calling algorithm uses its
@@ -383,9 +383,9 @@ pub(crate) struct RawUnitGroup {
     name: String,
     /// Bus to which this group's generation is injected.
     bus_id: i32,
-    /// Minimum electrical generation [MW].
+    /// Minimum electrical generation \[MW\].
     min_generation_mw: f64,
-    /// Maximum electrical generation [MW].
+    /// Maximum electrical generation \[MW\].
     max_generation_mw: f64,
     /// Minimum turbined flow [m³/s].
     min_turbined_m3s: f64,

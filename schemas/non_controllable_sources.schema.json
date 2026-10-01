@@ -16,7 +16,7 @@
         },
         "curtailment_cost": {
           "default": null,
-          "description": "Optional entity-level curtailment cost override [$/`MWh`].\nWhen absent, falls back to global `ncs_curtailment_cost`.",
+          "description": "Optional entity-level curtailment cost override \\[$/`MWh`\\].\nWhen absent, falls back to global `ncs_curtailment_cost`.",
           "format": "double",
           "type": [
             "number",
@@ -47,7 +47,7 @@
           "type": "integer"
         },
         "max_generation_mw": {
-          "description": "Maximum generation (installed capacity) [MW].",
+          "description": "Maximum generation (installed capacity) \\[MW\\].",
           "format": "double",
           "type": "number"
         },

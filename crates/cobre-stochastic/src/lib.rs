@@ -38,8 +38,8 @@ pub mod test_support;
 pub mod tree;
 
 pub use context::{
-    ClassSchemes, NoiseEntityOrder, OpeningTreeInputs, StochasticContext, build_stochastic_context,
-    noise_entity_order,
+    ClassSchemes, NoiseEntityOrder, OpeningTreeInputs, StochasticContext, build_inflow_par,
+    build_stochastic_context, noise_entity_order,
 };
 pub use correlation::{DecomposedCorrelation, EntityClass, GroupFactor, SpectralFactor};
 pub use error::StochasticError;

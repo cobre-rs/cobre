@@ -7,26 +7,35 @@
 //! both differences live at each ring's own call site, never a second
 //! skeleton implementation.
 //!
-//! [`StateSpace`](crate::indexer::StateSpace) remains the sole owner of the
+//! [`StateSpace`] remains the sole owner of the
 //! out/in state-index ranges: a [`DeliveryRing`] borrows them for one
 //! construction and never re-derives or persists an independent copy. The
 //! block-mode-coupled per-lag deposit fill stays at each ring's own call
-//! site; this module owns the shared skeleton plus, for the anticipated ring
-//! alone, [`for_each_ring_residue`] — the single owner of its
-//! delivery-axis → ring-slot map.
+//! site; this module owns only the shared skeleton, plus the column-bound
+//! buffers the ring's column-freeze writes — the anticipated ring's
+//! delivery-axis → ring-slot map is owned by
+//! [`crate::lp::indexer::for_each_ring_residue`].
 
-use std::borrow::Cow;
 use std::ops::Range;
 
-use crate::indexer::{AnticipatedLocal, StateSpace, anticipated_resolution_for};
-use crate::lead_time::PointResolution;
+use cobre_core::EntityId;
 
-use super::columns::ColumnBufs;
+use crate::block_clock::BlockClock;
+use crate::indexer::{BlockIdx, HydroSys, StateSpace};
+
+use super::layout::{TemplateBuildCtx, position_table_row};
+
+/// Mutable column-bound and objective buffers shared by all fill helpers.
+pub(super) struct ColumnBufs<'a> {
+    pub(super) col_lower: &'a mut [f64],
+    pub(super) col_upper: &'a mut [f64],
+    pub(super) objective: &'a mut [f64],
+}
 
 /// A lagged-delivery ring over one dense, slot-major/lane-minor state-column
 /// grid: `n_lanes` parallel delivery lanes (plants), each `depth` slots deep.
 /// Borrows its outgoing/incoming column blocks from
-/// [`StateSpace`](crate::indexer::StateSpace) — never a private copy of the
+/// [`StateSpace`] — never a private copy of the
 /// ranges.
 #[derive(Debug, Clone)]
 pub struct DeliveryRing {
@@ -40,6 +49,16 @@ pub struct DeliveryRing {
     depth: usize,
 }
 
+/// One downstream plant's water-bucket ring, its local sub-range (relative to
+/// [`StateSpace::transit_buckets_out`]/[`StateSpace::transit_buckets_in`]'s
+/// own start), and the plant it belongs to — [`DeliveryRing::transit_buckets`]'s
+/// and [`DeliveryRing::transit_bucket`]'s item type.
+pub(crate) struct PlantBucketRing {
+    pub(crate) plant: HydroSys,
+    pub(crate) local: Range<usize>,
+    pub(crate) ring: DeliveryRing,
+}
+
 impl DeliveryRing {
     /// Constructs a ring over the borrowed out/in state blocks.
     ///
@@ -48,12 +67,7 @@ impl DeliveryRing {
     /// Panics if `out_block.len()` or `in_block.len()` differs from
     /// `n_lanes * depth`.
     #[must_use]
-    pub fn new(
-        out_block: Range<usize>,
-        in_block: Range<usize>,
-        n_lanes: usize,
-        depth: usize,
-    ) -> Self {
+    fn new(out_block: Range<usize>, in_block: Range<usize>, n_lanes: usize, depth: usize) -> Self {
         let dense_len = n_lanes * depth;
         debug_assert_eq!(
             out_block.len(),
@@ -73,6 +87,48 @@ impl DeliveryRing {
             n_lanes,
             depth,
         }
+    }
+
+    /// The in-study commitment-hold ring (`n_lanes = n_anticipated`,
+    /// slot-major/plant-minor, `depth = k_max`, modular-addressed) every
+    /// anticipated call site shares — the single owner of its out/in block
+    /// construction. Borrows the merged [`StateSpace::commit_out`]/
+    /// [`StateSpace::commit_in`] region.
+    #[must_use]
+    pub fn anticipated(state: &StateSpace) -> Self {
+        Self::new(
+            state.commit_out.clone(),
+            state.commit_in.clone(),
+            state.n_anticipated,
+            state.k_max,
+        )
+    }
+
+    /// Every downstream plant's own water-bucket ring (`n_lanes = 1`), over
+    /// its contiguous local sub-range in [`StateSpace::transit_bucket_plants`]
+    /// order — the single owner of the ragged-to-dense addressing every
+    /// bucket call site shares.
+    pub(crate) fn transit_buckets(
+        state: &StateSpace,
+    ) -> impl Iterator<Item = PlantBucketRing> + '_ {
+        state
+            .transit_bucket_plants()
+            .map(|(plant, local)| PlantBucketRing {
+                plant,
+                ring: Self::new(
+                    state.bucket_outgoing_block(local.clone()),
+                    state.bucket_incoming_block(local.clone()),
+                    1,
+                    local.len(),
+                ),
+                local,
+            })
+    }
+
+    /// `plant`'s own [`PlantBucketRing`], or `None` when it declares no
+    /// incoming arc.
+    pub(crate) fn transit_bucket(state: &StateSpace, plant: HydroSys) -> Option<PlantBucketRing> {
+        Self::transit_buckets(state).find(|bucket| bucket.plant == plant)
     }
 
     /// Outgoing-block column for ring position `(slot, lane)` — the single
@@ -163,11 +219,11 @@ impl DeliveryRing {
             "row_pos must be sized n_lanes * depth (dense, slot-major, lane-minor)"
         );
         let mut n_reachable = 0_usize;
-        for (flat, pos) in row_pos.iter().enumerate() {
-            let Some(pos) = *pos else { continue };
-            let slot = flat / self.n_lanes;
-            let lane = flat % self.n_lanes;
-            let row = row_start + pos;
+        for flat in 0..row_pos.len() {
+            let Some(row) = position_table_row(row_start, row_pos, flat) else {
+                continue;
+            };
+            let (slot, lane) = self.slot_lane_at(flat);
             col_entries[self.out_col(slot, lane)].push((row, 1.0));
             if slot + 1 < self.depth {
                 col_entries[self.in_col(slot + 1, lane)].push((row, -1.0));
@@ -207,11 +263,11 @@ impl DeliveryRing {
             "row_pos must be sized n_lanes * depth (dense, slot-major, lane-minor)"
         );
         let mut n_reachable = 0_usize;
-        for (flat, pos) in row_pos.iter().enumerate() {
-            let Some(pos) = *pos else { continue };
-            let slot = flat / self.n_lanes;
-            let lane = flat % self.n_lanes;
-            let row = row_start + pos;
+        for flat in 0..row_pos.len() {
+            let Some(row) = position_table_row(row_start, row_pos, flat) else {
+                continue;
+            };
+            let (slot, lane) = self.slot_lane_at(flat);
             col_entries[self.out_col(slot, lane)].push((row, 1.0));
             col_entries[self.in_col(slot, lane)].push((row, -1.0));
             n_reachable += 1;
@@ -234,7 +290,6 @@ impl DeliveryRing {
     pub(super) fn freeze_masked_columns(
         &self,
         row_pos: &[Option<usize>],
-        col_base: usize,
         reachable_bound: (f64, f64),
         bufs: &mut ColumnBufs<'_>,
     ) {
@@ -245,7 +300,8 @@ impl DeliveryRing {
         );
         let (reachable_lower, reachable_upper) = reachable_bound;
         for (offset, pos) in row_pos.iter().enumerate() {
-            let col = col_base + offset;
+            let (slot, lane) = self.slot_lane_at(offset);
+            let col = self.out_col(slot, lane);
             if pos.is_some() {
                 bufs.col_lower[col] = reachable_lower;
                 bufs.col_upper[col] = reachable_upper;
@@ -303,83 +359,81 @@ impl DeliveryRing {
     }
 }
 
-/// One anticipated ring-window visit: a plant's modular ring slot and its own
-/// physical delivery target for one ring-axis position. Bundled `Copy` struct
-/// rather than separate closure arguments, mirroring
-/// [`super::fpha_cursor::FphaVisit`].
-#[derive(Debug, Clone, Copy)]
-pub(super) struct RingResidue {
-    /// Modular ring slot `ring_index(target) mod k_max` this visit lands on.
-    pub(super) slot: usize,
-    /// Anticipated-local plant (ring lane) index.
-    pub(super) plant: usize,
-    /// The plant's own physical delivery target at this ring-axis position
-    /// ([`PointResolution::physical_target`] of the window index).
-    pub(super) target: usize,
+/// The maturing-now bucket's incoming column (`in_col(0, 0)`) for downstream
+/// `plant`, or `None` when it declares no incoming arc. The single owner of
+/// [`DeliveryRing::transit_bucket`]'s `in_col(0, 0)` read both water-balance
+/// fills, and the generic-constraint `hydro_inflow` resolver, share.
+pub(super) fn maturing_bucket_in_col(state: &StateSpace, plant: HydroSys) -> Option<usize> {
+    DeliveryRing::transit_bucket(state, plant).map(|bucket| bucket.ring.in_col(0, 0))
 }
 
-/// Walk the stage's strictly-future anticipated ring window
-/// `{stage_idx + 1 ..= stage_idx + k_max}`, invoking `visit` once per
-/// `(ring residue, plant)` in depth-major/plant-minor order.
+/// Resolve this stage's incoming maturing bucket `arrival_density` (fixed-delivery-density
+/// contract): a lookup of the setup-precomputed per-`(arc, arrival stage)` blend
+/// ([`build_arc_arrival_density`](crate::bucket_topology::build_arc_arrival_density)),
+/// already resolved in this arrival stage's own frame. Falls back to duration-weighted
+/// uniform only where the table holds no blend (the study's first stage) or the plant has
+/// no travel-time upstream.
 ///
-/// Single owner of the anticipated delivery-axis → ring-slot map the three
-/// anticipated fills share: each visit resolves the ring-axis slot and the
-/// plant's OWN physical delivery target through its per-plant excision, so
-/// `slot = ring_index(target) mod k_max` has one home instead of three inlined
-/// residue loops. Keying the slot on the raw delivery axis (`m mod k_max`) is
-/// the forbidden alternative — injective only on a contiguous run, which a
-/// plant's excised fixed post-horizon window breaks; see
-/// [`PointResolution::ring_index`]/[`PointResolution::physical_target`] (the
-/// ring-axis contract) and [`DeliveryRing`]'s out/in columns, pinned via
-/// `state_to_lp_incoming_column` (the column-bound-pinning contract).
+/// A non-travel-time upstream is EXCLUDED, never folded in via `uniform`: it would
+/// disagree with the sole travel-time arc's non-uniform density — a false
+/// heterogeneous-confluence panic in debug, a silent uniform split in release.
 ///
-/// The depth-major/plant-minor order is load-bearing: the carry-row family
-/// compacts its row positions in exactly this order. A plant whose physical
-/// target lands beyond the extended delivery calendar
-/// (`target >= delivery_stage_count`) is skipped, never visited. The closure
-/// is a monomorphised `FnMut` reusing the caller's buffers — no `Box<dyn>` and
-/// no per-residue allocation; the per-stage resolution set is built once and
-/// reused across the whole window.
-pub(super) fn for_each_ring_residue<F>(
-    state: &StateSpace,
-    n_stages: usize,
+/// A heterogeneous-density confluence has no resolved policy;
+/// `check_chronological_confluence_heterogeneous_travel_time` (`cobre-io`) rejects it at
+/// config time, so the `debug_assert!` below is a defensive backstop, not the enforcement
+/// point.
+pub(super) fn resolve_bucket_arrival_density(
+    ctx: &TemplateBuildCtx<'_>,
+    clock: BlockClock<'_>,
     stage_idx: usize,
-    mut visit: F,
-) where
-    F: FnMut(RingResidue, &PointResolution),
-{
-    let n_anticipated = state.n_anticipated;
-    let k_max = state.k_max;
-    if n_anticipated == 0 || k_max == 0 {
-        return;
-    }
-    let n_delivery = state.delivery_stage_count(n_stages);
-    let points: Vec<Cow<'_, PointResolution>> = (0..n_anticipated)
-        .map(|plant| anticipated_resolution_for(state, AnticipatedLocal::new(plant), n_stages))
-        .collect();
-    for depth in 0..k_max {
-        let r = stage_idx + depth + 1;
-        let slot = r % k_max;
-        for (plant, point) in points.iter().enumerate() {
-            let target = point.physical_target(r);
-            if target >= n_delivery {
-                continue;
-            }
-            visit(
-                RingResidue {
-                    slot,
-                    plant,
-                    target,
-                },
-                point,
+    downstream_id: EntityId,
+    n_blks: usize,
+) -> Vec<f64> {
+    let uniform = || {
+        (0..n_blks)
+            .map(|b| clock.hours(BlockIdx::new(b)) / clock.total_hours())
+            .collect::<Vec<f64>>()
+    };
+
+    let mut chosen: Option<Vec<f64>> = None;
+    for &up_id in ctx.cascade.upstream(downstream_id) {
+        let Some(u_idx) = ctx.positions.hydro(up_id) else {
+            continue;
+        };
+        let Some(by_stage) = ctx.topology.arc_arrival_density.get(&u_idx) else {
+            continue;
+        };
+        let candidate = by_stage[stage_idx].clone().map_or_else(uniform, |density| {
+            debug_assert_eq!(
+                density.len(),
+                n_blks,
+                "arc {u_idx} stage {stage_idx}: arrival_density length must equal n_blks"
             );
+            density
+        });
+        match &chosen {
+            None => chosen = Some(candidate),
+            Some(existing) => {
+                debug_assert!(
+                    existing.len() == candidate.len()
+                        && existing
+                            .iter()
+                            .zip(&candidate)
+                            .all(|(&a, &b)| (a - b).abs() < 1e-9),
+                    "confluence with heterogeneous chronological delivery densities into \
+                     one downstream plant is not yet supported (arc {u_idx} disagrees at \
+                     stage {stage_idx})"
+                );
+            }
         }
     }
+    chosen.unwrap_or_else(uniform)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ColumnBufs, DeliveryRing};
+    use super::{ColumnBufs, DeliveryRing, PlantBucketRing};
+    use crate::indexer::HydroSys;
 
     /// One ring instance per lane (`n_lanes = 1`), mirroring the water ring's
     /// per-plant contiguous addressing: lane A is 3 slots deep (every
@@ -533,7 +587,7 @@ mod tests {
                 col_upper: &mut col_upper,
                 objective: &mut objective,
             };
-            ring.freeze_masked_columns(&row_pos, 50, reachable_bound, &mut bufs);
+            ring.freeze_masked_columns(&row_pos, reachable_bound, &mut bufs);
 
             assert_eq!(col_lower[50], reachable_bound.0, "{label}: col 50 lower");
             assert_eq!(col_upper[50], reachable_bound.1, "{label}: col 50 upper");
@@ -608,5 +662,95 @@ mod tests {
         let ring = DeliveryRing::new(0..9, 0..9, 3, 3);
         assert_eq!(ring.slot_target(1, 1), 1);
         assert_eq!(ring.slot_target(2, 3), 8);
+    }
+
+    /// At `depth == 1`, `emit_shift_rows`'s `slot + 1 < depth` guard is always
+    /// false, so every reachable lane writes only its outgoing column and no
+    /// incoming-column entry — the multi-lane (`n_lanes = 2`) extension of
+    /// `emit_shift_rows_drops_the_shift_term_past_a_lanes_own_depth`'s
+    /// single-lane depth-1 case.
+    #[test]
+    fn depth_one_emit_shift_rows_never_writes_an_in_col_entry() {
+        let ring = DeliveryRing::new(100..102, 200..202, 2, 1);
+        let row_pos = vec![Some(0), Some(1)];
+        let mut entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); 210];
+
+        let n = ring.emit_shift_rows(&row_pos, 0, &mut entries);
+
+        assert_eq!(n, 2, "both lanes are reachable at depth 1");
+        assert_eq!(entries[ring.out_col(0, 0)], vec![(0, 1.0)]);
+        assert_eq!(entries[ring.out_col(0, 1)], vec![(1, 1.0)]);
+        assert!(
+            entries[ring.in_col(0, 0)].is_empty() && entries[ring.in_col(0, 1)].is_empty(),
+            "the slot+1<depth guard is unconditionally false at depth 1"
+        );
+    }
+
+    /// At `depth == 1` every column either `emit_shift_rows` or
+    /// `emit_carry_rows` touches lies in `{out_col(0, lane), in_col(0, lane)}`
+    /// for some lane — the latch/fish column pair every anticipated-ring
+    /// caller already addresses at that depth, so switching between the two
+    /// interior-transition primitives cannot introduce a third column.
+    #[test]
+    fn depth_one_column_footprint_coincides_between_shift_and_carry() {
+        let ring = DeliveryRing::new(100..102, 200..202, 2, 1);
+        let row_pos = vec![Some(0), Some(1)];
+
+        let mut shift_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); 210];
+        ring.emit_shift_rows(&row_pos, 0, &mut shift_entries);
+
+        let mut carry_entries: Vec<Vec<(usize, f64)>> = vec![Vec::new(); 210];
+        let n_carry = ring.emit_carry_rows(&row_pos, 0, &mut carry_entries);
+        assert_eq!(
+            n_carry, 2,
+            "unlike emit_shift_rows, emit_carry_rows fires at depth 1 over a reachable row_pos"
+        );
+
+        let latch_fish_columns = [
+            ring.out_col(0, 0),
+            ring.out_col(0, 1),
+            ring.in_col(0, 0),
+            ring.in_col(0, 1),
+        ];
+        for (col, (shift, carry)) in shift_entries.iter().zip(carry_entries.iter()).enumerate() {
+            let touched = !shift.is_empty() || !carry.is_empty();
+            assert!(
+                !touched || latch_fish_columns.contains(&col),
+                "column {col} lies outside the depth-1 {{latch, fish}} column set"
+            );
+        }
+    }
+
+    /// A two-plant state (H1 depth 2, H3 depth 3) yields one `PlantBucketRing`
+    /// per plant, each addressed at its own local offset, and `transit_bucket`
+    /// looks up a declared plant while missing an undeclared one.
+    #[test]
+    fn transit_buckets_builds_each_plant_ring_over_its_bucket_run() {
+        let h1 = HydroSys::new(1);
+        let h3 = HydroSys::new(3);
+        let state = crate::test_support::state_layout_with_transit_buckets(
+            4,
+            0,
+            vec![(h1, 1), (h1, 2), (h3, 1), (h3, 2), (h3, 3)],
+            vec![],
+        );
+
+        let buckets: Vec<PlantBucketRing> = DeliveryRing::transit_buckets(&state).collect();
+        assert_eq!(buckets.len(), 2);
+        for bucket in &buckets {
+            let out_block = state.bucket_outgoing_block(bucket.local.clone());
+            let in_block = state.bucket_incoming_block(bucket.local.clone());
+            for s in 0..bucket.local.len() {
+                assert_eq!(bucket.ring.out_col(s, 0), out_block.start + s);
+                assert_eq!(bucket.ring.in_col(s, 0), in_block.start + s);
+            }
+        }
+
+        let h3_bucket =
+            DeliveryRing::transit_bucket(&state, h3).expect("H3 must have a declared bucket");
+        assert_eq!(h3_bucket.plant, buckets[1].plant);
+        assert_eq!(h3_bucket.local, buckets[1].local);
+
+        assert!(DeliveryRing::transit_bucket(&state, HydroSys::new(0)).is_none());
     }
 }

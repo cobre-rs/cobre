@@ -156,10 +156,6 @@ pub fn freeze_rows_into_template(
     out.num_rows = num_rows;
     out.num_nz = total_nnz;
     out.n_state = base.n_state;
-    out.n_transfer = base.n_transfer;
-    out.n_dual_relevant = base.n_dual_relevant;
-    out.n_hydro = base.n_hydro;
-    out.max_par_order = base.max_par_order;
 
     out.col_lower.extend_from_slice(&base.col_lower);
     out.col_upper.extend_from_slice(&base.col_upper);
@@ -273,10 +269,6 @@ mod tests {
             row_lower: vec![6.0, 14.0],
             row_upper: vec![6.0, 14.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -318,10 +310,6 @@ mod tests {
         assert_eq!(out.row_lower, base.row_lower);
         assert_eq!(out.row_upper, base.row_upper);
         assert_eq!(out.n_state, base.n_state);
-        assert_eq!(out.n_transfer, base.n_transfer);
-        assert_eq!(out.n_dual_relevant, base.n_dual_relevant);
-        assert_eq!(out.n_hydro, base.n_hydro);
-        assert_eq!(out.max_par_order, base.max_par_order);
         // empty row_scale stays empty
         assert!(out.row_scale.is_empty());
     }
@@ -431,10 +419,6 @@ mod tests {
             row_lower: vec![0.0; 5],
             row_upper: vec![f64::INFINITY; 5],
             n_state: 0,
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         };
@@ -469,10 +453,6 @@ mod tests {
             row_lower: vec![0.0; 4],
             row_upper: vec![f64::INFINITY; 4],
             n_state: 0,
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         };
@@ -549,10 +529,6 @@ mod tests {
             row_lower: vec![0.0; 3],
             row_upper: vec![f64::INFINITY; 3],
             n_state: 2,
-            n_transfer: 1,
-            n_dual_relevant: 2,
-            n_hydro: 2,
-            max_par_order: 1,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         };
@@ -744,10 +720,6 @@ mod tests {
             row_lower: vec![],
             row_upper: vec![],
             n_state: 0,
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         };
@@ -784,10 +756,6 @@ mod tests {
             row_lower: vec![0.0; 3],
             row_upper: vec![f64::INFINITY; 3],
             n_state: 2,
-            n_transfer: 1,
-            n_dual_relevant: 2,
-            n_hydro: 2,
-            max_par_order: 1,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         };

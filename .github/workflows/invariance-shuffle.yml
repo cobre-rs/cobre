@@ -31,7 +31,7 @@ jobs:
           tool: nextest
       - name: Full shuffle matrix (HiGHS)
         run: |
-          cargo nextest run -p cobre-sddp --features slow-tests --test parity \
+          cargo nextest run -p cobre-sddp --features "slow-tests test-support" --test parity \
             -E 'test(shuffle_matrix)' --run-ignored ignored-only
 
   shuffle-matrix-clp:
@@ -52,5 +52,5 @@ jobs:
           tool: nextest
       - name: Full shuffle matrix (CLP)
         run: |
-          cargo nextest run -p cobre-sddp --no-default-features --features "clp slow-tests" \
+          cargo nextest run -p cobre-sddp --no-default-features --features "clp slow-tests test-support" \
             --test parity -E 'test(shuffle_matrix)' --run-ignored ignored-only

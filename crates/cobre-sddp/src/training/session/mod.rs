@@ -59,7 +59,7 @@ use crate::{
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_GRACEFUL_SHUTDOWN,
     training::{TrainingOutcome, TrainingResult, broadcast_basis_cache},
-    workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
+    workspace::{BasisStore, NoisePreallocation, WorkspacePool, WorkspaceSizing},
 };
 
 // ---------------------------------------------------------------------------
@@ -168,7 +168,7 @@ where
         let state = training_ctx.state;
         let num_stages = horizon.num_stages();
         let total_forward_passes = config.loop_config.forward_passes as usize;
-        let ranks = RankDistribution::new(comm, num_stages, total_forward_passes, state.n_state);
+        let ranks = RankDistribution::new(comm, total_forward_passes);
 
         // Map the first training iteration to slot `warm_start_count` so
         // training cuts pack densely with no reserved leading block.
@@ -188,7 +188,7 @@ where
         // can exceed every stage's own opening-tree size and overflow
         // `StageWorkerStatsBuffer`; the per-node term below covers it. On a chain
         // a node's successor IS the next stage, so it is already covered here.
-        let max_openings = (0..ranks.num_stages)
+        let max_openings = (0..num_stages)
             .map(|t| training_ctx.stochastic.opening_tree().n_openings(t))
             .max()
             .unwrap_or(0)
@@ -196,21 +196,13 @@ where
         let mut fwd_pool = WorkspacePool::try_new(
             ranks.fwd_rank,
             n_threads,
-            ranks.n_state,
+            training_ctx,
+            stage_ctx,
             WorkspaceSizing {
-                hydro_count: state.hydro_count,
-                max_par_order: state.max_par_order,
-                n_load_buses: stage_ctx.n_load_buses,
-                max_blocks: config.loop_config.max_blocks,
-                n_buckets: state.n_buckets,
-                downstream_par_order: stage_ctx.downstream_par_order,
                 max_openings,
                 initial_pool_capacity: max_pool_capacity,
-                n_state: ranks.n_state,
                 max_local_fwd: ranks.max_local_fwd,
-                noise_dim: training_ctx.stochastic.dim(),
-                n_anticipated: state.n_anticipated,
-                k_max: state.k_max,
+                noise: NoisePreallocation::StochasticDim,
             },
             solver_factory,
         )
@@ -235,7 +227,7 @@ where
         // DcsSolveScratch/DcsScoringScratch are shared per worker, not per pool,
         // so they must cover the LARGEST pool a worker's sweep may touch (same
         // `max_pool_capacity` the per-slot backward buffers size from).
-        fwd_pool.reserve_dcs_scratch(ranks.n_state, max_pool_capacity);
+        fwd_pool.reserve_dcs_scratch(state.n_state, max_pool_capacity);
 
         // Sized for max local forward passes so scenario indices stay stable
         // across iterations; the second axis is the node count (== num_stages on
@@ -244,13 +236,13 @@ where
 
         let actual_per_rank = per_rank_counts(total_forward_passes, ranks.num_ranks);
         let exchange_bufs = ExchangeBuffers::with_actual_counts(
-            ranks.n_state,
+            state,
             ranks.max_local_fwd,
             ranks.num_ranks,
             &actual_per_rank,
         );
         let cut_sync_bufs = CutSyncBuffers::with_distribution(
-            ranks.n_state,
+            state.n_state,
             ranks.max_local_fwd,
             ranks.num_ranks,
             total_forward_passes,
@@ -263,7 +255,7 @@ where
         let visited_archive = if needs_archive {
             Some(VisitedStatesArchive::new(
                 training_ctx.node_graph.nodes.len(),
-                ranks.n_state,
+                state.n_state,
                 config.loop_config.max_iterations,
                 total_forward_passes,
             ))
@@ -287,7 +279,7 @@ where
             event_sender.as_ref(),
             TrainingEvent::TrainingStarted {
                 case_name: String::new(),
-                stages: ranks.num_stages as u32,
+                stages: num_stages as u32,
                 hydros: state.hydro_count as u32,
                 thermals: 0,
                 ranks: ranks.num_ranks as u32,
@@ -314,22 +306,15 @@ where
         let lb_root_pool = training_ctx.node_graph.nodes[lb_root_node].pool_id;
         let scratch = IterationScratch::new(
             ranks.max_local_fwd,
-            ranks.num_stages,
             &training_ctx.node_graph.pool_stage,
-            ranks.n_state,
             fcf.pools[lb_root_pool].capacity,
             stage_ctx.template(StageIdx(0)).num_rows,
-            state.hydro_count,
-            state.max_par_order,
-            state.n_buckets,
-            state.n_anticipated,
-            state.k_max,
+            training_ctx,
             stage_ctx,
         );
 
         let n_workers_local = fwd_pool.workspaces.len();
-        let mut fwd_state =
-            ForwardPassState::new(n_workers_local, ranks.num_stages, ranks.max_local_fwd);
+        let mut fwd_state = ForwardPassState::new(n_workers_local, num_stages, ranks.max_local_fwd);
         fwd_state.set_profile(solver_profiles.forward);
         // Resolved once here, at training start — the study's node graph has
         // existed since `StudySetup` construction, and `resolve_enumerated_training_count`
@@ -363,15 +348,15 @@ where
             )));
         }
 
-        let real_states_capacity = exchange_bufs.real_total_scenarios() * ranks.n_state;
+        let real_states_capacity = exchange_bufs.real_total_scenarios() * state.n_state;
         let mut bwd_state = BackwardPassState::new(
             n_workers_local,
             ranks.num_ranks,
             max_openings,
             real_states_capacity,
             ranks.max_local_fwd,
-            ranks.n_state,
-            ranks.num_stages,
+            state,
+            horizon,
         );
         bwd_state.set_profile(solver_profiles.backward);
         bwd_state.set_scheduler(solver_profiles.backward_scheduler);
@@ -491,14 +476,14 @@ where
             self.fcf,
             u64::from(self.config.loop_config.forward_passes),
             self.training_ctx.node_graph,
-            self.ranks.num_stages,
+            self.training_ctx.horizon.num_stages(),
         );
         // Growth-only: a pool `grow_pools_for_next_iteration` just grew may now
         // exceed what the DCS scratch covers; re-reserve before the next
         // sweep touches it (never inside the sweep itself).
         let max_pool_capacity = self.fcf.pools.iter().map(|p| p.capacity).max().unwrap_or(0);
         self.fwd_pool
-            .reserve_dcs_scratch(self.ranks.n_state, max_pool_capacity);
+            .reserve_dcs_scratch(self.training_ctx.state.n_state, max_pool_capacity);
 
         let (lb, lb_lp_solves, lb_wall_ms, lb_solve_time_ms) = self.run_lower_bound(iteration)?;
 
@@ -898,7 +883,7 @@ where
                 // Uniform effective CVaR: gather per-path per-stage costs and apply
                 // the nested risk recursion (the end-of-horizon `Σ w·c` cannot
                 // represent a nested measure — it can fall below the nested LB).
-                let num_stages = self.ranks.num_stages;
+                let num_stages = self.training_ctx.horizon.num_stages();
                 let local_n = forward_result.scenario_costs.len();
                 self.scratch.ub_stage_costs.clear();
                 for i in 0..local_n * num_stages {
@@ -994,7 +979,7 @@ where
             TrainingEvent::BackwardPassComplete {
                 iteration,
                 rows_generated: backward_result.cuts_generated as u32,
-                stages_processed: self.ranks.num_stages.saturating_sub(1) as u32,
+                stages_processed: self.training_ctx.horizon.num_stages().saturating_sub(1) as u32,
                 elapsed_ms: backward_result.elapsed_ms,
                 state_exchange_time_ms: backward_result.state_exchange_time_ms,
                 row_batch_build_time_ms: backward_result.cut_batch_build_time_ms,
@@ -1041,7 +1026,7 @@ where
             && strategy.should_run(iteration)
         {
             let sel_start = Instant::now();
-            let num_sel_stages = self.ranks.num_stages.saturating_sub(1);
+            let num_sel_stages = self.training_ctx.horizon.num_stages().saturating_sub(1);
             let mut rows_deactivated = 0u32;
             let mut per_stage = Vec::with_capacity(num_sel_stages);
 
@@ -1245,7 +1230,7 @@ where
                 TrainingEvent::PolicyBudgetEnforcementComplete {
                     iteration,
                     rows_evicted: total_evicted,
-                    stages_processed: self.ranks.num_stages as u32,
+                    stages_processed: self.training_ctx.horizon.num_stages() as u32,
                     enforcement_time_ms,
                 },
             );
@@ -1276,7 +1261,7 @@ where
             #[allow(clippy::cast_possible_truncation)]
             TrainingEvent::PolicyTemplateFreezeComplete {
                 iteration,
-                stages_processed: self.ranks.num_stages as u32,
+                stages_processed: self.training_ctx.horizon.num_stages() as u32,
                 total_rows_frozen,
                 freeze_time_ms,
             },
@@ -1299,13 +1284,10 @@ where
     /// `skip_static_terminal` skips any pool whose base stage is the terminal
     /// stage (`pool_stage[p] == StageIdx(num_stages - 1)`): a terminal leaf never
     /// adds or removes a cut, so its template is baked once by
-    /// [`prime_frozen_templates`] (`false`) and left untouched by every
+    /// [`Self::prime_frozen_templates`] (`false`) and left untouched by every
     /// per-iteration refreeze (`true`). Skipping is deliberately confined to this
     /// flag, never a `pool_stage`-derived early return baked into the loop bounds,
-    /// so the priming call still bakes the terminal pool and captures
-    /// `scratch.terminal_has_boundary_cuts` from its active-cut count — the
-    /// static template property the forward pass reads instead of a live
-    /// pool lookup.
+    /// so the priming call still bakes the terminal pool.
     ///
     /// Deliberately left unoptimized: the refreeze is quadratic in the active-cut
     /// count only in the no-cut-selection default, which production never runs at
@@ -1315,16 +1297,13 @@ where
         let mut total_rows_frozen: u64 = 0;
         let state = self.training_ctx.state;
         let node_graph = self.training_ctx.node_graph;
-        let num_stages = self.ranks.num_stages;
+        let num_stages = self.training_ctx.horizon.num_stages();
         let terminal_stage = (num_stages > 0).then(|| StageIdx(num_stages - 1));
         for p in 0..node_graph.n_pools {
             let t = node_graph.pool_stage[p];
             let is_terminal = terminal_stage == Some(t);
             if skip_static_terminal && is_terminal {
                 continue;
-            }
-            if is_terminal {
-                self.scratch.terminal_has_boundary_cuts = self.fcf.pools[p].active_count() > 0;
             }
             build_cut_row_batch_into(
                 &mut self.scratch.freeze_row_batches[p],
@@ -1351,7 +1330,7 @@ where
     /// Seed the per-scenario basis store from a checkpoint's stored bases
     /// before the first training iteration runs.
     ///
-    /// `cache` carries one [`CapturedBasis`](crate::workspace::CapturedBasis)
+    /// `cache` carries one [`CapturedBasis`]
     /// per canonical node (built by
     /// [`build_basis_cache_from_checkpoint`](crate::build_basis_cache_from_checkpoint)).
     /// The checkpoint holds a single basis per node; the forward pass keeps one
@@ -1548,12 +1527,12 @@ mod tests {
     use crate::{
         CutPool, SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
         config::{CutManagementConfig, EventConfig, LoopConfig},
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         cut::fcf::FutureCostFunction,
         error::SddpError,
         horizon_mode::HorizonMode,
         inflow_method::InflowNonNegativityMethod,
-        lp::builder::StateBox,
+        lp::builder::{StageGeometry, StateBox},
         lp::indexer::{CutStateProjection, StateSpace, StudyDimensions},
         risk_measure::RiskMeasure,
         setup::node_graph::StageIdx,
@@ -1561,7 +1540,9 @@ mod tests {
             NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor, OpeningSource,
         },
         solver_stats::WORKER_STATS_ENTRY_STRIDE,
-        test_support::{self, permissive_state_boxes},
+        test_support::{
+            self, StageContextFixture, equipment_free_geometry, permissive_state_boxes,
+        },
     };
 
     // ── Shared helpers (mirrors training.rs test helpers) ──────────────────
@@ -1580,10 +1561,6 @@ mod tests {
             row_lower: vec![0.0, 0.0],
             row_upper: vec![0.0, 0.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -1900,7 +1877,6 @@ mod tests {
                 max_iterations,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit_rules(limit),
             },
             cut_management: CutManagementConfig {
@@ -1920,36 +1896,10 @@ mod tests {
 
     fn make_stage_ctx<'a>(
         templates: &'a [StageTemplate],
-        base_rows: &'a [usize],
-        block_counts: &'a [usize],
+        geometry_per_stage: &'a [StageGeometry],
         state_boxes: &'a [StateBox],
-    ) -> StageContext<'a> {
-        StageContext {
-            geometry_per_stage: &[],
-            templates,
-            state_boxes,
-            base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: block_counts,
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        }
+    ) -> StageContextFixture<'a> {
+        StageContextFixture::new(templates, state_boxes, geometry_per_stage)
     }
 
     fn make_training_ctx<'a>(
@@ -1994,7 +1944,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2007,7 +1956,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2072,7 +2023,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2088,7 +2038,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2164,7 +2116,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2181,7 +2132,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2230,7 +2183,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2247,7 +2199,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2299,7 +2253,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2314,7 +2267,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2357,7 +2312,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2372,7 +2326,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2430,7 +2386,6 @@ mod tests {
         let n_stages = 2;
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2447,7 +2402,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, n_stages);
         let node_graph_fixture = test_support::chain_node_graph(&stochastic);
@@ -2917,7 +2874,6 @@ mod tests {
         let node_graph = interior_branching_node_graph();
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -2937,7 +2893,9 @@ mod tests {
         let comm = Rank0Of2;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts =
             test_support::all_enabled_cut_state_layouts(&state, node_graph.n_pools);
@@ -2994,7 +2952,6 @@ mod tests {
         let node_graph = interior_branching_node_graph();
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -3014,7 +2971,9 @@ mod tests {
         let comm = StubComm;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts =
             test_support::all_enabled_cut_state_layouts(&state, node_graph.n_pools);
@@ -3050,7 +3009,6 @@ mod tests {
         let node_graph = trunk_terminal_fan_node_graph();
         let state = test_support::state_layout(1, 0);
         let templates = vec![minimal_template(state.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let stages = make_stages(n_stages);
@@ -3070,7 +3028,9 @@ mod tests {
         let comm = Rank0Of2;
         let block_counts = vec![1usize; n_stages];
         let state_boxes = permissive_state_boxes(templates[0].n_state, n_stages);
-        let stage_ctx = make_stage_ctx(&templates, &base_rows, &block_counts, &state_boxes);
+        let geometry = equipment_free_geometry(&block_counts);
+        let fixture = make_stage_ctx(&templates, &geometry, &state_boxes);
+        let stage_ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let cut_state_layouts =
             test_support::all_enabled_cut_state_layouts(&state, node_graph.n_pools);

@@ -2,6 +2,15 @@
 
 use super::*;
 
+use super::common::in_code_studies::{discounted_anticipated_study, mixed_lead_anticipated_study};
+use super::common::{build_setup_in_code, run_simulation};
+use cobre_io::Config;
+use cobre_io::config::{SimulationConfig as IoSimulationConfig, SimulationSelection};
+use cobre_sddp::test_support::template_structure::{
+    RingLaneKind, RowOwner, UnscaledMatrix, geometry_row_families, ring_lanes, row_owners,
+};
+use cobre_sddp::test_support::{constant_lead_resolution, equipment_free_geometry};
+
 #[test]
 fn min_outflow_active_col_bounds() {
     let result = build_active_violations_template();
@@ -67,11 +76,10 @@ fn operational_violation_objective_costs() {
     // Per-block: penalty * block_hours / COST_SCALE_FACTOR.
     let result = build_active_violations_template();
     let t = &result.templates[0];
-    let n_blks = 2;
     let indexer = &result.geometry_per_stage[0];
 
     let block_hours = [720.0, 48.0];
-    for (blk, &hours) in block_hours.iter().enumerate().take(n_blks) {
+    for (blk, &hours) in block_hours.iter().enumerate() {
         let expected = 1000.0 * hours / COST_SCALE_FACTOR;
         for &start in &[
             indexer.outflow_below_slack.start,
@@ -161,9 +169,10 @@ fn max_par_order_uses_par_lp_when_annual_present() {
     .expect("build_stage_templates_resolving_layout ok");
 
     assert_eq!(
-        result.templates[0].max_par_order, 12,
-        "annual component must widen max_par_order to 12, got {}",
-        result.templates[0].max_par_order
+        result.templates[0].n_state,
+        2 * (1 + 12),
+        "annual component must widen the PAR order to 12, so n_state == N*(1+12); got {}",
+        result.templates[0].n_state
     );
 }
 
@@ -212,9 +221,10 @@ fn max_par_order_classical_unchanged() {
     .expect("build_stage_templates_resolving_layout ok");
 
     assert_eq!(
-        result.templates[0].max_par_order, 3,
-        "classical-PAR max_par_order must remain 3, got {}",
-        result.templates[0].max_par_order
+        result.templates[0].n_state,
+        2 * (1 + 3),
+        "classical PAR order must remain 3, so n_state == N*(1+3); got {}",
+        result.templates[0].n_state
     );
 }
 
@@ -272,13 +282,14 @@ fn max_par_order_z_inflow_row_has_twelve_lag_entries() {
     .expect("build_stage_templates_resolving_layout ok");
 
     let t = &result.templates[0];
-    assert_eq!(
-        t.max_par_order, 12,
-        "precondition: max_par_order must be 12"
-    );
-
     let n_h = 2_usize;
     let l = 12_usize;
+    assert_eq!(
+        t.n_state,
+        n_h * (1 + l),
+        "precondition: the PAR order must be 12, so n_state == N*(1+12)"
+    );
+
     let row_z_inflow_h0 = 0_usize; // z_inflow rows start at 0
 
     // z_inflow column for hydro 0: col_z_inflow_start = N*(1+L) = 2*13 = 26.
@@ -311,33 +322,36 @@ fn max_par_order_z_inflow_row_has_twelve_lag_entries() {
 #[allow(clippy::cast_precision_loss)] // fixture values are small integers; no precision is lost
 fn parameter_coefficient_persists_across_stage_template_uses() {
     // Realistic-scale system: N=3, L=2, M=2, B_max=3.
-    // Row capacity = N + M*B_max + N = 3 + 2*3 + 3 = 12.
+    // Row capacity = M*B_max + N = 2*3 + 3 = 9.
     let n: usize = 3;
     let l: usize = 2;
     let m: usize = 2;
     let b_max: usize = 3;
 
-    let capacity_formula = n + m * b_max + n;
-    let mut buf = PatchBuffer::new(n, l, m, b_max, 0, 0, 0);
+    // `load_bus_indices`/`geometry_per_stage` are owners `PatchBuffer::new` reads
+    // only through `.len()`/`StageGeometry::max_blocks` (i.e. only `n_blks`);
+    // their content need not correspond to a real M=2-load-bus, N=3-hydro
+    // system — an equipment-free, `b_max`-block geometry supplies the block
+    // count, and an arbitrary `m`-long index slice supplies M.
+    let load_bus_indices: Vec<usize> = (0..m).collect();
+    let geometry_per_stage = equipment_free_geometry(&[b_max]);
+    let state = StateSpace::new(
+        n,
+        l,
+        Vec::new(),
+        vec![],
+        AnticipatedResolution::default(),
+        &vec![l; n],
+    );
+
+    let capacity_formula = m * b_max + n;
+    let mut buf = PatchBuffer::new(&state, &load_bus_indices, &geometry_per_stage);
 
     assert_eq!(
         buf.indices.len(),
         capacity_formula,
-        "PatchBuffer capacity must equal N + M*B_max + N; \
+        "PatchBuffer capacity must equal M*B_max + N; \
          formula change indicates new patch categories were added"
-    );
-
-    let n_state = n * (1 + l);
-    let state: Vec<f64> = (0..n_state).map(|i| (i + 1) as f64 * 10.0).collect();
-    let noise: Vec<f64> = (0..n).map(|h| h as f64 * 0.5).collect();
-    let base_row: usize = n; // water_balance_start = N
-
-    buf.fill_forward_patches(
-        &StateSpace::new(n, l, 0, Vec::new(), 0, 0, vec![], &vec![l; n]),
-        &state,
-        &noise,
-        base_row,
-        &[],
     );
 
     // Load — 2 load buses, 2 active blocks (< max 3). The per-stage grid
@@ -346,9 +360,10 @@ fn parameter_coefficient_persists_across_stage_template_uses() {
     let b_active: usize = 2;
     let load_rhs: Vec<f64> = (0..m * b_active).map(|i| 100.0 + i as f64).collect();
     let bus_positions: Vec<usize> = (0..m).collect();
-    let load_row_start: usize = 200; // arbitrary LP row offset
+    let load_start: usize = 200; // arbitrary LP row offset
+    let load_rows = BlockRowFamily::per_block(load_start..load_start + m * b_active);
     buf.fill_load_patches(
-        load_row_start,
+        load_rows,
         BlockGrid::new(b_active, 1),
         &load_rhs,
         &bus_positions,
@@ -356,16 +371,15 @@ fn parameter_coefficient_persists_across_stage_template_uses() {
     );
 
     let z_inflow_rhs: Vec<f64> = (0..n).map(|h| 80.0 + h as f64).collect();
-    let z_inflow_row_start: usize = 50;
-    buf.fill_z_inflow_patches(z_inflow_row_start, &z_inflow_rhs, &[]);
+    buf.fill_z_inflow_patches(&state, &z_inflow_rhs, &[]);
 
     // The count uses b_active, not B_max: any generic-constraint patching would push
-    // it past the N + M*B_max + N capacity into an out-of-bounds write.
-    let expected_count = n + m * b_active + n;
+    // it past the M*B_max + N capacity into an out-of-bounds write.
+    let expected_count = m * b_active + n;
     assert_eq!(
         buf.forward_patch_count(),
         expected_count,
-        "forward_patch_count must equal N + M*b_active + N; \
+        "forward_patch_count must equal M*b_active + N; \
          any generic-constraint patching would alter this count"
     );
 
@@ -751,7 +765,7 @@ fn test_anticipated_delivery_thermal_cost_is_zero() {
 
 /// The anticipated thermal's per-block cost is 0.0 at EVERY stage. The fishing
 /// constraint is always active for an anticipated plant, so `fill_thermal_columns`
-/// skips its per-block objective (via `anticipated_local_by_sys_pos`) at every
+/// skips its per-block objective (via `AnticipatedPlants::local_of`) at every
 /// stage — including pre-horizon stages before K_i matures — leaving the cost at
 /// its 0.0 initialization default.
 #[test]
@@ -933,7 +947,8 @@ fn test_anticipated_fishing_same_count_both_stages() {
 /// every slot a plant reaches under the HOLD geometry (interior carry OR active
 /// deposit), and frozen `[0, 0]` at a padding slot. Deposit slots are modular:
 /// slot `delivery mod k_max` (delivery = 0 + K_i). Slot-major layout:
-/// `col = col_anticipated_slots_out_start + slot * n_anticipated + plant`.
+/// `col = StateSpace::commit_out.start + slot * n_anticipated + plant`
+/// (`DeliveryRing::anticipated`'s `out_col(slot, plant)`).
 ///
 /// - col 0 (slot 0, plant 0): PADDING — plant 0 (K=1) delivers at stage 1
 ///   (slot `1 mod 2 = 1`); its delivery-2 (slot 0) is not yet decided at stage 0.
@@ -980,15 +995,11 @@ fn test_anticipated_state_columns_unconstrained() {
     );
 }
 
-/// One anticipated thermal with K=2, n_stages=4: the Cat 6 state-fixing slot at
-/// K_i-1 is a PURE IDENTITY row — the decision-write coefficient is removed (this
-/// test verifies that removal; the decision-write into `anticipated_state_out_def`
-/// is checked elsewhere).
-///
-/// Layout (no hydros, 1 bus, 1 block):
-///   n_state = n_ant_state = K = 2; state-fixing rows: 0, 1;
-///   col_anticipated_state_out_start: 2; col_anticipated_decision_start: 5;
-///   old Cat 6 slot row: row_fix_start + (K_i-1)*n_anticipated = 1.
+/// One anticipated thermal with K=2, n_stages=4: the incoming state is
+/// pinned by column bounds, so no row pins it — the decision column's one
+/// structural entry is its own deposit row in the delivery ring, never a
+/// row addressing `commit_in`/`storage_in`/`transit_buckets_in`/
+/// `inflow_lags` by equality.
 #[test]
 fn test_anticipated_decision_write_to_state_out_def_row() {
     let system = one_anticipated_thermal_system(4, 2, 0.0, 100.0);
@@ -1005,21 +1016,75 @@ fn test_anticipated_decision_write_to_state_out_def_row() {
 
     let t = &result.templates[0]; // stage 0: plant active (0+2<4)
     let col_dec = anticipated_decision_col(2);
+    let lead_stages = vec![2_usize];
+    let resolution = constant_lead_resolution(&lead_stages, 4);
+    let state = StateSpace::new(0, 0, Vec::new(), lead_stages, resolution, &[]);
+    let geom = &result.geometry_per_stage[0];
+    let matrix = UnscaledMatrix::of(t);
+    let owners = row_owners(&system, geom, &state);
 
-    // The decision-write lives on the def-row (-1.0 on decision, +1.0 on state_out),
-    // so the old state-fixing slot (row 1) holds no decision entry.
-    let old_state_fixing_row = 1_usize;
-    let entries_at_old_row = csc_entries_at(t, col_dec, old_state_fixing_row);
+    for (family, rows) in geometry_row_families(geom, &state) {
+        for row in rows {
+            let entries = matrix.row(row);
+            if entries.len() == 1 {
+                let (col, _) = entries[0];
+                let pinned = state.commit_in.contains(&col)
+                    || state.storage_in.contains(&col)
+                    || state.transit_buckets_in.contains(&col)
+                    || state.inflow_lags.contains(&col);
+                assert!(
+                    !(pinned && t.row_lower[row] == t.row_upper[row]),
+                    "stage 0, active plant K=2: {family} row {row}: incoming \
+                     state is pinned by column bounds; no row pins it"
+                );
+            }
+            if entries.iter().any(|&(c, _)| c == col_dec) {
+                assert!(
+                    matches!(owners.get(&row), Some(RowOwner::Load { .. })),
+                    "stage 0, active plant K=2: {family} row {row}: decision \
+                     column must enter only its own bus's load-balance rows, \
+                     got owner {:?}",
+                    owners.get(&row)
+                );
+            }
+        }
+    }
+
+    // Positive check: the decision's one structural entry is its own deposit
+    // row — the row where the matching ring lane's out_col also carries
+    // +1.0 (DeliveryRing::emit_deposit).
+    let decision_entries = matrix.col(col_dec);
+    assert_eq!(
+        decision_entries.len(),
+        1,
+        "stage 0, active plant K=2: decision column must have exactly one \
+         structural entry (its own deposit row), got {decision_entries:?}"
+    );
+    let (deposit_row, value) = decision_entries[0];
+    assert_eq!(
+        value, -1.0,
+        "stage 0, active plant K=2: decision column's deposit-row coefficient must be -1.0"
+    );
+    let decision_lane = ring_lanes(&state, geom)
+        .into_iter()
+        .find(|l| matches!(l.kind, RingLaneKind::Anticipated { lane: 0 }))
+        .expect("anticipated lane 0 must exist");
+    assert_eq!(decision_lane.decision_col, Some(col_dec));
     assert!(
-        entries_at_old_row.is_empty(),
-        "stage 0, active plant K=2: decision column must have NO entry at old state_fixing \
-         slot row={old_state_fixing_row} (Cat 6 write removed), \
-         got {entries_at_old_row:?}"
+        decision_lane.out_cols.iter().any(|&c| matrix
+            .col(c)
+            .iter()
+            .any(|&(r, v)| r == deposit_row && v == 1.0)),
+        "stage 0, active plant K=2: row {deposit_row} must also carry +1.0 on the \
+         lane's own out_col (the deposit row identity)"
     );
 }
 
-/// At an inactive stage (K=2, n_stages=4, stage 3: 3+2=5 > 4) the
-/// anticipated-decision column has no CSC entry at any state-fixing row.
+/// At an inactive stage (K=2, n_stages=4, stage 3: 3+2=5 > 4) the incoming
+/// state is pinned by column bounds, so no row pins it: the
+/// anticipated-decision column has no entry on any row addressing
+/// `commit_in`/`storage_in`/`transit_buckets_in`/`inflow_lags`, nor on any
+/// row outside its own bus's load-balance rows.
 #[test]
 fn test_anticipated_decision_inactive_no_state_write() {
     let system = one_anticipated_thermal_system(4, 2, 0.0, 100.0);
@@ -1035,18 +1100,39 @@ fn test_anticipated_decision_inactive_no_state_write() {
     .expect("build ok");
 
     let t = &result.templates[3]; // stage 3: 3+2=5 > 4 → inactive
-    // n_anticipated=1, k_max=2, n_ant_state=2.
     let col_dec = anticipated_decision_col(2);
-    // Check all n_ant_state state-fixing rows: none should have the decision entry.
-    let row_fix_start = 0_usize;
-    let n_ant_state = 2_usize; // n_anticipated=1 * k_max=2
-    for i in 0..n_ant_state {
-        let row = row_fix_start + i;
-        let entries = csc_entries_at(t, col_dec, row);
-        assert!(
-            entries.is_empty(),
-            "stage 3, inactive plant K=2: CSC at (col={col_dec}, row={row}) must be empty, got {entries:?}"
-        );
+    let lead_stages = vec![2_usize];
+    let resolution = constant_lead_resolution(&lead_stages, 4);
+    let state = StateSpace::new(0, 0, Vec::new(), lead_stages, resolution, &[]);
+    let geom = &result.geometry_per_stage[3];
+    let matrix = UnscaledMatrix::of(t);
+    let owners = row_owners(&system, geom, &state);
+
+    for (family, rows) in geometry_row_families(geom, &state) {
+        for row in rows {
+            let entries = matrix.row(row);
+            if entries.len() == 1 {
+                let (col, _) = entries[0];
+                let pinned = state.commit_in.contains(&col)
+                    || state.storage_in.contains(&col)
+                    || state.transit_buckets_in.contains(&col)
+                    || state.inflow_lags.contains(&col);
+                assert!(
+                    !(pinned && t.row_lower[row] == t.row_upper[row]),
+                    "stage 3, inactive plant K=2: {family} row {row}: incoming \
+                     state is pinned by column bounds; no row pins it"
+                );
+            }
+            if entries.iter().any(|&(c, _)| c == col_dec) {
+                assert!(
+                    matches!(owners.get(&row), Some(RowOwner::Load { .. })),
+                    "stage 3, inactive plant K=2: {family} row {row}: decision \
+                     column must enter only its own bus's load-balance rows, \
+                     got owner {:?}",
+                    owners.get(&row)
+                );
+            }
+        }
     }
 }
 
@@ -1079,33 +1165,6 @@ fn test_n_state_includes_n_ant_state() {
     );
 }
 
-/// Anticipated state does not participate in the transfer operation (the
-/// commitment-hold ring carry is handled in-LP): with n_hydros=0, max_par_order=0,
-/// `n_transfer = n_hydros * max_par_order = 0`.
-#[test]
-fn test_n_transfer_unchanged_by_anticipated() {
-    let system = two_anticipated_thermal_system(4);
-    let result = build_stage_templates_resolving_layout(
-        &system,
-        no_penalty_config(),
-        &PrecomputedPar::default(),
-        &PrecomputedNormal::default(),
-        &default_production(&system),
-        &default_evaporation(&system),
-        &ResolvedParameters::default(),
-    )
-    .expect("build ok");
-
-    let t = &result.templates[0];
-    // n_hydros=0, max_par_order=0 → n_transfer = n_hydros * max_par_order = 0.
-    let expected_n_transfer = 0_usize;
-    assert_eq!(
-        t.n_transfer, expected_n_transfer,
-        "n_transfer must equal n_hydros * max_par_order = {expected_n_transfer} (no anticipated contribution), got {}",
-        t.n_transfer
-    );
-}
-
 /// K=1 LP roundtrip: N=1 hydro, T=1 anticipated thermal (K=1), B=1 bus,
 /// 2 blocks × 360h, n_stages=4, no discounting.
 ///
@@ -1116,8 +1175,6 @@ fn test_n_transfer_unchanged_by_anticipated() {
 ///   is stages 0..2 for K=1; INACTIVE at boundary stage 3 (`3+1=4==n_stages`,
 ///   excluded by the strict predicate).
 /// - NPV objective coefficient at stage 0 (no discount): `50*720/1000 = 36.0`.
-/// - State-fixing CSC diagonal +1.0 for slot 0, plant 0.
-/// - Decision-write CSC +1.0 at row `1 + (K-1)*1 = 1` (slot K-1=0).
 /// - Fishing row CSC at stage 1 (first stage with K=1 <= stage_idx=1).
 /// - Fishing row equality bounds 0==0.
 #[test]
@@ -1281,8 +1338,8 @@ fn test_anticipated_thermals_lp_roundtrip_k1() {
 /// - `num_cols == 30` and `num_rows` per stage match K=2 formula.
 /// - Bounds: active at t=0 (`0+2=2<4`), active at t=1 (`1+2=3<4`),
 ///   INACTIVE at boundary t=2 (`2+2=4 NOT < 4`) and t=3 (`3+2=5>4`).
-/// - Decision-write: slot K-1=1; at stage 0 active, col has +1.0 at
-///   `row_fix_start + 1 = 2`.
+/// - Interior carry row: `out(slot 1)` and `in(slot 1)` hold the same-slot
+///   carry identity (+1.0/-1.0), never the retired shift target `in(slot+1)`.
 /// - Fishing row active at stage 2 (K=2 <= 2), absent at stage 1 (K=2 > 1).
 /// - Fishing row CSC pattern at stage 2.
 #[test]
@@ -1469,7 +1526,8 @@ fn test_anticipated_thermals_lp_roundtrip_k2() {
 /// - `num_cols == 31` and `num_rows` per stage match K=3 formula.
 /// - Bounds: active at t=0 (`0+3=3 < 4`), INACTIVE at boundary t=1
 ///   (`1+3=4 NOT < 4`), t=2 (`2+3=5>4`), and t=3.
-/// - Decision-write: slot K-1=2; at stage 0, col has +1.0 at row_fix_start+2=3.
+/// - Interior carry rows: `out(slot)` and `in(slot)` hold the same-slot
+///   carry identity (+1.0/-1.0) for slots 1 and 2.
 /// - Fishing rows: absent at t=0,1,2; present at t=3 (K=3 <= 3).
 /// - Fishing row CSC pattern at stage 3.
 #[test]
@@ -1712,16 +1770,6 @@ fn test_anticipated_thermals_lp_roundtrip_k0_baseline_parity() {
             ta.n_state, tb.n_state
         );
         assert_eq!(
-            ta.n_transfer, tb.n_transfer,
-            "parity: stage {s} n_transfer must match ({} vs {})",
-            ta.n_transfer, tb.n_transfer
-        );
-        assert_eq!(
-            ta.n_dual_relevant, tb.n_dual_relevant,
-            "parity: stage {s} n_dual_relevant must match ({} vs {})",
-            ta.n_dual_relevant, tb.n_dual_relevant
-        );
-        assert_eq!(
             ta.col_starts, tb.col_starts,
             "parity: stage {s} col_starts differ between two builds"
         );
@@ -1768,7 +1816,7 @@ fn test_anticipated_thermals_lp_roundtrip_k0_baseline_parity() {
     );
     assert_eq!(
         result_baseline.templates[0].num_rows, 12,
-        "K=0 baseline: num_rows must be 12 (state-fixing rows removed in Phase 1)"
+        "K=0 baseline: num_rows must be 12 (no rows pin incoming state)"
     );
 }
 
@@ -1810,5 +1858,177 @@ fn test_anticipated_thermals_lp_roundtrip_k2_with_discount_rate() {
         rel_err < 1e-12,
         "K=2 with 6% discount: stage 0 anticipated_decision objective must be {expected_obj:.15} \
          (rel_err={rel_err:.2e}), got {actual_obj:.15}"
+    );
+}
+
+/// A decision taken at stage 1 is priced in stage-1 units, like every other
+/// stage-1 cost: `D(3) / D(1)`, so the θ cascade's `D(1)` brings it to `D(3)` at
+/// the root instead of `D(1)·D(3)`.
+#[test]
+fn test_anticipated_decision_after_stage_zero_is_priced_relative_to_its_own_stage() {
+    let k = 2_usize;
+    let annual_rate = 0.06_f64;
+    let total_hours = 2.0 * 360.0_f64;
+
+    let system = build_hydro_one_ant_system(4, k as u32, annual_rate);
+    let result = build_stage_templates_resolving_layout(
+        &system,
+        no_penalty_config(),
+        &PrecomputedPar::default(),
+        &PrecomputedNormal::default(),
+        &default_production(&system),
+        &default_evaporation(&system),
+        &ResolvedParameters::default(),
+    )
+    .expect("K=2 discount build ok");
+
+    let per_stage_factor = 1.0 / (1.0 + annual_rate).powf(31.0 / 365.25);
+    let decision_stage = 1;
+    let delivery_stage = decision_stage + k;
+    let relative_discount = per_stage_factor.powi((delivery_stage - decision_stage) as i32);
+    let expected_obj = 50.0 * total_hours * relative_discount / COST_SCALE_FACTOR;
+
+    let actual_obj = result.templates[decision_stage].objective[rt_col_ant_dec_start(k)];
+    let rel_err = (actual_obj - expected_obj).abs() / expected_obj.abs().max(f64::EPSILON);
+    assert!(
+        rel_err < 1e-12,
+        "stage {decision_stage} anticipated_decision objective must be \
+         50 * {total_hours} * D({delivery_stage})/D({decision_stage}) / COST_SCALE_FACTOR = \
+         {expected_obj:.15} (rel_err={rel_err:.2e}), got {actual_obj:.15}"
+    );
+}
+
+/// Every active in-study anticipated decision is priced relative to its own
+/// decision stage's discount, `D(t + 2)/D(t)` — never the absolute delivery
+/// discount `D(t + 2)`.
+#[test]
+fn discounted_anticipated_study_prices_each_decision_relative_to_its_stage() {
+    let (system, config) = discounted_anticipated_study();
+    let setup = build_setup_in_code(system, &config);
+    let stage_ctx = setup.stage_ctx();
+    let d = stage_ctx.cumulative_discount_factors;
+
+    let mut checked_after_stage_zero = false;
+    for t in 0..stage_ctx.templates.len() {
+        let decision_col = stage_ctx.geometry_per_stage[t].anticipated_decision.start;
+        let template = &stage_ctx.templates[t];
+        if template.col_upper[decision_col] == 0.0 {
+            continue;
+        }
+        let unscaled = template.objective[decision_col] * stage_ctx.cost_scale_factor
+            / template.col_scale[decision_col];
+        let expected = 50.0 * 720.0 * d[t + 2] / d[t];
+        let rel_err = (unscaled - expected).abs() / expected.abs().max(1e-12);
+        assert!(
+            rel_err < 1e-12,
+            "stage {t}: unscaled anticipated decision objective must be \
+             50 * 720 * D({})/D({t}) = {expected:.15}, got {unscaled:.15} (rel_err={rel_err:.2e})",
+            t + 2,
+        );
+        checked_after_stage_zero |= t >= 1;
+    }
+    assert!(
+        checked_after_stage_zero,
+        "vacuity guard: no active anticipated decision at t >= 1 was checked"
+    );
+}
+
+/// The discounted-anticipated fixture's stage-1 anticipated decision is
+/// costed: `LeadStages(2)` on a 4-stage horizon decides stages 0 and 1, both
+/// delivering after stage 0, and the decision column's objective coefficient
+/// must be non-zero for the discount path to be exercised at all.
+#[test]
+fn discounted_anticipated_fixture_decides_after_stage_zero() {
+    let (system, config) = discounted_anticipated_study();
+    let setup = build_setup_in_code(system, &config);
+
+    let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[1];
+    assert!(
+        !geometry.anticipated_decision.is_empty(),
+        "stage 1 must have an active anticipated-decision column"
+    );
+    let template = &setup.inputs.stage_data.stage_templates.templates[1];
+    assert!(
+        template.objective[geometry.anticipated_decision.start] > 0.0,
+        "stage 1's anticipated decision must carry a nonzero costed objective coefficient"
+    );
+}
+
+/// The mixed-lead fixture's `LeadStages(3)` thermal has no in-study delivery
+/// target left at decision stages 2-4 (`n_stages == 5`), so each of those
+/// decision columns must be costed against the declared post-study calendar
+/// — the coverage the fixture's own doc comment claims, pinned as a fact
+/// rather than left as a doc-only claim.
+#[test]
+fn mixed_lead_long_lead_late_decisions_target_post_study_delivery() {
+    use cobre_sddp::indexer::AnticipatedLocal;
+
+    let (system, config) = mixed_lead_anticipated_study(false);
+    let setup = build_setup_in_code(system, &config);
+
+    // Canonical anticipated-local order is ascending EntityId: the short lead
+    // (id 10) is local 0, the long lead (id 20) is local 1.
+    let long_lead_local = AnticipatedLocal::new(1);
+    for stage_idx in 2..5 {
+        let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[stage_idx];
+        let template = &setup.inputs.stage_data.stage_templates.templates[stage_idx];
+        let col = geometry.anticipated_decision_col(long_lead_local);
+        assert!(
+            template.objective[col] > 0.0,
+            "stage {stage_idx}'s long-lead decision must carry a nonzero costed \
+             objective coefficient (a post-study delivery target), got {}",
+            template.objective[col]
+        );
+    }
+}
+
+/// The simulation books the anticipated decision's present value at its
+/// delivery stage: `anticipated_thermal_cost * discount_factor` (both read at
+/// the decision stage) equals `cost * hours * D(delivery) * decision_mw`.
+#[test]
+fn discounted_anticipated_simulation_books_present_value_at_delivery() {
+    let (system, config) = discounted_anticipated_study();
+    // The fixture's own config leaves simulation disabled; enable it here,
+    // sampling a single deterministic scenario (std_m3s == 0.0,
+    // branching_factor == 1).
+    let config = Config {
+        simulation: IoSimulationConfig {
+            enabled: true,
+            io_channel_capacity: 8,
+            selection: Some(SimulationSelection::Sampled { num_scenarios: 1 }),
+            ..IoSimulationConfig::default()
+        },
+        ..config
+    };
+    let mut setup = build_setup_in_code(system, &config);
+    let scenario_results = run_simulation(&mut setup, 5);
+    let scenario = &scenario_results[0];
+    let d: Vec<f64> = setup.stage_ctx().cumulative_discount_factors.to_vec();
+
+    let mut positive_after_stage_zero = false;
+    for (t, stage) in scenario.stages.iter().enumerate() {
+        let Some(thermal) = stage.thermals.iter().find(|th| th.is_anticipated) else {
+            continue;
+        };
+        let Some(x) = thermal.anticipated_decision_mw else {
+            continue;
+        };
+        let cost = &stage.costs[0];
+        let lhs = cost.anticipated_thermal_cost * cost.discount_factor;
+        let rhs = 50.0 * 720.0 * d[t + 2] * x;
+        let tol = 1e-9 * rhs.abs().max(1.0);
+        assert!(
+            (lhs - rhs).abs() < tol,
+            "stage {t}: anticipated_thermal_cost * discount_factor must book the present \
+             value at delivery: 50 * 720 * D({}) * {x} = {rhs}, got {lhs}",
+            t + 2,
+        );
+        if t >= 1 && x > 0.0 {
+            positive_after_stage_zero = true;
+        }
+    }
+    assert!(
+        positive_after_stage_zero,
+        "vacuity guard: no stage t >= 1 has a positive anticipated decision"
     );
 }

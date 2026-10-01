@@ -409,7 +409,7 @@ pub trait SharedMemoryProvider: Send + Sync {
 /// Trait for backends that can report their execution topology, separate from
 /// [`Communicator`] because not all backends expose one.
 ///
-/// The [`ExecutionTopology`](ExecutionTopology) is gathered at
+/// The [`ExecutionTopology`] is gathered at
 /// initialization and queried non-collectively, allocation-free.
 pub trait TopologyProvider: Send + Sync {
     /// Return the cached execution topology (non-collective, any thread).

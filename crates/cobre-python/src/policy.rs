@@ -22,7 +22,7 @@ use cobre_io::{
     STAGE_CUTS_PRICED_STATE_DATE_SENTINEL, STAGE_STATES_NODE_ID_SENTINEL, SeasonManifest,
     StageCutsPayload, StageStatesPayload, StateFamily,
 };
-use cobre_sddp::{SddpError, reserve_boundary_inflow_lag_slots};
+use cobre_sddp::{POLICY_COBRE_VERSION, SddpError, reserve_boundary_inflow_lag_slots};
 
 use crate::errors::{ErrorSource, convert_error};
 
@@ -267,7 +267,6 @@ impl From<PyProducerBlock> for ProducerBlock {
 pub(crate) struct PyPolicyCheckpointMetadata {
     #[pyo3(default = FORMAT_VERSION)]
     format_version: u32,
-    cobre_version: String,
     created_at: String,
     num_stages: u32,
     #[pyo3(default)]
@@ -281,7 +280,7 @@ impl From<PyPolicyCheckpointMetadata> for CheckpointManifest {
     fn from(m: PyPolicyCheckpointMetadata) -> Self {
         Self {
             format_version: m.format_version,
-            cobre_version: m.cobre_version,
+            cobre_version: POLICY_COBRE_VERSION.to_string(),
             created_at: m.created_at,
             num_stages: m.num_stages,
             graph_manifest: m
@@ -430,6 +429,10 @@ fn build_stage_cuts_data(
 /// the depth from (a DECOMP-bridge bootstrap). Absent or `0`, the checkpoint is
 /// byte-identical to one written without the argument.
 ///
+/// The checkpoint always records the running cobre version
+/// ([`cobre_sddp::POLICY_COBRE_VERSION`]); a `cobre_version` in `metadata` is
+/// ignored.
+///
 /// # Errors
 ///
 /// `ValueError` when a cut's `coefficients` length does not match its stage's
@@ -467,7 +470,6 @@ pub fn write_policy_checkpoint(
         .collect::<PyResult<_>>()?;
 
     let metadata: CheckpointManifest = metadata.into();
-    let metadata_cost_scale_factor = metadata.producer.cost_scale_factor;
 
     py.detach(|| {
         let cut_records: Vec<Vec<PolicyCutRecord<'_>>> = stage_cuts
@@ -505,7 +507,7 @@ pub fn write_policy_checkpoint(
                 entity_manifest: &data.manifest,
                 cost_scale_factor: sc
                     .cost_scale_factor
-                    .or(metadata_cost_scale_factor)
+                    .or(metadata.producer.cost_scale_factor)
                     .unwrap_or(1_000_000.0),
                 node_id: sc.node_id,
                 graph_stage_id: sc.graph_stage_id,

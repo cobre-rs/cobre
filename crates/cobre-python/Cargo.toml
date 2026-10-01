@@ -27,8 +27,8 @@ cobre-solver = { version = "0.16.0", path = "../cobre-solver", default-features 
 cobre-comm = { version = "0.16.0", path = "../cobre-comm" }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
 rayon = "1"
-arrow = { version = "59", default-features = false, features = ["ipc"] }
-parquet = { version = "59", default-features = false, features = ["arrow"] }
+arrow = { version = "60", default-features = false, features = ["ipc"] }
+parquet = { version = "60", default-features = false, features = ["arrow"] }
 serde_json = "1"
 
 [dev-dependencies]

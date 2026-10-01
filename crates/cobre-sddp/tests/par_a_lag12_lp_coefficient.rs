@@ -50,8 +50,8 @@ use cobre_core::{
     },
 };
 use cobre_sddp::{
-    InflowNonNegativityMethod, ResolvedParameters, hydro_models::PrepareHydroModelsResult,
-    lp::builder::build_stage_templates_resolving_layout,
+    InflowNonNegativityMethod, ResolvedParameters, build_stage_templates_resolving_layout,
+    hydro_models::PrepareHydroModelsResult,
 };
 use cobre_stochastic::{PrecomputedPar, normal::precompute::PrecomputedNormal};
 
@@ -288,24 +288,6 @@ fn build_par_a_fixture_core(
         },
     );
 
-    let hydro_penalties_default = HydroPenalties {
-        spillage_cost: 0.01,
-        diversion_cost: 0.0,
-        turbined_cost: 0.0,
-        storage_violation_below_cost: 0.0,
-        filling_target_violation_cost: 0.0,
-        turbined_violation_below_cost: 0.0,
-        outflow_violation_below_cost: 0.0,
-        outflow_violation_above_cost: 0.0,
-        generation_violation_below_cost: 0.0,
-        evaporation_violation_cost: 0.0,
-        water_withdrawal_violation_cost: 0.0,
-        water_withdrawal_violation_pos_cost: 0.0,
-        water_withdrawal_violation_neg_cost: 0.0,
-        evaporation_violation_pos_cost: 0.0,
-        evaporation_violation_neg_cost: 0.0,
-        inflow_nonnegativity_cost: 1000.0,
-    };
     let penalties = ResolvedPenalties::new(
         &PenaltiesCountsSpec {
             n_hydros: N_H,
@@ -315,7 +297,7 @@ fn build_par_a_fixture_core(
             n_stages: N_STUDY,
         },
         &PenaltiesDefaults {
-            hydro: hydro_penalties_default,
+            hydro: zero_penalties,
             bus: BusStagePenalties { excess_cost: 0.0 },
             line: LineStagePenalties { exchange_cost: 0.0 },
             ncs: NcsStagePenalties {
@@ -413,9 +395,10 @@ fn lag_11_lp_coefficient_equals_psi_hat_over_twelve() {
 
     let tmpl = &templates.templates[0];
     assert_eq!(
-        tmpl.max_par_order, 12,
-        "templates[0].max_par_order must be 12; got {}",
-        tmpl.max_par_order
+        tmpl.n_state,
+        N_H * 13,
+        "templates[0].n_state must reflect a PAR order of 12 (N_H * (1 + 12)); got {}",
+        tmpl.n_state
     );
 
     // Column indices: N=2, L=12.
@@ -525,9 +508,11 @@ fn classical_par_has_no_lag_11_column() {
     let tmpl = &templates.templates[0];
 
     assert_eq!(
-        tmpl.max_par_order, AR_ORDER,
-        "templates[0].max_par_order must be {AR_ORDER} for classical PAR(2); got {}",
-        tmpl.max_par_order
+        tmpl.n_state,
+        N_H * (1 + AR_ORDER),
+        "templates[0].n_state must reflect a PAR order of {AR_ORDER} for classical PAR(2) \
+         (N_H * (1 + {AR_ORDER})); got {}",
+        tmpl.n_state
     );
 
     // For N=2, L=2 the inflow_lags range is N..N*(1+L) = 2..6.

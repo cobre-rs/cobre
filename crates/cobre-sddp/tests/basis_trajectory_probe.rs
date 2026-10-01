@@ -57,7 +57,9 @@ use cobre_sddp::indexer::{StateDim, StateSpace};
 use cobre_sddp::setup::NodeId;
 use cobre_sddp::setup::NodePos;
 use cobre_sddp::setup::StageIdx;
-use cobre_sddp::test_support::{patch_backward_opening_for_probe, solve_stage_for_probe};
+use cobre_sddp::test_support::{
+    StageContextFixture, patch_backward_opening_for_probe, solve_stage_for_probe,
+};
 use cobre_sddp::workspace::{BasisStore, CapturedBasis, SolverWorkspace};
 use cobre_sddp::{PrepareHydroModelsResult, StudySetup, TrajectoryRecord};
 
@@ -124,13 +126,14 @@ impl RowFamily {
 ///
 /// Reconstructs each unexposed family's position by chaining off the ranges
 /// `StageGeometry` does expose (`water_balance`, `filling_target`,
-/// `filled_min_storage_floor`, `load_balance`, `fpha`, `z_inflow_row_start`)
-/// plus counts derivable from `StageContext`/`StageGeometry`
-/// (`evap_hydro_indices.len() * n_blks`, `n_hydros * n_blks` per
-/// operational-violation family) — never a hand-copied row-fill formula.
+/// `filled_min_storage_floor`, `load_balance`, `fpha`) and
+/// `StateSpace::z_inflow_rows()`, plus counts derivable from
+/// `StageContext`/`StageGeometry`
+/// (`evap_indices.len()`, `n_hydros * n_blks` per operational-violation
+/// family) — never a hand-copied row-fill formula.
 /// Three families this walk cannot place directly are handled by
 /// construction: `transit_bucket_definition`'s size falls out of the
-/// `water_balance.end .. load_balance.start` gap regardless of its value; the
+/// `water_balance.end() .. load_balance.start()` gap regardless of its value; the
 /// three anticipated-thermal families are asserted empty (panics naming the
 /// gap) rather than silently misclassified — `cobre_rodada` has neither
 /// declared travel-time arcs nor anticipated thermals, confirmed by the
@@ -146,7 +149,7 @@ fn classify_stage_rows(
     base_row_count: usize,
 ) -> Vec<RowFamily> {
     let geom = &ctx.geometry_per_stage[stage];
-    let n_hydros = ctx.n_hydros;
+    let n_hydros = state_space.hydro_count;
     let n_blks = geom.n_blks;
     let total_rows = template.num_rows;
 
@@ -155,7 +158,7 @@ fn classify_stage_rows(
         fam[range].fill(family);
     };
 
-    let z_inflow_range = geom.z_inflow_row_start..geom.z_inflow_row_start + n_hydros;
+    let z_inflow_range = state_space.z_inflow_rows();
     mark(&mut fam, z_inflow_range.clone(), RowFamily::ZInflow);
     assert_eq!(
         z_inflow_range.start, 0,
@@ -163,28 +166,30 @@ fn classify_stage_rows(
          pinning uses column bounds, so no row family should precede it"
     );
     assert_eq!(
-        geom.water_balance.start, z_inflow_range.end,
+        geom.water_balance.start(),
+        z_inflow_range.end,
         "classify_stage_rows: water_balance does not immediately follow z_inflow at stage {stage}"
     );
 
     mark(
         &mut fam,
-        geom.water_balance.clone(),
+        geom.water_balance.range(),
         RowFamily::WaterBalance,
     );
     mark(
         &mut fam,
-        geom.water_balance.end..geom.load_balance.start,
+        geom.water_balance.end()..geom.load_balance.start(),
         RowFamily::TransitBucketDefinition,
     );
-    mark(&mut fam, geom.load_balance.clone(), RowFamily::LoadBalance);
+    mark(&mut fam, geom.load_balance.range(), RowFamily::LoadBalance);
     assert_eq!(
-        geom.fpha.start, geom.load_balance.end,
+        geom.fpha.start,
+        geom.load_balance.end(),
         "classify_stage_rows: fpha does not immediately follow load_balance at stage {stage}"
     );
     mark(&mut fam, geom.fpha.clone(), RowFamily::Fpha);
 
-    let evap_len = geom.evap_hydro_indices.len() * n_blks;
+    let evap_len = geom.evap_indices.len();
     let evap_range = geom.fpha.end..geom.fpha.end + evap_len;
     mark(&mut fam, evap_range.clone(), RowFamily::Evaporation);
 
@@ -290,47 +295,25 @@ fn classify_stage_rows_reconciles_on_a_hand_built_geometry() {
     let geom = geometry(&dims, fpha_hydro_indices, &fpha_planes, evap_hydro_indices);
     let n_hydros = dims.hydro_count;
     let n_blks = dims.n_blks;
+    let state = state_layout(n_hydros, dims.max_par_order);
 
     let total_fpha_rows = 2 * n_blks + 3 * n_blks;
-    let evap_rows = n_blks; // one evap hydro
+    let evap_rows = geom.evap_indices.len(); // one evap hydro
     let opviol_rows = 4 * n_hydros * n_blks;
     // z_inflow (n_hydros) + water_balance (n_hydros, BlockMode::Parallel) +
     // load_balance + fpha + evaporation + 4 operational-violation families;
     // no filling/anticipated/generic-constraint rows in this fixture.
-    let base_row_count =
-        n_hydros + n_hydros + geom.load_balance.len() + total_fpha_rows + evap_rows + opviol_rows;
+    let base_row_count = n_hydros
+        + n_hydros
+        + geom.load_balance.range().len()
+        + total_fpha_rows
+        + evap_rows
+        + opviol_rows;
     assert_eq!(
-        geom.z_inflow_row_start, 0,
+        state.z_inflow_rows().start,
+        0,
         "fixture arithmetic sanity: z_inflow must be the first row family"
     );
-
-    let ctx = StageContext {
-        state_boxes: &[],
-        geometry_per_stage: std::slice::from_ref(&geom),
-        templates: &[],
-        base_rows: &[0],
-        noise_scale: &[],
-        n_hydros,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[n_blks],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[0],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[1.0],
-        cumulative_discount_factors: &[1.0],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
-    let state = state_layout(n_hydros, dims.max_par_order);
 
     let total_rows = base_row_count + 5; // + 5 synthetic cut rows
     let template = StageTemplate {
@@ -346,13 +329,19 @@ fn classify_stage_rows_reconciles_on_a_hand_built_geometry() {
         row_lower: vec![0.0; total_rows],
         row_upper: vec![0.0; total_rows],
         n_state: 0,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: n_hydros,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
+
+    let fixture = StageContextFixture::new(
+        std::slice::from_ref(&template),
+        &[],
+        std::slice::from_ref(&geom),
+    )
+    .study_stage_ids(&[0])
+    .discount_factors(&[1.0])
+    .cumulative_discount_factors(&[1.0]);
+    let ctx = fixture.ctx();
 
     let fam = classify_stage_rows(&ctx, &state, 0, &template, base_row_count);
     let c = census(&fam);

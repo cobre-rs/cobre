@@ -524,7 +524,7 @@ mod b6a_hydro_inflow_parity {
     //! `z_inflow` appears — is a crate-internal property of `resolve_variable_ref`,
     //! which is `pub(crate)` to `cobre-sddp` and therefore unreachable from an
     //! integration test under `tests/`. That assertion lives in the crate-internal
-    //! unit tests in `lp::generic_constraints` (e.g.
+    //! unit tests in `lp::builder::generic_constraints` (e.g.
     //! `hydro_inflow_two_upstream_canonical_order`,
     //! `hydro_inflow_diversion_into_appends_diversion_column`,
     //! `hydro_inflow_headwater_resolves_to_z_inflow_only`,
@@ -576,7 +576,7 @@ mod b6a_hydro_inflow_parity {
     /// is H0 — so the resolved row references the total-inflow column set (z_inflow
     /// plus H0's turbine+spillage), not the headwater z_inflow-only case. The
     /// exhaustive `(col, +1.0)` resolver-level check is the crate-internal
-    /// responsibility of `lp::generic_constraints`'s unit tests (see this file's
+    /// responsibility of `lp::builder::generic_constraints`'s unit tests (see this file's
     /// module docs); this assertion only guards that the fixture references the
     /// cascade target so the end-to-end solve genuinely exercises B6a.
     fn assert_cascade_inflow_constraint(system: &cobre_core::System) {
@@ -783,18 +783,20 @@ mod determinism {
     use cobre_sddp::{
         Phase, SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
         config::{CutManagementConfig, EventConfig, LoopConfig},
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         cut::FutureCostFunction,
         energy_conversion::{EnergyConversion, EnergyConversionSet},
         forward::{ForwardBound, ForwardResult, sync_forward},
         horizon_mode::HorizonMode,
         indexer::{CutStateProjection, StateSpace, StudyDimensions},
         inflow_method::InflowNonNegativityMethod,
-        lp::builder::{PatchBuffer, StateBox},
+        lead_time::AnticipatedResolution,
+        lp::builder::{PatchBuffer, StageGeometry},
         risk_measure::RiskMeasure,
         setup::node_graph::Traversal,
         simulate,
         simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
+        test_support::{GeometryDims, StageContextFixture, geometry, permissive_state_boxes},
         train,
         workspace::{SolverWorkspace, WorkspaceSizing},
     };
@@ -817,17 +819,32 @@ mod determinism {
         StateSpace::new(
             hydro_count,
             max_par_order,
-            0,
             Vec::new(),
-            0,
-            0,
             vec![],
+            AnticipatedResolution::default(),
             &vec![max_par_order; hydro_count],
         )
     }
 
     fn study_dims() -> StudyDimensions {
         StudyDimensions::default()
+    }
+
+    /// Build the [`StageGeometry`] `template_3h` addresses: N=3 hydros, 1 bus,
+    /// 1 block — the production layout `test_support::geometry` builds for
+    /// those dims.
+    fn three_hydro_one_bus_geometry() -> StageGeometry {
+        geometry(
+            &GeometryDims {
+                hydro_count: 3,
+                n_buses: 1,
+                n_blks: 1,
+                ..GeometryDims::default()
+            },
+            vec![],
+            &[],
+            vec![],
+        )
     }
 
     // ===========================================================================
@@ -839,18 +856,22 @@ mod determinism {
     //   z_inflow     = 3..6
     //   storage_in   = 6..9
     //   theta        = 9
-    //   num_cols     = 10
+    //   then the decoupled hydro+bus equipment padding `test_support::geometry`
+    //   addresses for N=3 hydros, 1 bus, 1 block (cols 10-38), so per-block
+    //   hydro/bus extraction addresses real columns instead of an empty family.
+    //   num_cols     = 39
     //
-    // The primal must have 10 entries so `view.primal[state.theta]` (index 9)
-    // is valid. The dual must have at least n_dual_relevant = 3 entries so the
-    // backward pass can extract dual values for the 3 storage-fixing rows.
+    // The primal must have 39 entries so simulation's per-block extraction can
+    // address every equipment column. The dual must have at least 7 entries
+    // to cover the widened geometry's water-balance/load-balance row family.
     // ===========================================================================
 
-    const PRIMAL_3H: &[f64] = &[0.0; 10];
-    // The dual must cover: n_dual_relevant (3) + max cuts per stage (10 iterations × 1 pass = 10).
-    // Use 64 to cover any reasonable iteration count without tight sizing.
+    const PRIMAL_3H: &[f64] = &[0.0; 39];
+    // The dual must cover the widened row family plus max cuts per stage
+    // (10 iterations × 1 pass = 10). Use 64 to cover any reasonable iteration
+    // count without tight sizing.
     const DUAL_3H: &[f64] = &[0.0; 64];
-    const REDUCED_COSTS_3H: &[f64] = &[0.0; 10];
+    const REDUCED_COSTS_3H: &[f64] = &[0.0; 39];
 
     /// Mock solver returning a fixed objective on every solve, so any output
     /// variation across thread counts comes from the orchestration layer alone.
@@ -1100,58 +1121,65 @@ mod determinism {
     ///
     /// Column layout (N=3, L=0):
     /// ```text
-    /// 0..3  storage_out  (outgoing storage, N=3)
-    /// 3..6  z_inflow     (realized inflow variables, N=3)
-    /// 6..9  storage_in   (incoming storage, N=3, L=0 → no lag cols)
-    /// 9     theta
+    /// 0..3   storage_out  (outgoing storage, N=3)
+    /// 3..6   z_inflow     (realized inflow variables, N=3, free)
+    /// 6..9   storage_in   (incoming storage, N=3, L=0 → no lag cols)
+    /// 9      theta
+    /// 10..39 decoupled hydro+bus equipment padding `test_support::geometry`
+    ///        addresses for N=3 hydros, 1 bus, 1 block (zero cost, zero NZ):
+    ///        `MockSolver3H` never reads the coefficients.
     /// ```
     ///
     /// Row layout (N=3, L=0):
     /// ```text
-    /// 0..3  storage-fixing rows  (one per hydro)
-    /// 3..6  z_inflow rows        (one per hydro, at N*(1+L)=3)
+    /// 0..3  z_inflow rows        (one per hydro, at StateSpace::z_inflow_rows())
+    /// 3..6  storage_in pin rows (one per hydro)
+    /// 6     the widened geometry's load-balance row (unused, no NZ)
     /// ```
     ///
-    /// The matrix has one nonzero per storage-fixing row (column = `storage_in[h]`,
-    /// coefficient = 1.0) so the patch buffer has something to patch.
+    /// The matrix has one nonzero per z_inflow row (column = `z_inflow[h]`) and one
+    /// per storage_in pin row (column = `storage_in[h]`), each coefficient 1.0, so
+    /// the patch buffer has something to patch.
     fn template_3h() -> StageTemplate {
-        // CSC col_starts: 10 columns + 1 sentinel; only storage_in cols carry an NZ.
-        let col_starts = vec![
-            0_i32, // col 0 (storage_out[0])
-            0,     // col 1 (storage_out[1])
-            0,     // col 2 (storage_out[2])
-            0,     // col 3 (z_inflow[0])
-            0,     // col 4 (z_inflow[1])
-            0,     // col 5 (z_inflow[2])
-            0,     // col 6 (storage_in[0]) — NZ starts here
-            1,     // col 7 (storage_in[1])
-            2,     // col 8 (storage_in[2])
-            3,     // col 9 (theta)
-            3,     // sentinel
-        ];
-        let row_indices = vec![0_i32, 1, 2]; // row 0, 1, 2 for storage_in cols
-        let values = vec![1.0_f64, 1.0, 1.0];
+        let num_cols = 39;
+        let num_rows = 7;
+        // CSC col_starts: 39 columns + 1 sentinel; z_inflow and storage_in cols
+        // each carry one NZ, cols 9 (theta) onward carry none.
+        let col_starts = {
+            let mut v = vec![6_i32; num_cols + 1];
+            v[0] = 0; // col 0 (storage_out[0])
+            v[1] = 0; // col 1 (storage_out[1])
+            v[2] = 0; // col 2 (storage_out[2])
+            v[3] = 0; // col 3 (z_inflow[0]) — NZ starts here
+            v[4] = 1; // col 4 (z_inflow[1])
+            v[5] = 2; // col 5 (z_inflow[2])
+            v[6] = 3; // col 6 (storage_in[0])
+            v[7] = 4; // col 7 (storage_in[1])
+            v[8] = 5; // col 8 (storage_in[2])
+            v
+        };
+        let row_indices = vec![0_i32, 1, 2, 3, 4, 5];
+        let values = vec![1.0_f64, 1.0, 1.0, 1.0, 1.0, 1.0];
 
-        let mut objective = vec![0.0_f64; 10];
+        let mut objective = vec![0.0_f64; num_cols];
         objective[9] = 1.0; // theta at col 9
 
+        let mut col_lower = vec![0.0_f64; num_cols];
+        col_lower[3..6].fill(f64::NEG_INFINITY); // z_inflow cols are free
+
         StageTemplate {
-            num_cols: 10,
-            num_rows: 6,
-            num_nz: 3,
+            num_cols,
+            num_rows,
+            num_nz: 6,
             col_starts,
             row_indices,
             values,
-            col_lower: vec![0.0; 10],
-            col_upper: vec![f64::INFINITY; 10],
+            col_lower,
+            col_upper: vec![f64::INFINITY; num_cols],
             objective,
-            row_lower: vec![0.0; 6],
-            row_upper: vec![0.0; 6],
+            row_lower: vec![0.0; num_rows],
+            row_upper: vec![0.0; num_rows],
             n_state: 3,
-            n_transfer: 0,
-            n_dual_relevant: 3,
-            n_hydro: 3,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -1173,7 +1201,6 @@ mod determinism {
     struct Fixture3H {
         n_stages: usize,
         templates: Vec<StageTemplate>,
-        base_rows: Vec<usize>,
         state: StateSpace,
         initial_state: Vec<f64>,
         stochastic: StochasticContext,
@@ -1193,8 +1220,6 @@ mod determinism {
             let n_stages = 5;
             let state = state_layout_for(3, 0);
             let templates = vec![template_3h(); n_stages];
-            // base_row = n_state + n_hydros = 3 + 3 = 6 (first water-balance row).
-            let base_rows = vec![6usize; n_stages];
             let initial_state = vec![0.0_f64; state.n_state];
             let stochastic = make_stochastic_context_3h_branching(n_stages, branching_factor);
             let horizon = HorizonMode::Finite {
@@ -1205,7 +1230,6 @@ mod determinism {
             Self {
                 n_stages,
                 templates,
-                base_rows,
                 state,
                 initial_state,
                 stochastic,
@@ -1213,16 +1237,6 @@ mod determinism {
                 risk_measures,
             }
         }
-    }
-
-    fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
-        vec![
-            StateBox {
-                lower: vec![f64::NEG_INFINITY; n_state],
-                upper: vec![f64::INFINITY; n_state],
-            };
-            n_stages
-        ]
     }
 
     // ===========================================================================
@@ -1254,7 +1268,6 @@ mod determinism {
                 max_iterations: n_iterations,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit(n_iterations),
             },
             cut_management: CutManagementConfig {
@@ -1277,32 +1290,9 @@ mod determinism {
             .unwrap();
 
         let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-        let stage_ctx = StageContext {
-            geometry_per_stage: &[],
-            templates: &fx.templates,
-            base_rows: &fx.base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            state_boxes: &state_boxes,
-            block_counts_per_stage: &[1usize; 5],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = vec![three_hydro_one_bus_geometry(); fx.n_stages];
+        let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
+        let stage_ctx = stage_ctx_fixture.ctx();
         let result = pool
             .install(|| {
                 train(
@@ -1379,26 +1369,44 @@ mod determinism {
         let ec = EnergyConversionSet::new(
             vec![vec![zero_ec; fx.n_stages]; 3],
             vec![vec![0.0_f64; fx.n_stages]; 3],
-            3,
+            &cobre_sddp::test_support::minimal_hydros(3),
             fx.n_stages,
         );
 
+        let sim_training_ctx = TrainingContext {
+            node_graph: &cobre_sddp::test_support::chain_node_graph(&fx.stochastic),
+            horizon: &fx.horizon,
+            state: &fx.state,
+            cut_state_layouts: &all_enabled_cut_state_layouts(&fx.state, fx.n_stages),
+            study_dims: &study_dims(),
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            stages: &[],
+            lag_accum_seed: &[],
+            lag_weight_seed: &[],
+            dcs: None,
+        };
+        let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
+        let geometry = vec![three_hydro_one_bus_geometry(); fx.n_stages];
+        let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
         let mut workspaces: Vec<SolverWorkspace<MockSolver3H>> = (0..n_workspaces)
             .map(|idx| {
                 SolverWorkspace::new(
                     0,
                     i32::try_from(idx).expect("worker_id fits in i32"),
                     MockSolver3H::new(100.0),
-                    PatchBuffer::new(fx.state.hydro_count, fx.state.max_par_order, 0, 0, 0, 0, 0),
-                    fx.state.n_state,
-                    WorkspaceSizing {
-                        hydro_count: fx.state.hydro_count,
-                        max_par_order: fx.state.max_par_order,
-                        n_load_buses: 0,
-                        max_blocks: 0,
-                        downstream_par_order: 0,
-                        ..WorkspaceSizing::default()
-                    },
+                    PatchBuffer::new(&fx.state, &[], &[]),
+                    &sim_training_ctx,
+                    &stage_ctx_fixture.ctx(),
+                    WorkspaceSizing::default(),
                 )
             })
             .collect();
@@ -1414,76 +1422,23 @@ mod determinism {
             .build()
             .unwrap();
 
-        let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
         let cost_buffer = pool
             .install(|| {
                 simulate(
                     &mut workspaces,
-                    &StageContext {
-                        geometry_per_stage: &[],
-                        templates: &fx.templates,
-                        base_rows: &fx.base_rows,
-                        noise_scale: &[],
-                        n_hydros: 0,
-                        cost_scale_factor: 1_000_000.0,
-                        n_load_buses: 0,
-                        load_balance_row_starts: &[],
-                        load_bus_indices: &[],
-                        state_boxes: &state_boxes,
-                        block_counts_per_stage: &[],
-                        ncs_col_starts: &[],
-                        n_ncs: 0,
-                        ncs_stochastic_dense_col: &[],
-                        ncs_stochastic_windows: &[],
-                        anticipated_windows: &[],
-                        study_stage_ids: &[],
-                        ncs_max_gen: &[],
-                        ncs_allow_curtailment: &[],
-                        discount_factors: &[],
-                        cumulative_discount_factors: &[],
-                        stage_lag_transitions: &[],
-                        noise_group_ids: &[],
-                        downstream_par_order: 0,
-                    },
+                    &stage_ctx_fixture.ctx(),
                     fcf,
-                    &TrainingContext {
-                        node_graph: &cobre_sddp::test_support::chain_node_graph(&fx.stochastic),
-                        horizon: &fx.horizon,
-                        state: &fx.state,
-                        cut_state_layouts: &all_enabled_cut_state_layouts(&fx.state, fx.n_stages),
-                        study_dims: &study_dims(),
-                        inflow_method: &InflowNonNegativityMethod::None,
-                        stochastic: &fx.stochastic,
-                        initial_state: &fx.initial_state,
-                        inflow_scheme: SamplingScheme::InSample,
-                        load_scheme: SamplingScheme::InSample,
-                        ncs_scheme: SamplingScheme::InSample,
-                        historical_library: None,
-                        external_inflow_library: None,
-                        external_load_library: None,
-                        external_ncs_library: None,
-                        stages: &[],
-                        lag_accum_seed: &[],
-                        lag_weight_seed: &[],
-                        dcs: None,
-                    },
+                    &sim_training_ctx,
                     &sim_config,
                     SimulationOutputSpec {
                         result_tx: &result_tx,
-                        zeta_per_stage: &[],
                         hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-                        block_hours_per_stage: &[],
+                        block_hours_per_stage: &vec![vec![744.0]; fx.n_stages],
                         entity_counts: &entity_counts,
-                        generic_constraint_row_entries: &[],
-                        ncs_col_starts: &[],
-                        n_ncs: 0,
-                        pumping_col_starts: &[],
-                        n_pumping: 0,
-                        geometry_per_stage: &[],
+                        generic_constraint_row_entries: &vec![Vec::new(); fx.n_stages],
                         pumping_consumption_mw_per_m3s: &[],
-                        contract_prices_per_stage: &[],
-                        contract_is_import: &[],
-                        ncs_entity_ids_per_stage: &[],
+                        contract_prices_per_stage: &vec![Vec::new(); fx.n_stages],
+                        contract_slots: &[],
                         diversion_upstream: &HashMap::new(),
                         hydro_productivities_per_stage: &vec![vec![1.0, 1.0, 1.0]; fx.n_stages],
                         energy_conversion: &ec,
@@ -1968,6 +1923,8 @@ mod water_travel_time_no_arc_byte_identity {
     };
     use cobre_solver::StageTemplate;
 
+    use cobre_sddp::test_support::assert_all_templates_byte_identical;
+
     use super::common::build_setup_in_code;
     use super::common::builders::{
         BusSpec, HydroSpec, StageSpec, ThermalSpec, make_bus, make_hydro, make_stage, make_thermal,
@@ -2214,82 +2171,7 @@ mod water_travel_time_no_arc_byte_identity {
         let system = build_system(block_mode);
         let config = build_config();
         let setup = build_setup_in_code(system, &config);
-        setup.stage_data.stage_templates.templates.clone()
-    }
-
-    /// Field-by-field byte-identity check: CSC structure (`col_starts`,
-    /// `row_indices`, `values`), bounds, `objective`, scaling, and the
-    /// state/transfer/dual-relevant/hydro/PAR-order dimensions. Every `f64`
-    /// slice compares by `to_bits()` — true bit-identity, not approximate.
-    fn assert_templates_byte_identical(tpl_a: &StageTemplate, tpl_b: &StageTemplate, stage: usize) {
-        assert_eq!(tpl_a.num_cols, tpl_b.num_cols, "stage {stage}: num_cols");
-        assert_eq!(tpl_a.num_rows, tpl_b.num_rows, "stage {stage}: num_rows");
-        assert_eq!(tpl_a.num_nz, tpl_b.num_nz, "stage {stage}: num_nz");
-        assert_eq!(tpl_a.n_state, tpl_b.n_state, "stage {stage}: n_state");
-        assert_eq!(
-            tpl_a.n_transfer, tpl_b.n_transfer,
-            "stage {stage}: n_transfer"
-        );
-        assert_eq!(
-            tpl_a.n_dual_relevant, tpl_b.n_dual_relevant,
-            "stage {stage}: n_dual_relevant"
-        );
-        assert_eq!(tpl_a.n_hydro, tpl_b.n_hydro, "stage {stage}: n_hydro");
-        assert_eq!(
-            tpl_a.max_par_order, tpl_b.max_par_order,
-            "stage {stage}: max_par_order"
-        );
-
-        assert_eq!(
-            tpl_a.col_starts, tpl_b.col_starts,
-            "stage {stage}: col_starts"
-        );
-        assert_eq!(
-            tpl_a.row_indices, tpl_b.row_indices,
-            "stage {stage}: row_indices"
-        );
-
-        let bits = |xs: &[f64]| xs.iter().map(|v| v.to_bits()).collect::<Vec<u64>>();
-        assert_eq!(
-            bits(&tpl_a.values),
-            bits(&tpl_b.values),
-            "stage {stage}: values"
-        );
-        assert_eq!(
-            bits(&tpl_a.col_lower),
-            bits(&tpl_b.col_lower),
-            "stage {stage}: col_lower"
-        );
-        assert_eq!(
-            bits(&tpl_a.col_upper),
-            bits(&tpl_b.col_upper),
-            "stage {stage}: col_upper"
-        );
-        assert_eq!(
-            bits(&tpl_a.objective),
-            bits(&tpl_b.objective),
-            "stage {stage}: objective"
-        );
-        assert_eq!(
-            bits(&tpl_a.row_lower),
-            bits(&tpl_b.row_lower),
-            "stage {stage}: row_lower"
-        );
-        assert_eq!(
-            bits(&tpl_a.row_upper),
-            bits(&tpl_b.row_upper),
-            "stage {stage}: row_upper"
-        );
-        assert_eq!(
-            bits(&tpl_a.col_scale),
-            bits(&tpl_b.col_scale),
-            "stage {stage}: col_scale"
-        );
-        assert_eq!(
-            bits(&tpl_a.row_scale),
-            bits(&tpl_b.row_scale),
-            "stage {stage}: row_scale"
-        );
+        setup.inputs.stage_data.stage_templates.templates.clone()
     }
 
     /// Shared pre-bucket-formula assertion: `n_buckets == 0`, `transit_buckets_out` /
@@ -2339,14 +2221,11 @@ mod water_travel_time_no_arc_byte_identity {
         let parallel = build_templates(BlockMode::Parallel);
         let chronological = build_templates(BlockMode::Chronological);
 
-        assert_eq!(
-            parallel.len(),
-            chronological.len(),
-            "stage count must match between block modes"
+        assert_all_templates_byte_identical(
+            &parallel,
+            &chronological,
+            "parallel vs chronological (no arc declared)",
         );
-        for (stage, (p, c)) in parallel.iter().zip(chronological.iter()).enumerate() {
-            assert_templates_byte_identical(p, c, stage);
-        }
     }
 
     /// D06 (`d06-fpha-variable-head`) is one of the pinned golden parity-hash

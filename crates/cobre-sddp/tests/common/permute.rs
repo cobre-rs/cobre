@@ -36,7 +36,12 @@ use tempfile::TempDir;
 /// then `sort_by_key(|s| s.id)`; `cobre_io::initial_conditions::convert`
 /// sorts every field by `hydro_id`/`thermal_id`; `System::hydros`/`thermals`
 /// canonicalize by `(operational_start_date, id)`; `resolve_load_factors`
-/// writes into a dense table keyed by `(bus_id, stage_id, block_id)`.
+/// writes into a dense table keyed by `(bus_id, stage_id, block_id)`;
+/// `cobre_io::constraints::generic::convert` sorts `constraints` by `gc.id`;
+/// `cobre_io::system::pumping_stations::convert_pumping` sorts
+/// `pumping_stations` by `s.id`; `cobre_io::post_study_stages::convert_stages`
+/// sorts `stages` by `start_date` and `convert_thermal_bounds` sorts
+/// `thermal_bounds` by `(thermal_id, post_study_stage_index)`.
 const SHUFFLE_WHITELIST: &[(&str, &[&str])] = &[
     ("stages.json", &["stages", "pre_study_stages"]),
     (
@@ -63,6 +68,9 @@ const SHUFFLE_WHITELIST: &[(&str, &[&str])] = &[
     ),
     ("system/energy_contracts.json", &["contracts"]),
     ("scenarios/load_factors.json", &["load_factors"]),
+    ("constraints/generic_constraints.json", &["constraints"]),
+    ("system/pumping_stations.json", &["pumping_stations"]),
+    ("post_study_stages.json", &["stages", "thermal_bounds"]),
 ];
 
 /// `(case-relative path, top-level keys)` entries whose JSON array order IS

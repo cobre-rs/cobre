@@ -9,21 +9,23 @@
 //! `#[cfg(any(test, feature = "test-support"))]` — reachable by plain `cargo test`
 //! and by downstream integration tests via the `test-support` feature.
 
-use std::collections::{BTreeMap, HashMap};
+#![deny(clippy::allow_attributes, clippy::allow_attributes_without_reason)]
+
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use chrono::NaiveDate;
-use cobre_core::scenario::{InflowModel, LoadModel, SamplingScheme};
-use cobre_core::temporal::{Node as PolicyNode, PolicyGraphType, Transition};
+use cobre_comm::LocalBackend;
+use cobre_core::scenario::{CorrelationModel, InflowModel, LoadModel, SamplingScheme};
+use cobre_core::temporal::{Node as PolicyNode, PolicyGraphType, StageLagTransition, Transition};
 use cobre_core::{
-    Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties, CascadeTopology,
+    AnticipatedConfig, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties,
     ContractBlockBounds, DeficitSegment, EntityId, HorizonGraph, Hydro, HydroBlockBounds,
     HydroGenerationModel, HydroPenalties, HydroStageBounds, HydroStorage, HydroUnitGroup,
-    InitialConditions, LineBlockBounds, LineStagePenalties, NcsStagePenalties, NoiseMethod,
-    PenaltiesCountsSpec, PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds,
-    ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
-    ResolvedPenalties, ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig, System,
-    SystemBuilder, ThermalBlockBounds, ThermalStageBounds,
+    InitialConditions, Line, LineBlockBounds, LineStagePenalties, NcsStagePenalties, NoiseMethod,
+    PenaltiesCountsSpec, PenaltiesDefaults, PumpingBlockBounds, ResolvedBounds, ResolvedPenalties,
+    ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig, System, SystemBuilder, Thermal,
+    ThermalBlockBounds, ThermalStageBounds,
 };
 use cobre_io::StageIdResolver;
 use cobre_io::config::{
@@ -44,46 +46,61 @@ use cobre_stochastic::{
 
 use crate::BoundaryStateRequirements;
 use crate::StudySetup;
+#[cfg(test)]
+use crate::bucket_topology::{TransitBucketTopology, build_transit_bucket_topology};
 use crate::context::{StageContext, TrainingContext};
 use crate::cut::pool::CutPool;
 use crate::error::SddpError;
+use crate::horizon_mode::HorizonMode;
 use crate::hydro_models::{
     EvaporationModel, EvaporationModelSet, FphaPlane, PrepareHydroModelsResult, ProductionModelSet,
     ResolvedProductionModel,
 };
-use crate::lead_time::AnticipatedResolution;
-#[cfg(test)]
-use crate::lp::builder::StateBox;
+use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
+use crate::lower_bound::{LbEvalScratch, LbEvalScratchBundle, evaluate_lower_bound};
 use crate::lp::builder::{
-    PatchBuffer, ResolvedTables, StageGeometry, StageLayout, TemplateBuildCtx,
+    FactGroups, PatchBuffer, StageGeometry, StageLayout, StageTemplates, StateBox,
+    encode_stage_templates_facts, encode_time_value_facts,
 };
 use crate::lp::indexer::{
-    CutStateProjection, HydroCellIndex, StateDim, StateSpace, StudyDimensions, ThermalSys,
+    AnticipatedPlants, BlockRowFamily, CutStateProjection, EntityPositions, HydroCellIndex,
+    HydroSys, StateDim, StateSpace, StudyDimensions,
 };
 use crate::noise::{DownstreamAccumState, LagAccumState};
 use crate::policy::policy_load::{
-    FullFcf, PolicyLoadProof, PolicyStageManifest, validate_policy_load,
+    FullFcf, POLICY_COBRE_VERSION, PolicyLoadProof, PolicyStageManifest, validate_policy_load,
 };
-use crate::resolved_parameters::ResolvedParameters;
 use crate::risk_measure::BackwardOutcome;
-use crate::setup::PostStudyResolved;
 use crate::setup::node_graph::{
     NodeGraph, NodeId, NodePos, OpeningSource, StageIdx, build_node_graph,
     enumerated_node_visit_counts, enumerated_scenario_count,
 };
+#[cfg(test)]
+use crate::setup::{ResolvedStateLayout, resolve_state_layout};
 use crate::solve::stage_solve::{StageInputs, assemble_outgoing_state, run_stage_solve};
 use crate::solver_stats::SolverStatsDelta;
-use crate::training::backward::{extract_state_duals_only, write_opening_outcome};
+#[cfg(test)]
+use crate::time_value::DeliveryCalendar;
+use crate::time_value::{PostStudyResolved, TimeValue};
+use crate::training::backward::{
+    extract_state_duals_only, fill_external_opening_noise, write_opening_outcome,
+};
 use crate::training::stage_solve_prep::{
-    InflowNoise, LoadNoise, StageSolvePrep, StageSolvePrepParams, StateSource,
+    InflowNoise, StageSolvePrep, StageSolvePrepParams, StateSource,
 };
 use crate::trajectory::TrajectoryRecord;
 use crate::workspace::{CapturedBasis, ScratchBuffers, SolverWorkspace, WorkspaceSizing};
 use cobre_core::scenario::{ExternalLoadRow, ExternalScenarioRow};
 use cobre_solver::{
-    ActiveSolver, Basis, BasisStatus, RowBatch, SolutionView, SolverError, SolverInterface,
-    SolverStatistics, StageTemplate,
+    ActiveSolver, Basis, BasisStatus, LpSolution, RowBatch, SolutionView, SolverError,
+    SolverInterface, SolverStatistics, StageTemplate,
 };
+
+pub mod decks;
+pub mod template_structure;
+
+pub(crate) mod ctx_fixture;
+use ctx_fixture::CtxFixture;
 
 /// Equipment dimensions for the [`geometry`] / [`study_dims_for`] test builders.
 ///
@@ -109,10 +126,10 @@ pub struct GeometryDims {
     pub max_deficit_segments: usize,
     /// Number of anticipated thermals.
     pub n_anticipated: usize,
-    /// Maximum `lead_stages` across the anticipated thermals.
-    pub k_max: usize,
-    /// Mapping from anticipated-local position to global thermal index.
-    pub anticipated_thermal_indices: Vec<usize>,
+    /// Per-plant lead stage, uniform across every anticipated thermal.
+    pub lead_stages: usize,
+    /// The anticipated-plant set.
+    pub anticipated_plants: AnticipatedPlants,
 }
 
 impl Default for GeometryDims {
@@ -127,8 +144,8 @@ impl Default for GeometryDims {
             has_inflow_penalty: false,
             max_deficit_segments: 1,
             n_anticipated: 0,
-            k_max: 0,
-            anticipated_thermal_indices: Vec::new(),
+            lead_stages: 0,
+            anticipated_plants: AnticipatedPlants::default(),
         }
     }
 }
@@ -154,8 +171,8 @@ pub fn fill_consistent_basis(out: &mut Basis) {
 
 /// A fully-permissive `(-inf, inf)` box per stage, for fixtures driving a solve
 /// through the seam without exercising the clamp.
-#[cfg(test)]
-pub(crate) fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
+#[must_use]
+pub fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
     vec![
         StateBox {
             lower: vec![f64::NEG_INFINITY; n_state],
@@ -191,7 +208,7 @@ pub fn eq(
 
 /// Build [`GeometryDims`] with explicit anticipated-thermal fields.
 ///
-/// The anticipated identity list defaults to `0..n_anticipated`.
+/// The anticipated-plant set defaults to positions `0..n_anticipated`.
 #[must_use]
 pub fn eq_with_anticipated(
     hydro_count: usize,
@@ -202,22 +219,159 @@ pub fn eq_with_anticipated(
     n_blks: usize,
     has_inflow_penalty: bool,
     n_anticipated: usize,
-    k_max: usize,
+    lead_stages: usize,
 ) -> GeometryDims {
     GeometryDims {
-        hydro_count,
-        max_par_order,
-        n_thermals,
-        n_lines,
-        n_buses,
-        n_blks,
-        has_inflow_penalty,
         n_anticipated,
-        k_max,
-        anticipated_thermal_indices: (0..n_anticipated).collect(),
-        ..Default::default()
+        lead_stages,
+        anticipated_plants: anticipated_plants_at(&(0..n_anticipated).collect::<Vec<usize>>()),
+        ..eq(
+            hydro_count,
+            max_par_order,
+            n_thermals,
+            n_lines,
+            n_buses,
+            n_blks,
+            has_inflow_penalty,
+        )
     }
 }
+
+/// Build an [`AnticipatedPlants`] whose only members are `positions`, each with
+/// a one-stage lead — the fixture builder every positionless test uses in place
+/// of owning a `System`. `positions` must be strictly ascending.
+#[must_use]
+pub fn anticipated_plants_at(positions: &[usize]) -> AnticipatedPlants {
+    debug_assert!(
+        positions.windows(2).all(|w| w[0] < w[1]),
+        "positions must be strictly ascending"
+    );
+    let n = positions.last().map_or(0, |&p| p + 1);
+    let thermals: Vec<Thermal> = (0..n)
+        .map(|idx| Thermal {
+            id: EntityId(i32::try_from(idx).unwrap_or(i32::MAX)),
+            name: String::new(),
+            operational_start_date: ymd(2024, 1, 1),
+            bus_id: EntityId(0),
+            entry_stage_id: None,
+            exit_stage_id: None,
+            cost_per_mwh: 0.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 0.0,
+            anticipated_config: positions
+                .contains(&idx)
+                .then_some(AnticipatedConfig::LeadStages(1)),
+        })
+        .collect();
+    AnticipatedPlants::build(&thermals)
+}
+
+/// Resolve `lead_stages` (anticipated-local order, one constant per-plant
+/// lead each) over a synthetic `n_stages`-long delivery axis with no
+/// post-study continuation (`n_delivery == n_stages`) — the fixture
+/// substitute for a real study's calendar-derived resolution, built through
+/// [`AnticipatedResolution::resolve`] the same way
+/// [`crate::setup::resolve_anticipated_commitments_core`] builds its axis.
+#[must_use]
+pub fn constant_lead_resolution(lead_stages: &[usize], n_stages: usize) -> AnticipatedResolution {
+    let leads: Vec<LeadTime> = lead_stages
+        .iter()
+        .map(|&l| LeadTime::Stages(u32::try_from(l).unwrap_or(u32::MAX)))
+        .collect();
+    let study_stage_hours = vec![720.0; n_stages];
+    AnticipatedResolution::resolve(
+        &leads,
+        DeliveryAxis {
+            study_stage_hours: &study_stage_hours,
+            post_study_stage_hours: &[],
+        },
+    )
+}
+
+#[cfg(test)]
+mod constant_lead_resolution_tests {
+    use super::{StateDim, StateSpace, constant_lead_resolution};
+
+    /// Every plant reaches every ring slot through its own depth-0
+    /// (next-stage) term alone as `stage_idx` sweeps `0..n_stages`, so a
+    /// margin of `max(lead) + 2` saturates the commitment-hold mask to the
+    /// whole region.
+    #[test]
+    fn constant_lead_resolution_marks_every_ring_slot_live() {
+        for lead_stages in [vec![1_usize], vec![3], vec![1, 3], vec![2, 2]] {
+            let k_max = lead_stages.iter().copied().max().unwrap_or(0);
+            let n_stages = k_max + 2;
+            let n_anticipated = lead_stages.len();
+            let resolution = constant_lead_resolution(&lead_stages, n_stages);
+            let state = StateSpace::new(0, 0, Vec::new(), lead_stages, resolution, &[]);
+
+            let start = state.commit_out.start;
+            let expected: Vec<StateDim> = (start..start + state.n_anticipated * state.k_max)
+                .map(StateDim::new)
+                .collect();
+            assert_eq!(
+                state.nonzero_state_indices, expected,
+                "n_anticipated={n_anticipated} k_max={k_max}: mask must saturate to the whole region"
+            );
+        }
+    }
+}
+
+/// Resolve the bucket topology and role-(a) state layout for `system`/`par_lp`
+/// through the same setup entry points production uses
+/// ([`build_transit_bucket_topology`], [`crate::setup::resolve_state_layout`]),
+/// for a builder-module test that needs production's own resolution rather
+/// than a hand-built [`TemplateBuildCtx`](crate::lp::builder::TemplateBuildCtx).
+///
+/// # Panics
+///
+/// If `resolve_state_layout` rejects `system` (a `LeadTime` fan-out) — a test
+/// fixture is expected to be resolvable.
+#[expect(
+    clippy::expect_used,
+    reason = "a test fixture that resolve_state_layout rejects is a fixture bug, not a runtime error to propagate"
+)]
+#[cfg(test)]
+#[must_use]
+pub(crate) fn resolved_layout_for(
+    system: &System,
+    par_lp: &PrecomputedPar,
+) -> (TransitBucketTopology, ResolvedStateLayout) {
+    let calendar = DeliveryCalendar::from_system(system);
+    let topology = build_transit_bucket_topology(system, &calendar, false);
+    let layout = resolve_state_layout(system, &calendar, par_lp, &topology, None)
+        .expect("resolved_layout_for: valid test fixture");
+    (topology, layout)
+}
+
+/// A [`StateSpace`] over `system`'s hydros and `topology`'s bucket order, with
+/// no PAR lags and no anticipated plants — the seed tests' fixture for
+/// [`crate::setup::build_initial_transit_bucket_state`], built the way
+/// [`crate::test_support::ctx_fixture::CtxFixture::build_state`]'s
+/// `max_par_order == 0` branch is.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn bucket_seed_state(system: &System, topology: &TransitBucketTopology) -> StateSpace {
+    let hydros = system.hydros();
+    let effective_lag_counts = vec![0; hydros.len()];
+    StateSpace::build(
+        hydros,
+        0,
+        &effective_lag_counts,
+        topology,
+        Vec::new(),
+        AnticipatedResolution::default(),
+    )
+}
+
+/// Setup steps a builder-module test needs without a direct
+/// `lp::builder` → `setup` import edge.
+#[cfg(test)]
+pub(crate) use crate::setup::lp_build_inputs::build_filling_v_target;
+#[cfg(test)]
+pub(crate) use crate::setup::{
+    build_study_dimensions, resolve_anticipated_commitments, resolve_lp_build_inputs,
+};
 
 /// All-zero [`HydroPenalties`] for [`geometry_hydro`] — no fixture-side penalty
 /// cost reaches the column/objective arithmetic `StageLayout::new` computes.
@@ -327,6 +481,14 @@ pub fn geometry_hydro_with_groups(
     hydro
 }
 
+/// `n` hydros for a model-set constructor test that exercises pure grid or
+/// accessor semantics and needs nothing beyond a hydro slice's shape — ids
+/// `0..n`, [`geometry_hydro`]'s defaults otherwise.
+#[must_use]
+pub fn minimal_hydros(n: usize) -> Vec<Hydro> {
+    (0..n).map(geometry_hydro).collect()
+}
+
 /// Identity [`HydroCellIndex`] for `n_hydros` single-bus hydros
 /// (`cells_of(h) == h..h+1` for every `h`) — the single shared builder for every
 /// fixture in the crate that needs a `HydroCellIndex` but is not itself testing
@@ -335,7 +497,7 @@ pub fn geometry_hydro_with_groups(
 /// it actually queries.
 #[must_use]
 pub fn identity_hydro_cell_index(n_hydros: usize) -> HydroCellIndex {
-    HydroCellIndex::build(&(0..n_hydros).map(geometry_hydro).collect::<Vec<_>>())
+    HydroCellIndex::build(&minimal_hydros(n_hydros))
 }
 
 /// Fixture bus at system position `idx` carrying exactly `max_deficit_segments`
@@ -355,6 +517,41 @@ fn geometry_bus(idx: usize, max_deficit_segments: usize) -> Bus {
             max_deficit_segments
         ],
         excess_cost: 0.0,
+    }
+}
+
+/// Fixture thermal at system position `idx`, inert past its `id`: `geometry`
+/// needs only the count `ctx.thermals.len()` reserves, never a bound or cost.
+fn geometry_thermal(idx: usize) -> Thermal {
+    Thermal {
+        id: EntityId(i32::try_from(idx).unwrap_or(i32::MAX)),
+        name: String::new(),
+        operational_start_date: NaiveDate::default(),
+        bus_id: EntityId(0),
+        entry_stage_id: None,
+        exit_stage_id: None,
+        cost_per_mwh: 0.0,
+        min_generation_mw: 0.0,
+        max_generation_mw: 0.0,
+        anticipated_config: None,
+    }
+}
+
+/// Fixture line at system position `idx`, inert past its `id`: `geometry`
+/// needs only the count `ctx.lines.len()` reserves, never a capacity.
+fn geometry_line(idx: usize) -> Line {
+    Line {
+        id: EntityId(i32::try_from(idx).unwrap_or(i32::MAX)),
+        name: String::new(),
+        operational_start_date: NaiveDate::default(),
+        source_bus_id: EntityId(0),
+        target_bus_id: EntityId(0),
+        entry_stage_id: None,
+        exit_stage_id: None,
+        direct_capacity_mw: 0.0,
+        reverse_capacity_mw: 0.0,
+        losses_percent: 0.0,
+        exchange_cost: 0.0,
     }
 }
 
@@ -392,7 +589,7 @@ fn geometry_production_models(
             )]
         })
         .collect();
-    ProductionModelSet::new(models, hydro_count, 1)
+    ProductionModelSet::new(models, &minimal_hydros(hydro_count), 1)
 }
 
 /// Single-hydro [`EvaporationModelSet`]: `Linearized` (membership only — no field
@@ -457,28 +654,23 @@ fn geometry_stage(n_blks: usize) -> Stage {
 ///
 /// `fpha_hydro_indices` / `fpha_planes` are parallel (equal length). Builds the
 /// production `TemplateBuildCtx`/[`StateSpace`]/[`Stage`] the dimensions
-/// describe and delegates to `StageLayout::new`/`StageLayout::geometry` — the
-/// single owner of the offset arithmetic.
+/// describe and delegates to `StageLayout::new` — the single owner of the
+/// offset arithmetic.
 #[must_use]
-// Rationale: `fpha_hydro_indices`/`evap_hydro_indices` stay owned `Vec<usize>` —
-// the signature is a stability contract its call sites depend on — even
-// though the body only borrows them (`StageLayout::new` re-derives the
-// authoritative membership from `ctx.hydros`/`production_models`/
-// `evaporation_models`, not from the caller's raw list).
-#[allow(clippy::needless_pass_by_value)]
-// Rationale: clippy::similar_names flags `state` next to `stage`; both names
-// are established (the `StageLayout`/`StageData` field is `state`, the
-// per-stage input is `stage`), so renaming either would obscure intent rather
-// than clarify it — mirrors `build_single_stage_template`.
-#[allow(clippy::similar_names)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "fpha_hydro_indices/evap_hydro_indices stay owned Vec<usize> — the signature is a stability contract its call sites depend on — even though the body only borrows them (StageLayout::new re-derives the authoritative membership from ctx.hydros/production_models/evaporation_models, not from the caller's raw list)"
+)]
 pub fn geometry(
     dims: &GeometryDims,
     fpha_hydro_indices: Vec<usize>,
     fpha_planes: &[usize],
     evap_hydro_indices: Vec<usize>,
 ) -> StageGeometry {
-    let hydros: Vec<Hydro> = (0..dims.hydro_count).map(geometry_hydro).collect();
+    let hydros = minimal_hydros(dims.hydro_count);
     let hydro_cell_index = HydroCellIndex::build(&hydros);
+    let thermals: Vec<Thermal> = (0..dims.n_thermals).map(geometry_thermal).collect();
+    let lines: Vec<Line> = (0..dims.n_lines).map(geometry_line).collect();
     let buses: Vec<Bus> = (0..dims.n_buses)
         .map(|idx| geometry_bus(idx, dims.max_deficit_segments))
         .collect();
@@ -486,102 +678,467 @@ pub fn geometry(
         geometry_production_models(dims.hydro_count, &fpha_hydro_indices, fpha_planes);
     let evaporation_models = geometry_evaporation_models(dims.hydro_count, &evap_hydro_indices);
 
-    let bounds = ResolvedBounds::empty();
-    let penalties = ResolvedPenalties::empty();
-    let resolved_generic_bounds = ResolvedGenericConstraintBounds::empty();
-    let resolved_load_factors = ResolvedLoadFactors::empty();
-    let resolved_ncs_bounds = ResolvedNcsBounds::empty();
-    let resolved_ncs_factors = ResolvedNcsFactors::empty();
-    let resolved_parameters = ResolvedParameters {
-        per_param: vec![],
-        id_to_slot: vec![],
-        cost_scale_factor: 1_000_000.0,
-    };
-    let cascade = CascadeTopology::build(&[]);
-    let par_lp = PrecomputedPar::default();
-    let anticipated_lead_stages = vec![dims.k_max; dims.n_anticipated];
+    let anticipated_lead_stages = vec![dims.lead_stages; dims.n_anticipated];
 
-    let ctx = TemplateBuildCtx {
-        hydros: &hydros,
-        thermals: &[],
-        lines: &[],
-        buses: &buses,
-        load_models: &[],
-        cascade: &cascade,
-        hydro_cell_index: &hydro_cell_index,
-        resolved: ResolvedTables {
-            bounds: &bounds,
-            penalties: &penalties,
-            resolved_generic_bounds: &resolved_generic_bounds,
-            resolved_load_factors: &resolved_load_factors,
-            resolved_ncs_bounds: &resolved_ncs_bounds,
-            resolved_ncs_factors: &resolved_ncs_factors,
-            resolved_parameters: &resolved_parameters,
+    // Delivery axis wide enough to cover stage 0 + the widest declared lead,
+    // matching state_layout_with_transit_buckets's own margin (mirrors
+    // AntFixtures::bounds_with_n_stages's widening in entries.rs) — otherwise
+    // a genuinely-reachable delivery stage indexes past CtxFixture::default's
+    // 1-long bounds/time_value axis.
+    let delivery_axis_len = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
+    let bounds = ResolvedBounds::new(
+        &BoundsCountsSpec {
+            n_hydros: 0,
+            n_thermals: 0,
+            n_lines: 0,
+            n_pumping: 0,
+            n_contracts: 0,
+            n_stages: delivery_axis_len,
+            k_max: 0,
         },
-        hydro_pos: BTreeMap::new(),
-        thermal_pos: BTreeMap::new(),
-        line_pos: BTreeMap::new(),
-        bus_pos: BTreeMap::new(),
-        par_lp: &par_lp,
-        production_models: &production_models,
-        evaporation_models: &evaporation_models,
-        generic_constraints: &[],
-        non_controllable_sources: &[],
-        pumping_stations: &[],
-        pumping_pos: BTreeMap::new(),
-        n_pumping: 0,
-        contracts: &[],
-        contract_pos: BTreeMap::new(),
-        n_contract_import: 0,
-        n_contract_export: 0,
-        diversion_upstream: HashMap::new(),
-        n_hydros: dims.hydro_count,
-        n_thermals: dims.n_thermals,
-        n_lines: dims.n_lines,
-        n_buses: dims.n_buses,
-        max_par_order: dims.max_par_order,
-        n_anticipated: dims.n_anticipated,
-        k_max: dims.k_max,
-        anticipated_lead_stages: anticipated_lead_stages.clone(),
-        anticipated_thermal_indices: dims
-            .anticipated_thermal_indices
-            .iter()
-            .map(|&t| ThermalSys::new(t))
-            .collect(),
-        anticipated_windows: vec![(None, None); dims.n_anticipated],
-        anticipated_resolution: AnticipatedResolution::default(),
-        study_stage_ids: Vec::new(),
-        delivery_stage_ids: Vec::new(),
-        has_penalty: dims.has_inflow_penalty,
-        delivery_cumulative_discount_factors: vec![1.0],
-        delivery_total_hours: vec![744.0],
-        filling_v_target: BTreeMap::new(),
-        arc_stage_weights: HashMap::new(),
-        arc_spread_chrono: HashMap::new(),
-        arc_arrival_density: HashMap::new(),
-        per_stage_mask: Vec::new(),
-        post_study_resolved: PostStudyResolved::default(),
-    };
-
-    let state = state_layout_full(
-        dims.hydro_count,
-        dims.max_par_order,
-        dims.n_anticipated,
-        dims.k_max,
-        anticipated_lead_stages,
+        &BoundsDefaults {
+            hydro: HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 0.0,
+                filling_min_rate_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            },
+            hydro_block: HydroBlockBounds::default(),
+            thermal: ThermalStageBounds { cost_per_mwh: 0.0 },
+            thermal_block: ThermalBlockBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 0.0,
+            },
+            line_block: LineBlockBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping_block: PumpingBlockBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract_block: ContractBlockBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        },
     );
+    let time_value = TimeValue::from_parts(
+        Vec::new(),
+        vec![1.0; delivery_axis_len],
+        vec![744.0; delivery_axis_len],
+        (0..i32::try_from(delivery_axis_len).unwrap_or(0)).collect(),
+        PostStudyResolved::default(),
+    );
+
+    let par_lp = geometry_par(dims.max_par_order, &hydros);
+    let mut fixture = CtxFixture {
+        hydros,
+        thermals,
+        lines,
+        buses,
+        hydro_cell_index,
+        par_lp,
+        production_models,
+        evaporation_models,
+        anticipated_lead_stages,
+        anticipated_plants: dims.anticipated_plants.clone(),
+        has_penalty: dims.has_inflow_penalty,
+        bounds,
+        time_value,
+        ..CtxFixture::default()
+    };
+    let mut ctx = fixture.ctx();
+    // Geometry allocation never resolves an EntityId through a position map —
+    // restore the empty-positions default over the derived (non-empty
+    // hydro/bus) one.
+    let empty_positions = EntityPositions::from_slices([], [], [], [], [], []);
+    ctx.positions = &empty_positions;
+
     let stage = geometry_stage(dims.n_blks);
 
-    StageLayout::new(&ctx, &state, &stage, 0).geometry(BlockMode::Parallel)
+    StageLayout::new(&ctx, &stage, 0).geometry
 }
 
-/// Build the empty-equipment role-(b) [`StageGeometry`] (every range `0..0`).
-///
-/// The `_hydro_count` / `_max_par_order` arguments are ignored — accepted only for
-/// call-site symmetry with [`geometry`].
+/// A PAR(`order`) model for every hydro in `hydros` (finite placeholder
+/// coefficients), so a [`CtxFixture`] built over them derives a state with
+/// `order` dense lags per hydro.
+#[expect(
+    clippy::expect_used,
+    reason = "geometry_stage carries a season_id, the one input PrecomputedPar::build rejects an AR model for lacking"
+)]
+fn geometry_par(order: usize, hydros: &[Hydro]) -> PrecomputedPar {
+    let hydro_ids: Vec<EntityId> = hydros.iter().map(|hydro| hydro.id).collect();
+    let models: Vec<InflowModel> = hydro_ids
+        .iter()
+        .map(|&hydro_id| InflowModel {
+            hydro_id,
+            stage_id: 0,
+            mean_m3s: 1.0,
+            std_m3s: 1.0,
+            ar_coefficients: vec![0.1; order],
+            residual_std_ratio: 1.0,
+            annual: None,
+        })
+        .collect();
+    PrecomputedPar::build(&models, &[geometry_stage(1)], &hydro_ids, None)
+        .expect("geometry_par: placeholder PAR models are valid")
+}
+
+/// Build a [`StageGeometry`] carrying only a load-balance row family
+/// (`n_buses * n_blks` rows starting at `load_start`), for fixtures that need a
+/// non-empty `geometry_per_stage` entry to exercise the load patch.
 #[must_use]
-pub fn geom(_hydro_count: usize, _max_par_order: usize) -> StageGeometry {
-    StageGeometry::default()
+pub fn geometry_with_load_balance(
+    load_start: usize,
+    n_buses: usize,
+    n_blks: usize,
+) -> StageGeometry {
+    StageGeometry {
+        load_balance: BlockRowFamily::per_block(load_start..load_start + n_buses * n_blks),
+        n_blks,
+        ..equipment_free_geometry(&[n_blks]).remove(0)
+    }
+}
+
+/// One [`StageGeometry`] per entry, the production empty-stage layout
+/// (`geometry(&GeometryDims { n_blks, ..zeros }, ..)`) — every column/row
+/// family empty, addressing no equipment.
+#[must_use]
+pub fn equipment_free_geometry(block_counts: &[usize]) -> Vec<StageGeometry> {
+    block_counts
+        .iter()
+        .map(|&n_blks| {
+            geometry(
+                &GeometryDims {
+                    n_blks,
+                    ..GeometryDims::default()
+                },
+                vec![],
+                &[],
+                vec![],
+            )
+        })
+        .collect()
+}
+
+/// Build the [`StageGeometry`] for N=1 hydro, 1 bus, 1 block — the production
+/// layout `geometry` builds for those dims. Shared by `pipeline/tests.rs`,
+/// `simulation_integration.rs`, and `simulation_pipeline_integration.rs`, each
+/// pairing it with a stage template whose per-block hydro/load extraction
+/// addresses real columns instead of an empty family.
+#[must_use]
+pub fn hydro_only_bus_geometry() -> StageGeometry {
+    geometry(
+        &GeometryDims {
+            hydro_count: 1,
+            n_buses: 1,
+            n_blks: 1,
+            ..GeometryDims::default()
+        },
+        vec![],
+        &[],
+        vec![],
+    )
+}
+
+/// Stage template matching [`hydro_only_bus_geometry`]'s N=1 hydro, 1 bus,
+/// 1-block layout, so per-block hydro/load extraction addresses real columns
+/// and rows instead of an empty family. A mock solver never reads the
+/// coefficients, so every column past the state region (`storage_out`(0),
+/// `z_inflow`(1), `storage_in`(2), `theta`(3)) is free (zero cost, zero NZ).
+#[must_use]
+pub fn hydro_only_bus_template() -> StageTemplate {
+    let num_cols = 15;
+    let num_rows = 7;
+    let mut col_lower = vec![0.0; num_cols];
+    col_lower[1] = f64::NEG_INFINITY;
+    let mut objective = vec![0.0; num_cols];
+    objective[3] = 1.0;
+    StageTemplate {
+        num_cols,
+        num_rows,
+        num_nz: 0,
+        col_starts: vec![0_i32; num_cols + 1],
+        row_indices: Vec::new(),
+        values: Vec::new(),
+        col_lower,
+        col_upper: vec![f64::INFINITY; num_cols],
+        objective,
+        row_lower: vec![0.0; num_rows],
+        row_upper: vec![0.0; num_rows],
+        n_state: 1,
+        col_scale: Vec::new(),
+        row_scale: Vec::new(),
+    }
+}
+
+/// Fixed [`LpSolution`] for [`hydro_only_bus_template`]'s layout; theta at col 3.
+#[must_use]
+pub fn hydro_only_bus_solution(objective: f64, theta_val: f64) -> LpSolution {
+    let num_cols = 15;
+    let mut primal = vec![0.0_f64; num_cols];
+    primal[3] = theta_val;
+    LpSolution {
+        objective,
+        primal,
+        dual: vec![0.0_f64; 7],
+        reduced_costs: vec![0.0_f64; num_cols],
+        iterations: 0,
+        solve_time_seconds: 0.0,
+    }
+}
+
+/// Test-only [`StageContext`] builder. Slice fields default to `&[]`; a
+/// setter exists only for a field some literal in the crate sets away from
+/// that default.
+pub struct StageContextFixture<'a> {
+    templates: &'a [StageTemplate],
+    state_boxes: &'a [StateBox],
+    geometry_per_stage: &'a [StageGeometry],
+    cost_scale_factor: f64,
+    load_bus_indices: &'a [usize],
+    ncs_stochastic_dense_col: &'a [usize],
+    ncs_stochastic_windows: &'a [(Option<i32>, Option<i32>)],
+    ncs_max_gen: &'a [f64],
+    ncs_allow_curtailment: &'a [bool],
+    discount_factors: &'a [f64],
+    cumulative_discount_factors: &'a [f64],
+    study_stage_ids: &'a [i32],
+    anticipated_windows: &'a [(Option<i32>, Option<i32>)],
+    stage_lag_transitions: &'a [StageLagTransition],
+    noise_group_ids: &'a [u32],
+}
+
+impl<'a> StageContextFixture<'a> {
+    /// Borrows `templates`/`state_boxes`/`geometry_per_stage` as given.
+    ///
+    /// # Panics
+    /// Panics if `geometry_per_stage.len() != templates.len()` — every stage
+    /// must have one geometry.
+    #[must_use]
+    pub fn new(
+        templates: &'a [StageTemplate],
+        state_boxes: &'a [StateBox],
+        geometry_per_stage: &'a [StageGeometry],
+    ) -> Self {
+        assert_eq!(
+            geometry_per_stage.len(),
+            templates.len(),
+            "every stage must have one geometry"
+        );
+        Self {
+            templates,
+            state_boxes,
+            geometry_per_stage,
+            cost_scale_factor: 1_000_000.0,
+            load_bus_indices: &[],
+            ncs_stochastic_dense_col: &[],
+            ncs_stochastic_windows: &[],
+            ncs_max_gen: &[],
+            ncs_allow_curtailment: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
+            study_stage_ids: &[],
+            anticipated_windows: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+        }
+    }
+
+    /// [`Self::new`], reading `templates`, `geometry_per_stage`,
+    /// `load_bus_indices` and `cost_scale_factor` from `stage_templates` — the
+    /// same fields [`StudySetup::stage_ctx`] reads from it.
+    ///
+    /// # Panics
+    /// See [`Self::new`].
+    #[must_use]
+    pub fn from_stage_templates(
+        stage_templates: &'a StageTemplates,
+        state_boxes: &'a [StateBox],
+    ) -> Self {
+        let mut fixture = Self::new(
+            &stage_templates.templates,
+            state_boxes,
+            &stage_templates.geometry_per_stage,
+        );
+        fixture.load_bus_indices = &stage_templates.load_bus_indices;
+        fixture.cost_scale_factor = stage_templates.cost_scale_factor;
+        fixture
+    }
+
+    /// Sets [`StageContext::load_bus_indices`].
+    #[must_use]
+    pub fn load_bus_indices(mut self, v: &'a [usize]) -> Self {
+        self.load_bus_indices = v;
+        self
+    }
+
+    /// Sets [`StageContext::ncs_stochastic_dense_col`].
+    #[must_use]
+    pub fn ncs_stochastic_dense_col(mut self, v: &'a [usize]) -> Self {
+        self.ncs_stochastic_dense_col = v;
+        self
+    }
+
+    /// Sets [`StageContext::ncs_stochastic_windows`].
+    #[must_use]
+    pub fn ncs_stochastic_windows(mut self, v: &'a [(Option<i32>, Option<i32>)]) -> Self {
+        self.ncs_stochastic_windows = v;
+        self
+    }
+
+    /// Sets [`StageContext::ncs_max_gen`].
+    #[must_use]
+    pub fn ncs_max_gen(mut self, v: &'a [f64]) -> Self {
+        self.ncs_max_gen = v;
+        self
+    }
+
+    /// Sets [`StageContext::ncs_allow_curtailment`].
+    #[must_use]
+    pub fn ncs_allow_curtailment(mut self, v: &'a [bool]) -> Self {
+        self.ncs_allow_curtailment = v;
+        self
+    }
+
+    /// Sets [`StageContext::discount_factors`].
+    #[must_use]
+    pub fn discount_factors(mut self, v: &'a [f64]) -> Self {
+        self.discount_factors = v;
+        self
+    }
+
+    /// Sets [`StageContext::cumulative_discount_factors`].
+    #[must_use]
+    pub fn cumulative_discount_factors(mut self, v: &'a [f64]) -> Self {
+        self.cumulative_discount_factors = v;
+        self
+    }
+
+    /// Sets [`StageContext::study_stage_ids`].
+    #[must_use]
+    pub fn study_stage_ids(mut self, v: &'a [i32]) -> Self {
+        self.study_stage_ids = v;
+        self
+    }
+
+    /// Sets [`StageContext::anticipated_windows`].
+    #[must_use]
+    pub fn anticipated_windows(mut self, v: &'a [(Option<i32>, Option<i32>)]) -> Self {
+        self.anticipated_windows = v;
+        self
+    }
+
+    /// Sets [`StageContext::stage_lag_transitions`].
+    #[must_use]
+    pub fn stage_lag_transitions(mut self, v: &'a [StageLagTransition]) -> Self {
+        self.stage_lag_transitions = v;
+        self
+    }
+
+    /// Sets [`StageContext::noise_group_ids`].
+    #[must_use]
+    pub fn noise_group_ids(mut self, v: &'a [u32]) -> Self {
+        self.noise_group_ids = v;
+        self
+    }
+
+    /// Lends a [`StageContext`] borrowing this fixture's fields.
+    #[must_use]
+    pub fn ctx(&self) -> StageContext<'_> {
+        StageContext {
+            templates: self.templates,
+            state_boxes: self.state_boxes,
+            geometry_per_stage: self.geometry_per_stage,
+            cost_scale_factor: self.cost_scale_factor,
+            load_bus_indices: self.load_bus_indices,
+            ncs_stochastic_dense_col: self.ncs_stochastic_dense_col,
+            ncs_stochastic_windows: self.ncs_stochastic_windows,
+            anticipated_windows: self.anticipated_windows,
+            study_stage_ids: self.study_stage_ids,
+            ncs_max_gen: self.ncs_max_gen,
+            ncs_allow_curtailment: self.ncs_allow_curtailment,
+            discount_factors: self.discount_factors,
+            cumulative_discount_factors: self.cumulative_discount_factors,
+            stage_lag_transitions: self.stage_lag_transitions,
+            noise_group_ids: self.noise_group_ids,
+        }
+    }
+}
+
+/// Owns the pieces a [`TrainingContext`] borrows, so a test can lend one
+/// without threading a `stochastic`/`node_graph`/`study_dims` triple through
+/// every call site.
+pub struct TrainingContextFixture {
+    state: StateSpace,
+    stochastic: StochasticContext,
+    node_graph: NodeGraph,
+    study_dims: StudyDimensions,
+    cut_state_layouts: Vec<CutStateProjection>,
+    horizon: HorizonMode,
+    initial_state: Vec<f64>,
+}
+
+impl TrainingContextFixture {
+    /// Single-stage, hydro-free stochastic context and chain node graph;
+    /// `state` supplies every state-defining dimension.
+    #[must_use]
+    pub fn new(state: StateSpace) -> Self {
+        let stochastic = hydro_free_stochastic_context(1, 1);
+        let node_graph = chain_node_graph(&stochastic);
+        let cut_state_layouts = all_enabled_cut_state_layouts(&state, 1);
+        Self {
+            stochastic,
+            node_graph,
+            study_dims: study_dims(),
+            cut_state_layouts,
+            horizon: HorizonMode::Finite { num_stages: 1 },
+            initial_state: Vec::new(),
+            state,
+        }
+    }
+
+    /// Sets [`StudyDimensions::downstream_par_order`] on the lent context.
+    #[must_use]
+    pub fn downstream_par_order(mut self, v: usize) -> Self {
+        self.study_dims.downstream_par_order = v;
+        self
+    }
+
+    /// Sets the lent context's horizon to `HorizonMode::Finite { num_stages }`.
+    #[must_use]
+    pub fn num_stages(mut self, num_stages: usize) -> Self {
+        self.horizon = HorizonMode::Finite { num_stages };
+        self
+    }
+
+    /// Lends a [`TrainingContext`] borrowing this fixture's fields.
+    #[must_use]
+    pub fn training_ctx(&self) -> TrainingContext<'_> {
+        TrainingContext {
+            horizon: &self.horizon,
+            state: &self.state,
+            cut_state_layouts: &self.cut_state_layouts,
+            study_dims: &self.study_dims,
+            inflow_method: &self.study_dims.inflow_method,
+            stochastic: &self.stochastic,
+            initial_state: &self.initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            stages: &[],
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            lag_accum_seed: &[],
+            lag_weight_seed: &[],
+            dcs: None,
+            node_graph: &self.node_graph,
+        }
+    }
 }
 
 /// Build a finalized storage+lag [`StateSpace`] (no anticipated thermals) with the
@@ -589,29 +1146,21 @@ pub fn geom(_hydro_count: usize, _max_par_order: usize) -> StageGeometry {
 /// `crate::setup::resolve_state_layout` finalizes with no per-hydro AR truncation.
 #[must_use]
 pub fn state_layout(hydro_count: usize, max_par_order: usize) -> StateSpace {
-    state_layout_full(hydro_count, max_par_order, 0, 0, Vec::new())
+    state_layout_full(hydro_count, max_par_order, Vec::new())
 }
 
 /// Build a finalized [`StateSpace`] from explicit state-vector dimensions,
 /// including anticipated thermals. Lag coverage is dense (full `max_par_order`).
-///
-/// `anticipated_lead_stages` must have length `n_anticipated` and its max (when
-/// non-empty) must equal `k_max`.
 #[must_use]
 pub fn state_layout_full(
     hydro_count: usize,
     max_par_order: usize,
-    n_anticipated: usize,
-    k_max: usize,
     anticipated_lead_stages: Vec<usize>,
 ) -> StateSpace {
     state_layout_with_transit_buckets(
         hydro_count,
         max_par_order,
-        0,
         Vec::new(),
-        n_anticipated,
-        k_max,
         anticipated_lead_stages,
     )
 }
@@ -619,32 +1168,72 @@ pub fn state_layout_full(
 /// Build a finalized [`StateSpace`] with a declared travel-time bucket block
 /// (`transit_buckets_out`/`transit_buckets_in`), optionally combined with anticipated
 /// thermals. `effective_lag_count` is dense (full `max_par_order` for every
-/// hydro), matching [`state_layout_full`].
+/// hydro), matching [`state_layout_full`]. Attaches a [`constant_lead_resolution`]
+/// over a margin wide enough (`max(lead) + 2`) to saturate the commitment-hold
+/// mask to the whole region; [`state_layout_with_transit_buckets_and_resolution`]
+/// is the sibling for a caller that needs a specific reachability shape.
 #[must_use]
 pub fn state_layout_with_transit_buckets(
     hydro_count: usize,
     max_par_order: usize,
-    n_buckets: usize,
-    transit_bucket_column_order: Vec<(usize, usize)>,
-    n_anticipated: usize,
-    k_max: usize,
+    transit_bucket_column_order: Vec<(HydroSys, usize)>,
     anticipated_lead_stages: Vec<usize>,
+) -> StateSpace {
+    let n_stages = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
+    let resolution = constant_lead_resolution(&anticipated_lead_stages, n_stages);
+    state_layout_with_transit_buckets_and_resolution(
+        hydro_count,
+        max_par_order,
+        transit_bucket_column_order,
+        anticipated_lead_stages,
+        resolution,
+    )
+}
+
+/// Like [`state_layout_with_transit_buckets`] but with a caller-supplied
+/// [`AnticipatedResolution`] instead of the saturating [`constant_lead_resolution`]
+/// default.
+#[must_use]
+pub fn state_layout_with_transit_buckets_and_resolution(
+    hydro_count: usize,
+    max_par_order: usize,
+    transit_bucket_column_order: Vec<(HydroSys, usize)>,
+    anticipated_lead_stages: Vec<usize>,
+    anticipated_resolution: AnticipatedResolution,
 ) -> StateSpace {
     let effective_lag_count = vec![max_par_order; hydro_count];
     StateSpace::new(
         hydro_count,
         max_par_order,
-        n_buckets,
         transit_bucket_column_order,
-        n_anticipated,
-        k_max,
         anticipated_lead_stages,
+        anticipated_resolution,
         &effective_lag_count,
     )
 }
 
-/// Bucket-only [`StageTemplate`]: `num_cols` free columns, zero rows. `n_hydro = 0`
-/// so noise transformation never runs.
+/// Per-hydro inflow `extract_hydros`/`extract_hydro_bus_generation` read from
+/// `StageExtractionSpec::inflow_m3s_per_hydro`: the lag-0 incoming column when
+/// `state` carries PAR lags, `0.0` otherwise.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn inflow_m3s_per_hydro_from_primal(
+    state: &StateSpace,
+    primal: &[f64],
+    n_hydros: usize,
+) -> Vec<f64> {
+    (0..n_hydros)
+        .map(|h| {
+            if state.max_par_order > 0 {
+                primal[state.lag_incoming_col(0, HydroSys::new(h)).get()]
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+/// Bucket-only [`StageTemplate`]: `num_cols` free columns, zero rows.
 #[must_use]
 pub fn transit_bucket_only_template(num_cols: usize, n_state: usize) -> StageTemplate {
     StageTemplate {
@@ -660,10 +1249,6 @@ pub fn transit_bucket_only_template(num_cols: usize, n_state: usize) -> StageTem
         row_lower: Vec::new(),
         row_upper: Vec::new(),
         n_state,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -702,21 +1287,18 @@ pub fn study_dims() -> StudyDimensions {
 }
 
 /// Build the [`StudyDimensions`] matching the [`GeometryDims`] a test built its
-/// stage geometry from. `has_ncs` is always `false`: these fixtures never model NCS
-/// (production sets it from `!ncs_col_starts.is_empty()`).
+/// stage geometry from.
 #[must_use]
 pub fn study_dims_for(dims: &GeometryDims) -> StudyDimensions {
     StudyDimensions {
-        n_thermals: dims.n_thermals,
-        n_lines: dims.n_lines,
-        n_buses: dims.n_buses,
         max_deficit_segments: dims.max_deficit_segments,
-        has_ncs: false,
-        has_inflow_penalty: dims.has_inflow_penalty,
-        has_withdrawal: dims.hydro_count > 0,
-        has_operational_violations: dims.hydro_count != 0,
-        anticipated_thermal_indices: dims.anticipated_thermal_indices.clone(),
-        n_pumping: 0,
+        inflow_method: if dims.has_inflow_penalty {
+            crate::InflowNonNegativityMethod::Penalty
+        } else {
+            crate::InflowNonNegativityMethod::None
+        },
+        anticipated_plants: dims.anticipated_plants.clone(),
+        downstream_par_order: 0,
     }
 }
 
@@ -730,11 +1312,10 @@ pub fn study_dims_for(dims: &GeometryDims) -> StudyDimensions {
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: matching state_dimension/num_stages with an empty manifest on
-// both sides cannot hit validate_policy_load's error paths (state_dimension
-// and num_stages equality hold trivially; an empty manifest short-circuits
-// identity comparison with a warning, never an error).
+#[expect(
+    clippy::expect_used,
+    reason = "matching state_dimension/num_stages with an empty manifest on both sides cannot hit validate_policy_load's error paths (state_dimension and num_stages equality hold trivially; an empty manifest short-circuits identity comparison with a warning, never an error)"
+)]
 #[must_use]
 pub fn trivial_full_fcf_proof(state_dimension: u32, num_stages: u32) -> PolicyLoadProof<FullFcf> {
     let graph = cobre_io::GraphManifest::default();
@@ -745,7 +1326,7 @@ pub fn trivial_full_fcf_proof(state_dimension: u32, num_stages: u32) -> PolicyLo
         slots: &[],
         graph: &graph,
     };
-    validate_policy_load::<FullFcf>(&manifest, &manifest)
+    validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &manifest, &manifest)
         .expect("trivial matching manifest cannot fail validate_policy_load")
 }
 
@@ -768,7 +1349,7 @@ pub fn checkpoint_metadata(
 ) -> cobre_io::CheckpointManifest {
     cobre_io::CheckpointManifest {
         format_version: cobre_io::FORMAT_VERSION,
-        cobre_version: env!("CARGO_PKG_VERSION").to_string(),
+        cobre_version: POLICY_COBRE_VERSION.to_string(),
         created_at: "2026-01-01T00:00:00Z".to_string(),
         num_stages,
         graph_manifest,
@@ -782,9 +1363,10 @@ pub fn checkpoint_metadata(
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: every caller passes a literal, calendar-valid date;
-// `from_ymd_opt` only returns `None` for an out-of-range one.
+#[expect(
+    clippy::expect_used,
+    reason = "every caller passes a literal, calendar-valid date; from_ymd_opt only returns None for an out-of-range one"
+)]
 #[must_use]
 pub fn ymd(year: i32, month: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, day).expect("valid calendar date")
@@ -800,9 +1382,10 @@ pub fn ymd(year: i32, month: u32, day: u32) -> NaiveDate {
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: every caller passes a small pool count; `checked_add_months`
-// only overflows past `NaiveDate`'s year range.
+#[expect(
+    clippy::expect_used,
+    reason = "every caller passes a small pool count; checked_add_months only overflows past NaiveDate's year range"
+)]
 #[must_use]
 pub fn fixture_priced_date(base: NaiveDate, pool: u32) -> NaiveDate {
     base.checked_add_months(chrono::Months::new(pool))
@@ -817,9 +1400,10 @@ pub fn fixture_priced_date(base: NaiveDate, pool: u32) -> NaiveDate {
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: every caller passes a day-01 YYYYMMDD anchor in range; decoding
-// then re-encoding one only fails on a malformed or out-of-range stamp.
+#[expect(
+    clippy::expect_used,
+    reason = "every caller passes a day-01 YYYYMMDD anchor in range; decoding then re-encoding one only fails on a malformed or out-of-range stamp"
+)]
 #[must_use]
 pub fn next_month_anchor(month_anchor: i32) -> i32 {
     encode_slot_date(
@@ -857,9 +1441,10 @@ pub fn producer_block() -> ProducerBlock {
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: every caller passes a small stage count; the `u32`→`i32` casts
-// only fail past `i32::MAX` stages.
+#[expect(
+    clippy::expect_used,
+    reason = "every caller passes a small stage count; the u32->i32 casts only fail past i32::MAX stages"
+)]
 #[must_use]
 pub fn chain_graph_manifest(n_stages: u32) -> GraphManifest {
     let nodes = (0..n_stages)
@@ -892,9 +1477,10 @@ pub fn chain_graph_manifest(n_stages: u32) -> GraphManifest {
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: `write_policy_checkpoint` only fails on a write-path IO error,
-// never on this fixture's own well-formed payload.
+#[expect(
+    clippy::expect_used,
+    reason = "write_policy_checkpoint only fails on a write-path IO error, never on this fixture's own well-formed payload"
+)]
 pub fn write_synthetic_boundary(
     dir: &Path,
     state_dimension: u32,
@@ -1002,9 +1588,8 @@ pub fn anticipated_slot_over(thermal_id: i32, ring_slot: u32, start: i32, end: i
 /// Patch one stage-LP solve exactly as the production backward pass's
 /// `patch_opening_bounds` does (`training/backward/lp_setup.rs`): delegates
 /// verbatim to `StageSolvePrep::run` with the backward-opening variation
-/// point (`LoadNoise::Present`, `InflowNoise::Transform`) — no probe-side
-/// reimplementation of the patch pipeline (lag-folded water-balance RHS, NCS
-/// availability).
+/// point (`InflowNoise::Transform`) — no probe-side reimplementation of the
+/// patch pipeline (the z-inflow column's RHS, NCS availability).
 pub fn patch_backward_opening_for_probe<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     ctx: &StageContext<'_>,
@@ -1015,7 +1600,6 @@ pub fn patch_backward_opening_for_probe<S: SolverInterface + Send>(
 ) {
     let prep_params = StageSolvePrepParams {
         state_source: StateSource(pinned_state),
-        load_noise: LoadNoise::Present,
         inflow_noise: InflowNoise::Transform,
         raw_noise,
     };
@@ -1045,7 +1629,6 @@ pub fn patch_backward_opening_for_counterfactual_probe<S: SolverInterface + Send
 ) {
     let prep_params = StageSolvePrepParams {
         state_source: StateSource(pinned_state),
-        load_noise: LoadNoise::Present,
         inflow_noise: InflowNoise::Transform,
         raw_noise,
     };
@@ -1111,19 +1694,11 @@ pub struct CanonicalCutProbe {
     pub pinned_x_hat: Vec<f64>,
 }
 
-/// Drive the real read-back canonicalization and the real backward
-/// cut-intercept write for one opening.
-///
-/// The caller supplies a RAW producer-stage state (`raw_producer_state`,
-/// possibly outside the producer's admissible box); production does the
-/// clamping — [`assemble_outgoing_state`] canonicalizes it exactly as the
-/// forward/simulation read-back seam does. That canonical value is the single
-/// `x_hat` threaded into BOTH the pin ([`patch_backward_opening_for_probe`] →
-/// `StageSolvePrep::run` → `set_col_bounds`) and the intercept
-/// ([`write_opening_outcome`]), mirroring the backward opening loop. The state
-/// the LP was pinned at is recovered separately from the solved primal — an
-/// independent data path — so [`CanonicalCutProbe::pinned_x_hat`] cross-checks
-/// the pin against the cut instead of re-deriving the intercept's own formula.
+/// Canonicalize a RAW producer-stage state exactly as the forward/simulation
+/// read-back seam does (`raw_producer_state`, possibly outside the producer's
+/// admissible box; [`assemble_outgoing_state`] performs the clamp), then
+/// delegate to [`write_backward_opening_outcome_at_canonical_state_for_probe`]
+/// with the resulting canonical `x_hat`.
 ///
 /// # Panics
 ///
@@ -1133,11 +1708,6 @@ pub struct CanonicalCutProbe {
 /// # Errors
 ///
 /// Propagates [`SddpError`] from the stage solve.
-// Rationale (too_many_arguments): a test-only probe that threads the same
-// borrows the production backward opening loop passes individually (workspace,
-// contexts, pool, cut-state, stage/node ids, trial state, noise); grouping them
-// into a struct would diverge from the call shape it mirrors.
-#[allow(clippy::too_many_arguments)]
 pub fn write_backward_opening_outcome_for_probe<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     ctx: &StageContext<'_>,
@@ -1169,7 +1739,7 @@ pub fn write_backward_opening_outcome_for_probe<S: SolverInterface + Send>(
     let mut lag_accumulator = vec![0.0_f64; layout.hydro_count.max(1)];
     let mut lag_weight_accum = vec![0.0_f64; layout.hydro_count.max(1)];
     let incoming_lags = vec![0.0_f64; layout.hydro_count * layout.max_par_order];
-    let ds_par_order = ctx.downstream_par_order;
+    let ds_par_order = training_ctx.study_dims.downstream_par_order;
     let mut ds_accumulator = vec![
         0.0_f64;
         if ds_par_order > 0 {
@@ -1202,10 +1772,59 @@ pub fn write_backward_opening_outcome_for_probe<S: SolverInterface + Send>(
     );
     let canonical_x_hat = canonical_state[..layout.n_state].to_vec();
 
+    write_backward_opening_outcome_at_canonical_state_for_probe(
+        ws,
+        ctx,
+        training_ctx,
+        cut_pool,
+        cut_state,
+        stage,
+        node_id,
+        &canonical_x_hat,
+        raw_noise,
+    )
+}
+
+/// Drive the real read-back canonicalization and the real backward
+/// cut-intercept write for one opening at an already-canonical state `x̂`.
+///
+/// That canonical value is the single `x_hat` threaded into BOTH the pin
+/// ([`patch_backward_opening_for_probe`] → `StageSolvePrep::run` →
+/// `set_col_bounds`) and the intercept ([`write_opening_outcome`]), mirroring
+/// the backward opening loop. The state the LP was pinned at is recovered
+/// separately from the solved primal — an independent data path — so
+/// [`CanonicalCutProbe::pinned_x_hat`] cross-checks the pin against the cut
+/// instead of re-deriving the intercept's own formula.
+///
+/// # Panics
+///
+/// Panics if `canonical_x_hat.len() != StateSpace::n_state`.
+///
+/// # Errors
+///
+/// Propagates [`SddpError`] from the stage solve.
+pub fn write_backward_opening_outcome_at_canonical_state_for_probe<S: SolverInterface + Send>(
+    ws: &mut SolverWorkspace<S>,
+    ctx: &StageContext<'_>,
+    training_ctx: &TrainingContext<'_>,
+    cut_pool: &CutPool,
+    cut_state: &CutStateProjection,
+    stage: StageIdx,
+    node_id: NodeId,
+    canonical_x_hat: &[f64],
+    raw_noise: &[f64],
+) -> Result<CanonicalCutProbe, SddpError> {
+    let layout = training_ctx.state;
+    assert_eq!(
+        canonical_x_hat.len(),
+        layout.n_state,
+        "canonical_x_hat must have one entry per state dimension"
+    );
+
     let template = ctx.template(stage);
     ws.solver.reset_solver_state();
     ws.solver.load_model(template);
-    patch_backward_opening_for_probe(ws, ctx, training_ctx, stage, &canonical_x_hat, raw_noise);
+    patch_backward_opening_for_probe(ws, ctx, training_ctx, stage, canonical_x_hat, raw_noise);
 
     let mut stats_before = SolverStatistics::default();
     ws.solver.statistics_into(&mut stats_before);
@@ -1247,14 +1866,14 @@ pub fn write_backward_opening_outcome_for_probe<S: SolverInterface + Send>(
         cut_state,
         0,
         objective,
-        &canonical_x_hat,
+        canonical_x_hat,
         &stats_before,
         &stats_after,
     );
 
     Ok(CanonicalCutProbe {
         outcome: ws.backward_accum.outcomes[0].clone(),
-        canonical_x_hat,
+        canonical_x_hat: canonical_x_hat.to_vec(),
         pinned_x_hat,
     })
 }
@@ -1290,14 +1909,18 @@ pub fn trial_state_records(states: &[Vec<f64>], n_stages: usize) -> Vec<Trajecto
 /// # Panics
 ///
 /// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: build_node_graph only returns Err for a transition/node naming
-// an undeclared id; HorizonGraph::default() carries no nodes/transitions at
-// all, so that error path is unreachable here.
+#[expect(
+    clippy::expect_used,
+    reason = "build_node_graph only returns Err for a transition/node naming an undeclared id; HorizonGraph::default() carries no nodes/transitions at all, so that error path is unreachable here"
+)]
 #[must_use]
 pub fn chain_node_graph(stochastic: &StochasticContext) -> NodeGraph {
     let n_stages = stochastic.n_stages();
-    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation,
+        reason = "n_stages is a small fixture stage count, far below i32::MAX"
+    )]
     let study_stage_ids: Vec<i32> = (0..n_stages as i32).collect();
     let resolver = StageIdResolver::from_study_stage_ids(&study_stage_ids);
     build_node_graph(&HorizonGraph::default(), n_stages, &resolver, stochastic)
@@ -1345,6 +1968,119 @@ const K_FAN_BRANCH_STAGE_ID: i32 = 1;
 /// (`build_node_graph`'s leaf-sharing rule) — never cut-generating.
 const K_FAN_LEAF_STAGE_ID: i32 = 2;
 
+/// The all-in-sample [`ClassSchemes`]: every fixture whose stochastic context
+/// draws every noise class from the in-sample library shares this literal.
+fn in_sample_class_schemes() -> ClassSchemes {
+    ClassSchemes {
+        inflow: Some(SamplingScheme::InSample),
+        load: Some(SamplingScheme::InSample),
+        ncs: Some(SamplingScheme::InSample),
+    }
+}
+
+/// A hydro-free [`StochasticContext`] over `n_stages` single-block stages,
+/// each with the given `branching_factor` — one deficit-fallback bus, no hydros.
+///
+/// # Panics
+///
+/// Never in practice: the system and stochastic literals built here are
+/// fixed and internally consistent.
+#[expect(
+    clippy::expect_used,
+    reason = "the system and stochastic literals built here are fixed and internally consistent, so SystemBuilder::build/build_stochastic_context never return their error paths"
+)]
+#[must_use]
+pub fn hydro_free_stochastic_context(
+    n_stages: usize,
+    branching_factor: usize,
+) -> StochasticContext {
+    let bus = Bus {
+        id: EntityId(0),
+        name: "B0".to_string(),
+        operational_start_date: ymd(2024, 1, 1),
+        deficit_segments: vec![DeficitSegment {
+            depth_mw: None,
+            cost_per_mwh: 1000.0,
+        }],
+        excess_cost: 0.0,
+    };
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "idx is a small fixture stage index, far below i32::MAX"
+    )]
+    let make_stage = |idx: usize| Stage {
+        index: idx,
+        id: idx as i32,
+        start_date: ymd(2024, 1, 1),
+        end_date: ymd(2024, 2, 1),
+        season_id: Some(0),
+        blocks: vec![Block {
+            index: 0,
+            name: "S".to_string(),
+            duration_hours: 744.0,
+        }],
+        block_mode: BlockMode::Parallel,
+        state_config: StageStateConfig {
+            storage: false,
+            inflow_lags: false,
+        },
+        risk_config: StageRiskConfig::Expectation,
+        scenario_config: ScenarioSourceConfig {
+            branching_factor,
+            noise_method: NoiseMethod::Saa,
+        },
+    };
+    let stages: Vec<Stage> = (0..n_stages).map(make_stage).collect();
+    let correlation = CorrelationModel {
+        method: "spectral".to_string(),
+        profiles: BTreeMap::new(),
+        schedule: vec![],
+    };
+    let system = SystemBuilder::new()
+        .buses(vec![bus])
+        .stages(stages)
+        .correlation(correlation)
+        .build()
+        .expect("hydro_free_stochastic_context: valid study");
+    build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        OpeningTreeInputs::default(),
+        in_sample_class_schemes(),
+    )
+    .expect("hydro_free_stochastic_context: build_stochastic_context must succeed")
+}
+
+/// Reverse `nodes`/`transitions` in place when `reversed`: `build_node_graph`
+/// sorts nodes by id and out-edges by target, so this must recover the
+/// identical canonical graph — the shared input every declaration-order-
+/// invariance fixture in this module builds from.
+fn reverse_declaration_order_if(
+    reversed: bool,
+    nodes: &mut [PolicyNode],
+    transitions: &mut [Transition],
+) {
+    if reversed {
+        nodes.reverse();
+        transitions.reverse();
+    }
+}
+
+fn finite_horizon_graph(nodes: Vec<PolicyNode>, transitions: Vec<Transition>) -> HorizonGraph {
+    HorizonGraph {
+        graph_type: PolicyGraphType::FiniteHorizon,
+        annual_discount_rate: 0.0,
+        transitions,
+        nodes,
+        stage_discount_rate_overrides: BTreeMap::new(),
+        season_map: None,
+    }
+}
+
 /// The declared `nodes[]`/`transitions[]` K-fan: root (id `0`) branches into fan
 /// nodes `1..=k` under strictly non-uniform weights `i / Σj` (never a uniform
 /// `1/k` split — a uniform split would make every reduction order sum identical
@@ -1354,10 +2090,11 @@ const K_FAN_LEAF_STAGE_ID: i32 = 2;
 /// `num_nodes > n_pools` for every `k >= 2`, so a canonical-node-position-as-pool-id
 /// conflation bug would misroute or overflow a pool here, where it cannot on a
 /// chain (`node_index == pool_id` there hides the bug).
-#[allow(
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "k is a small fixture fan width, far below i32::MAX and below f64's exact-integer range"
 )]
 fn k_fan_policy_graph(k: usize, reversed: bool) -> HorizonGraph {
     debug_assert!(k >= 2, "k_fan_policy_graph: k must be >= 2 (DECOMP shape)");
@@ -1398,21 +2135,8 @@ fn k_fan_policy_graph(k: usize, reversed: bool) -> HorizonGraph {
             annual_discount_rate_override: None,
         });
     }
-    // A reversed declaration order must resolve to the identical canonical node
-    // graph (build_node_graph sorts nodes by id, out-edges by target) — the input
-    // for the enumerated engine's declaration-order-invariance gate.
-    if reversed {
-        nodes.reverse();
-        transitions.reverse();
-    }
-    HorizonGraph {
-        graph_type: PolicyGraphType::FiniteHorizon,
-        annual_discount_rate: 0.0,
-        transitions,
-        nodes,
-        stage_discount_rate_overrides: BTreeMap::new(),
-        season_map: None,
-    }
+    reverse_declaration_order_if(reversed, &mut nodes, &mut transitions);
+    finite_horizon_graph(nodes, transitions)
 }
 
 /// The default `state_config` every [`fan_or_chain_system_ext`] caller gets when
@@ -1426,20 +2150,12 @@ const K_FAN_DEFAULT_STATE_CONFIG: StageStateConfig = StageStateConfig {
 /// One study stage at `(index, id)` with a single 744h block, `state_config` as
 /// given, `branching_factor: 1` — every scale/routing signal in the K-fan comes
 /// from the declared node branching, never from within-node opening variance.
-///
-/// # Panics
-///
-/// Never in practice — see the rationale below.
-#[allow(clippy::expect_used)]
-// Rationale: the literal calendar dates below are valid by construction
-// (checked at write time); `from_ymd_opt` only returns `None` for an
-// out-of-range calendar date.
 fn k_fan_stage(index: usize, id: i32, state_config: StageStateConfig) -> Stage {
     Stage {
         index,
         id,
-        start_date: NaiveDate::from_ymd_opt(2024, 1, 1).expect("valid date"),
-        end_date: NaiveDate::from_ymd_opt(2024, 2, 1).expect("valid date"),
+        start_date: ymd(2024, 1, 1),
+        end_date: ymd(2024, 2, 1),
         season_id: None,
         blocks: vec![Block {
             index: 0,
@@ -1469,10 +2185,6 @@ pub(crate) fn k_fan_system(k: usize, reversed: bool) -> System {
 /// degeneracy the enumerated engine's single-path (count-1) 2-rank stub needs.
 /// Every stage gets [`K_FAN_DEFAULT_STATE_CONFIG`] — see [`fan_or_chain_system_ext`]
 /// for a caller that varies it.
-// RATIONALE: one linear fixture that builds a self-consistent multi-stage
-// System; splitting it scatters the study across single-use helpers and hides
-// the whole-study shape a test reads at a glance.
-#[allow(clippy::too_many_lines, clippy::expect_used)]
 fn fan_or_chain_system(n_stages: usize, policy_graph: HorizonGraph) -> System {
     fan_or_chain_system_ext(
         n_stages,
@@ -1522,14 +2234,13 @@ impl StorageSpec {
 /// (empty leaves the PAR-free `vec![]`, byte-identical to every caller predating it);
 /// a non-empty slice with a near-zero `inflow_std` builds a deterministic PAR series,
 /// mirroring `d16_par1_lag_shift`.
-// Rationale: one linear entity/bounds/penalties assembly shared by every fan/chain
-// fixture in this file; splitting the newest knob into a struct would cost a
-// one-off type for a single call site, while every existing caller already reads
-// as a flat parameter list at its call site.
-#[allow(
+#[expect(
     clippy::too_many_lines,
-    clippy::too_many_arguments,
-    clippy::expect_used
+    reason = "one linear entity/bounds/penalties assembly shared by every fan/chain fixture in this file; splitting the newest knob into a struct would cost a one-off type for a single call site, while every existing caller already reads as a flat parameter list at its call site"
+)]
+#[expect(
+    clippy::expect_used,
+    reason = "the fixed study built here is valid and internally consistent by construction"
 )]
 fn fan_or_chain_system_ext(
     n_stages: usize,
@@ -1548,7 +2259,7 @@ fn fan_or_chain_system_ext(
     let bus = Bus {
         id: bus_id,
         name: "B".to_string(),
-        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).expect("valid date"),
+        operational_start_date: ymd(2024, 1, 1),
         deficit_segments: vec![DeficitSegment {
             depth_mw: None,
             cost_per_mwh: 500.0,
@@ -1560,7 +2271,7 @@ fn fan_or_chain_system_ext(
         unit_groups: Vec::new(),
         id: hydro_id,
         name: "H".to_string(),
-        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).expect("valid date"),
+        operational_start_date: ymd(2024, 1, 1),
         downstream_id: None,
         travel_time_hours: None,
         entry_stage_id: None,
@@ -1608,7 +2319,11 @@ fn fan_or_chain_system_ext(
         "fan_or_chain_system_ext: stage_state_configs, when Some, must supply one \
          StageStateConfig per stage"
     );
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "n_stages is a small fixture stage count, far below i32::MAX"
+    )]
     let stages: Vec<_> = (0..n_stages)
         .map(|i| {
             let config = stage_state_configs.map_or(K_FAN_DEFAULT_STATE_CONFIG, |cfgs| cfgs[i]);
@@ -1624,7 +2339,11 @@ fn fan_or_chain_system_ext(
         })
         .collect();
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "n_stages is a small fixture stage count, far below i32::MAX"
+    )]
     let inflow_models: Vec<_> = (0..n_stages)
         .map(|i| InflowModel {
             hydro_id,
@@ -1637,7 +2356,11 @@ fn fan_or_chain_system_ext(
         })
         .collect();
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "n_stages is a small fixture stage count, far below i32::MAX"
+    )]
     let load_models: Vec<_> = (0..n_stages)
         .map(|i| LoadModel {
             bus_id,
@@ -1787,13 +2510,13 @@ pub(crate) fn k_fan_config(forward_passes: u32, max_iterations: u32) -> Config {
 
 /// The DECOMP K-fan [`StudySetup`], bundled with the fixture parameters
 /// callers need to derive their own expected values — never a magic literal,
-/// always re-derived from these fields or from `setup.node_graph` directly.
+/// always re-derived from these fields or from `setup.inputs.node_graph` directly.
 #[derive(Debug)]
 pub struct KFanFixture {
     /// The built study: a single-hydro, single-bus system over the declared
     /// K-fan graph, trained `sampled` with a fixed seed.
     pub setup: StudySetup,
-    /// Fan-out width: `setup.node_graph` has `k` nodes at
+    /// Fan-out width: `setup.inputs.node_graph` has `k` nodes at
     /// [`K_FAN_BRANCH_STAGE_ID`] and `k` leaves at [`K_FAN_LEAF_STAGE_ID`].
     pub k: usize,
     /// `forward_passes` this fixture was configured with (mirrors
@@ -1894,7 +2617,10 @@ pub fn k_fan_setup_gap(
 /// # Panics
 ///
 /// Never in practice — as [`k_fan_setup`].
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
 #[must_use]
 pub fn single_path_enumerated_setup(max_iterations: u32) -> StudySetup {
     let system = fan_or_chain_system(2, HorizonGraph::default());
@@ -1906,11 +2632,7 @@ pub fn single_path_enumerated_setup(max_iterations: u32) -> StudySetup {
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("single_path_enumerated_setup: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -1929,9 +2651,14 @@ pub fn single_path_enumerated_setup(max_iterations: u32) -> StudySetup {
 /// on a malformed system or config, neither of which any caller here
 /// produces, and `enumerated_scenario_count` only errors on a `u64`
 /// path-product overflow, unreachable at this fixture's scale.
-// `config` is taken by value so callers pass an owned builder result inline; the
-// body only borrows it for `StudySetup::new`.
-#[allow(clippy::expect_used, clippy::needless_pass_by_value)]
+#[expect(
+    clippy::expect_used,
+    reason = "every literal in k_fan_system/k_fan_config is a hand-checked, internally-consistent fixture; StudySetup::new only errors on a malformed system or config, and enumerated_scenario_count only errors on a u64 path-product overflow, neither reachable at this fixture's scale"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "config is taken by value so callers pass an owned builder result inline; the body only borrows it for StudySetup::new"
+)]
 #[must_use]
 fn k_fan_fixture(k: usize, reversed: bool, config: Config) -> KFanFixture {
     let system = k_fan_system(k, reversed);
@@ -1942,18 +2669,14 @@ fn k_fan_fixture(k: usize, reversed: bool, config: Config) -> KFanFixture {
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("k_fan_fixture: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
 
     let setup = StudySetup::new(&system, &config, stochastic, hydro_models, Vec::new())
         .expect("k_fan_fixture: StudySetup::new must succeed");
-    let enumerated = enumerated_scenario_count(&setup.node_graph)
+    let enumerated = enumerated_scenario_count(&setup.inputs.node_graph)
         .expect("k_fan_fixture: enumerated_scenario_count must not overflow at this scale");
 
     KFanFixture {
@@ -2030,7 +2753,10 @@ fn external_fan_config_enumerated(max_iterations: u32) -> Config {
 ///
 /// Never in practice: `build_stochastic_context` is infallible for this
 /// hand-checked fixture (only the `StudySetup::new` result is returned).
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context is infallible for this hand-checked fixture; only the StudySetup::new result is propagated via ?"
+)]
 pub fn try_k_fan_simulation_enumerated(k: usize) -> Result<StudySetup, SddpError> {
     let system = k_fan_system(k, false);
     let mut config = k_fan_config(1, 1);
@@ -2043,11 +2769,7 @@ pub fn try_k_fan_simulation_enumerated(k: usize) -> Result<StudySetup, SddpError
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("try_k_fan_simulation_enumerated: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -2076,7 +2798,10 @@ impl SolverInterface for TemplateCaptureSolver {
 
     fn add_rows(&mut self, _rows: &RowBatch) {}
 
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "every caller invokes load_model before set_row_bounds, so template is always Some"
+    )]
     fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
         let t = self
             .template
@@ -2088,7 +2813,10 @@ impl SolverInterface for TemplateCaptureSolver {
         }
     }
 
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "every caller invokes load_model before set_col_bounds, so template is always Some"
+    )]
     fn set_col_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
         let t = self
             .template
@@ -2125,20 +2853,132 @@ impl SolverInterface for TemplateCaptureSolver {
     }
 }
 
+/// Recording [`SolverInterface`] wrapping a real solver: every method forwards
+/// to `inner`, while `load_model`/`set_row_bounds`/`set_col_bounds` also mirror
+/// the bound-patch onto `current` (the bookkeeping [`TemplateCaptureSolver`]
+/// performs standalone), and `solve` snapshots `current` into `recorded`
+/// before forwarding — so `recorded` ends up holding the exact LP a caller
+/// (e.g. [`evaluate_lower_bound`]) solves, one entry per `solve` call.
+struct BoundRecordingSolver<S: SolverInterface> {
+    inner: S,
+    current: Option<StageTemplate>,
+    recorded: Vec<StageTemplate>,
+}
+
+impl<S: SolverInterface> SolverInterface for BoundRecordingSolver<S> {
+    type Profile = S::Profile;
+
+    fn apply_profile(&mut self, profile: &Self::Profile) {
+        self.inner.apply_profile(profile);
+    }
+
+    fn load_model(&mut self, template: &StageTemplate) {
+        self.current = Some(template.clone());
+        self.inner.load_model(template);
+    }
+
+    fn add_rows(&mut self, rows: &RowBatch) {
+        self.inner.add_rows(rows);
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "every caller invokes load_model before set_row_bounds, so current is always Some"
+    )]
+    fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
+        let t = self
+            .current
+            .as_mut()
+            .expect("BoundRecordingSolver: load_model precedes set_row_bounds");
+        for (k, &i) in indices.iter().enumerate() {
+            t.row_lower[i] = lower[k];
+            t.row_upper[i] = upper[k];
+        }
+        self.inner.set_row_bounds(indices, lower, upper);
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "every caller invokes load_model before set_col_bounds, so current is always Some"
+    )]
+    fn set_col_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
+        let t = self
+            .current
+            .as_mut()
+            .expect("BoundRecordingSolver: load_model precedes set_col_bounds");
+        for (k, &i) in indices.iter().enumerate() {
+            t.col_lower[i] = lower[k];
+            t.col_upper[i] = upper[k];
+        }
+        self.inner.set_col_bounds(indices, lower, upper);
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "every caller invokes load_model before solve, so current is always Some"
+    )]
+    fn solve(&mut self, basis: Option<&Basis>) -> Result<SolutionView<'_>, SolverError> {
+        let current = self
+            .current
+            .clone()
+            .expect("BoundRecordingSolver: load_model precedes solve");
+        self.recorded.push(current);
+        self.inner.solve(basis)
+    }
+
+    fn get_basis(&mut self, out: &mut Basis) {
+        self.inner.get_basis(out);
+    }
+
+    fn statistics(&self) -> SolverStatistics {
+        self.inner.statistics()
+    }
+
+    fn statistics_into(&self, out: &mut SolverStatistics) {
+        self.inner.statistics_into(out);
+    }
+
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn solver_name_version(&self) -> String {
+        self.inner.solver_name_version()
+    }
+
+    fn record_reconstruction_stats(&mut self) {
+        self.inner.record_reconstruction_stats();
+    }
+
+    fn reset_solver_state(&mut self) {
+        self.inner.reset_solver_state();
+    }
+}
+
+/// `setup`'s stage-invariant [`StateSpace`] — `StudySetup::stage_data.state` is
+/// `pub(crate)`; this is the test-support reach-through.
+#[must_use]
+pub fn state_space(setup: &StudySetup) -> &StateSpace {
+    &setup.inputs.stage_data.state
+}
+
 /// The `[hydro | load-bus | NCS]` standardized noise draw for `node_pos`: an
 /// `External` node reads its own scenario column from the standardized external
 /// inflow library; a `Generated` node draws zeros — the oracle fixtures carry
 /// `std == 0` on every generated stage, so `transform_inflow_noise` recovers the
 /// mean regardless.
 fn oracle_raw_noise(setup: &StudySetup, node_pos: NodePos) -> Vec<f64> {
-    let stage = setup.node_graph.nodes[node_pos].stage;
-    let n_hydros = setup.stage_data.state.hydro_count;
-    let n_load = setup.stage_data.stage_templates.n_load_buses;
-    let n_ncs = setup.stochastic.n_stochastic_ncs();
-    let mut raw = vec![0.0_f64; n_hydros + n_load + n_ncs];
-    let openings = setup.node_graph.nodes[node_pos].openings;
+    let stage = setup.inputs.node_graph.nodes[node_pos].stage;
+    let n_hydros = setup.inputs.stage_data.state.hydro_count;
+    let mut raw = vec![0.0_f64; setup.inputs.stochastic.dim()];
+    let openings = setup.inputs.node_graph.nodes[node_pos].openings;
     if openings.source == OpeningSource::External
-        && let Some(lib) = setup.scenario_libraries.training.external_inflow.as_ref()
+        && let Some(lib) = setup
+            .inputs
+            .scenario_libraries
+            .training
+            .external_inflow
+            .as_ref()
     {
         let eta = lib.eta_slice(stage.0, openings.offset);
         let take = eta.len().min(n_hydros);
@@ -2151,58 +2991,156 @@ fn oracle_raw_noise(setup: &StudySetup, node_pos: NodePos) -> Vec<f64> {
 /// — the base template for the node's stage with the incoming-state pin and the
 /// realized noise applied exactly as the training solve does (via the shared
 /// [`StageSolvePrep::run`] pipeline). The incoming-state columns land pinned to
-/// [`StudySetup::initial_state`]; the extensive-form composer frees and couples them for
+/// `SolveInputs::initial`; the extensive-form composer frees and couples them for
 /// non-root nodes.
 ///
 /// # Panics
 ///
 /// Panics if `node_pos` (or its resolved stage) is out of range, or if the
 /// template is absent after [`StageSolvePrep::run`].
-#[allow(clippy::expect_used)]
 #[must_use]
 pub fn capture_patched_node_template(setup: &StudySetup, node_pos: NodePos) -> StageTemplate {
-    let stage = setup.node_graph.nodes[node_pos].stage;
-    let base = setup.stage_data.stage_templates.templates[stage.0].clone();
+    let raw_noise = oracle_raw_noise(setup, node_pos);
+    capture_patched_node_template_with_raw_noise(
+        setup,
+        node_pos,
+        &raw_noise,
+        &setup.inputs.initial.state,
+    )
+}
+
+/// [`capture_patched_node_template`] with a caller-chosen standardized inflow
+/// draw (one entry per hydro) in place of the node's own; load-bus and NCS draws
+/// are zero, so those resolve to their means.
+///
+/// # Panics
+///
+/// Panics if `inflow_eta` is not `hydro_count` long, if `node_pos` (or its
+/// resolved stage) is out of range, or if the template is absent after
+/// [`StageSolvePrep::run`].
+#[must_use]
+pub fn capture_patched_node_template_with_inflow_noise(
+    setup: &StudySetup,
+    node_pos: NodePos,
+    inflow_eta: &[f64],
+) -> StageTemplate {
+    let hydro = setup.inputs.stochastic.class_dimensions().hydro_range();
+    assert_eq!(
+        inflow_eta.len(),
+        hydro.len(),
+        "inflow_eta must hold one standardized draw per hydro"
+    );
+    let mut raw_noise = vec![0.0_f64; setup.inputs.stochastic.dim()];
+    raw_noise[hydro].copy_from_slice(inflow_eta);
+    capture_patched_node_template_with_raw_noise(
+        setup,
+        node_pos,
+        &raw_noise,
+        &setup.inputs.initial.state,
+    )
+}
+
+/// [`capture_patched_node_template`] at a caller-chosen raw noise vector and
+/// incoming state, in place of the node's own oracle draw and
+/// `SolveInputs::initial`.
+///
+/// # Panics
+///
+/// Panics if `raw_noise.len() != setup.inputs.stochastic.dim()`, if
+/// `incoming_state.len() != setup.inputs.stage_data.state.n_state`, if `node_pos`
+/// (or its resolved stage) is out of range, or if the template is absent
+/// after [`StageSolvePrep::run`].
+#[must_use]
+pub fn capture_patched_node_template_at(
+    setup: &StudySetup,
+    node_pos: NodePos,
+    raw_noise: &[f64],
+    incoming_state: &[f64],
+) -> StageTemplate {
+    assert_eq!(
+        raw_noise.len(),
+        setup.inputs.stochastic.dim(),
+        "raw_noise must be the `[hydro | load-bus | NCS]` raw-noise length"
+    );
+    assert_eq!(
+        incoming_state.len(),
+        setup.inputs.stage_data.state.n_state,
+        "incoming_state must hold one entry per state dimension"
+    );
+    capture_patched_node_template_with_raw_noise(setup, node_pos, raw_noise, incoming_state)
+}
+
+/// Opening `opening`'s raw `[hydro | load-bus | NCS]` noise vector at
+/// `node_pos`: a `Generated` node's own draw from
+/// [`StochasticContext::opening_tree`]; an `External` node's sole opening
+/// (`0`) assembled through [`fill_external_opening_noise`], the same routine
+/// the backward pass and the lower bound read.
+///
+/// # Panics
+///
+/// Panics if `opening >= node_pos`'s opening count, if (for an `External`
+/// node) `opening != 0`, or if [`fill_external_opening_noise`] fails.
+#[expect(
+    clippy::expect_used,
+    reason = "fill_external_opening_noise fails only on a malformed setup this fixture never produces"
+)]
+#[must_use]
+pub fn node_opening_noise(setup: &StudySetup, node_pos: NodePos, opening: usize) -> Vec<f64> {
+    let stage = setup.inputs.node_graph.nodes[node_pos].stage;
+    let openings = setup.inputs.node_graph.nodes[node_pos].openings;
+    assert!(
+        opening < openings.len,
+        "opening must be < node_pos's opening count"
+    );
+    match openings.source {
+        OpeningSource::Generated => setup
+            .inputs
+            .stochastic
+            .opening_tree()
+            .opening(stage.0, openings.offset + opening)
+            .to_vec(),
+        OpeningSource::External => {
+            assert_eq!(opening, 0, "an External node has exactly one opening");
+            let training_ctx = setup.training_ctx();
+            let mut buf = Vec::new();
+            fill_external_opening_noise(
+                &training_ctx,
+                stage,
+                openings.offset,
+                setup.inputs.node_graph.node_ids[node_pos],
+                &mut buf,
+            )
+            .expect("node_opening_noise: fill_external_opening_noise must succeed");
+            buf
+        }
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "TemplateCaptureSolver::template is set before StageSolvePrep::run and only load_model/set_row_bounds/set_col_bounds touch it, so it is always Some after run"
+)]
+fn capture_patched_node_template_with_raw_noise(
+    setup: &StudySetup,
+    node_pos: NodePos,
+    raw_noise: &[f64],
+    incoming_state: &[f64],
+) -> StageTemplate {
+    let stage = setup.inputs.node_graph.nodes[node_pos].stage;
+    let base = setup.inputs.stage_data.stage_templates.templates[stage.0].clone();
     let mut solver = TemplateCaptureSolver {
         template: Some(base),
     };
 
-    let space = &setup.stage_data.state;
-    let n_load_buses = setup.stage_data.stage_templates.n_load_buses;
-    let max_blocks = setup.loop_params.max_blocks;
-    let mut patch_buf = PatchBuffer::new(
-        space.hydro_count,
-        space.max_par_order,
-        n_load_buses,
-        max_blocks,
-        space.n_buckets,
-        space.n_anticipated,
-        space.k_max,
-    );
-    let mut scratch = ScratchBuffers::new(WorkspaceSizing {
-        hydro_count: space.hydro_count,
-        max_par_order: space.max_par_order,
-        n_load_buses,
-        max_blocks,
-        n_buckets: space.n_buckets,
-        downstream_par_order: setup.downstream_par_order,
-        max_openings: 0,
-        initial_pool_capacity: 0,
-        n_state: space.n_state,
-        max_local_fwd: 0,
-        noise_dim: 0,
-        n_anticipated: space.n_anticipated,
-        k_max: space.k_max,
-    });
-
-    let raw_noise = oracle_raw_noise(setup, node_pos);
+    let space = &setup.inputs.stage_data.state;
     let ctx = setup.stage_ctx();
+    let mut patch_buf = PatchBuffer::new(space, ctx.load_bus_indices, ctx.geometry_per_stage);
     let training_ctx = setup.training_ctx();
+    let mut scratch = ScratchBuffers::new(&training_ctx, &ctx, WorkspaceSizing::default());
     let params = StageSolvePrepParams {
-        state_source: StateSource(&setup.initial_state),
-        load_noise: LoadNoise::Present,
+        state_source: StateSource(incoming_state),
         inflow_noise: InflowNoise::Transform,
-        raw_noise: &raw_noise,
+        raw_noise,
     };
     StageSolvePrep::run(
         &mut solver,
@@ -2224,16 +3162,97 @@ pub fn capture_patched_node_template(setup: &StudySetup, node_pos: NodePos) -> S
 /// extensive-form root's incoming-state columns are pinned to.
 #[must_use]
 pub fn oracle_initial_state(setup: &StudySetup) -> Vec<f64> {
-    setup.initial_state.clone()
+    setup.inputs.initial.state.clone()
 }
 
 /// `stage`'s admissible box (per outgoing state dimension) as plain `(lower,
-/// upper)` vectors. `StateBox`/`StageTemplates::state_boxes` are `pub(crate)`, so
-/// this returns their data rather than naming either type in a `pub` signature.
+/// upper)` vectors, for integration tests, which cannot reach the crate-private
+/// `StageTemplates::state_boxes`.
 #[must_use]
 pub fn stage_state_box_bounds(setup: &StudySetup, stage: usize) -> (Vec<f64>, Vec<f64>) {
-    let state_box = &setup.stage_data.stage_templates.state_boxes[stage];
+    let state_box = &setup.inputs.stage_data.stage_templates.state_boxes()[stage];
     (state_box.lower.clone(), state_box.upper.clone())
+}
+
+/// The no-cut root lower bound: [`evaluate_lower_bound`] over `setup`'s stage-0
+/// LP with whatever cuts `setup.fcf` currently holds (empty on a freshly built
+/// `StudySetup`), with the lower-bound scratch sized from the training
+/// session's own arguments.
+///
+/// # Errors
+///
+/// Returns whatever [`evaluate_lower_bound`] returns.
+pub fn no_cut_root_lower_bound<S: SolverInterface>(
+    setup: &StudySetup,
+    solver: &mut S,
+) -> Result<f64, SddpError> {
+    let training_ctx = setup.training_ctx();
+    let state = training_ctx.state;
+    let stage_ctx = setup.stage_ctx();
+
+    let mut patch_buf = crate::lower_bound::lower_bound_patch_buffer(state, &stage_ctx);
+    let mut lb_cut_batch = RowBatch {
+        num_rows: 0,
+        row_starts: Vec::new(),
+        col_indices: Vec::new(),
+        values: Vec::new(),
+        row_lower: Vec::new(),
+        row_upper: Vec::new(),
+    };
+    let mut noise_scratch =
+        ScratchBuffers::new(&training_ctx, &stage_ctx, WorkspaceSizing::default());
+    let mut lb_scratch = LbEvalScratch::new();
+    let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+        &mut patch_buf,
+        &mut lb_cut_batch,
+        None,
+        &mut noise_scratch,
+        &mut lb_scratch,
+    );
+
+    evaluate_lower_bound(
+        solver,
+        &setup.fcf,
+        &stage_ctx,
+        &training_ctx,
+        &setup.inputs.cut_management.risk_measures[0],
+        &mut bundle,
+        &LocalBackend,
+    )
+}
+
+/// The lower bound's fully-patched root-opening templates, one entry per root
+/// opening in opening order — the exact LP [`no_cut_root_lower_bound`] solves
+/// for each, recorded via [`BoundRecordingSolver`] so the patch buffer stays
+/// sized however [`no_cut_root_lower_bound`] sizes it.
+///
+/// # Errors
+///
+/// Returns whatever [`no_cut_root_lower_bound`] returns.
+pub fn lower_bound_root_templates<S: SolverInterface>(
+    setup: &StudySetup,
+    solver: S,
+) -> Result<Vec<StageTemplate>, SddpError> {
+    let mut recorder = BoundRecordingSolver {
+        inner: solver,
+        current: None,
+        recorded: Vec::new(),
+    };
+    no_cut_root_lower_bound(setup, &mut recorder)?;
+    Ok(recorder.recorded)
+}
+
+/// `(downstream_completed_lags.len(), lag_accumulator.len())` of a built
+/// workspace's scratch — both `pub(crate)`, unreachable from a `tests/`
+/// integration crate without this accessor.
+#[must_use]
+pub fn workspace_downstream_lag_shape<S: SolverInterface>(
+    ws: &SolverWorkspace<S>,
+) -> (usize, usize) {
+    (
+        ws.scratch.downstream_completed_lags.len(),
+        ws.scratch.lag_accumulator.len(),
+    )
 }
 
 // ── Branching value oracle: fixtures ─────────────────────────────────────────
@@ -2249,7 +3268,10 @@ const TERMINAL_FAN_STAGES: usize = 2;
 /// # Panics
 ///
 /// Never in practice — as [`k_fan_setup`].
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
 #[must_use]
 pub fn oracle_chain_setup(max_iterations: u32) -> StudySetup {
     let system = fan_or_chain_system(3, HorizonGraph::default());
@@ -2261,11 +3283,7 @@ pub fn oracle_chain_setup(max_iterations: u32) -> StudySetup {
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("oracle_chain_setup: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -2278,10 +3296,11 @@ pub fn oracle_chain_setup(max_iterations: u32) -> StudySetup {
 /// weights `i / Σj`, every node `Generated` (no `scenario_id`). The leaves are
 /// terminal, so [`build_node_graph`] assigns them ONE shared leaf pool: the fan's
 /// successors are interchangeable and today's engine prices the root correctly.
-#[allow(
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "k is a small fixture fan width, far below i32::MAX and below f64's exact-integer range"
 )]
 fn terminal_generated_fan_policy_graph(k: usize) -> HorizonGraph {
     debug_assert!(
@@ -2311,14 +3330,7 @@ fn terminal_generated_fan_policy_graph(k: usize) -> HorizonGraph {
             annual_discount_rate_override: None,
         });
     }
-    HorizonGraph {
-        graph_type: PolicyGraphType::FiniteHorizon,
-        annual_discount_rate: 0.0,
-        transitions,
-        nodes,
-        stage_discount_rate_overrides: BTreeMap::new(),
-        season_map: None,
-    }
+    finite_horizon_graph(nodes, transitions)
 }
 
 /// The terminal-Generated fan control [`StudySetup`]: a root fanning into `k`
@@ -2327,7 +3339,10 @@ fn terminal_generated_fan_policy_graph(k: usize) -> HorizonGraph {
 /// # Panics
 ///
 /// Never in practice — as [`k_fan_setup`].
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
 #[must_use]
 pub fn terminal_generated_fan_setup(k: usize, max_iterations: u32) -> StudySetup {
     let system = fan_or_chain_system(TERMINAL_FAN_STAGES, terminal_generated_fan_policy_graph(k));
@@ -2339,11 +3354,7 @@ pub fn terminal_generated_fan_setup(k: usize, max_iterations: u32) -> StudySetup
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("terminal_generated_fan_setup: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -2408,16 +3419,6 @@ const EXTERNAL_FAN_LOAD_STD: f64 = 20.0;
 ///
 /// Never in practice — every literal is a hand-checked, internally-consistent
 /// fixture.
-// RATIONALE: one linear fixture that builds a self-consistent external-distinct
-// fan study; splitting it scatters the study across single-use helpers and hides
-// the whole-study shape a test reads at a glance.
-#[allow(
-    clippy::expect_used,
-    clippy::too_many_lines,
-    clippy::cast_precision_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
-)]
 #[must_use]
 pub fn external_distinct_fan_setup(k: usize, max_iterations: u32) -> StudySetup {
     build_external_distinct_fan_setup(k, max_iterations, None)
@@ -2451,16 +3452,15 @@ pub fn external_distinct_fan_setup_heterogeneous_cut_state(
     build_external_distinct_fan_setup(k, max_iterations, Some(1))
 }
 
-// Rationale (too_many_lines): one linear pass assembling a StudySetup fixture —
-// policy graph, per-node external inflow openings, and config — from literal deck
-// data; splitting it would scatter shared locals across helpers for no
-// test-readability gain.
-#[allow(
+#[expect(
     clippy::expect_used,
-    clippy::too_many_lines,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "k and its derived scenario/node ids are small fixture counts, far below i32::MAX and below f64's exact-integer range"
 )]
 fn build_external_distinct_fan_setup(
     k: usize,
@@ -2472,7 +3472,6 @@ fn build_external_distinct_fan_setup(
         "external fan k in 2..=3"
     );
 
-    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     let policy_graph = {
         let mut nodes = Vec::with_capacity(1 + k);
         let mut transitions = Vec::with_capacity(k);
@@ -2497,14 +3496,7 @@ fn build_external_distinct_fan_setup(
                 annual_discount_rate_override: None,
             });
         }
-        HorizonGraph {
-            graph_type: PolicyGraphType::FiniteHorizon,
-            annual_discount_rate: 0.0,
-            transitions,
-            nodes,
-            stage_discount_rate_overrides: BTreeMap::new(),
-            season_map: None,
-        }
+        finite_horizon_graph(nodes, transitions)
     };
 
     let hydro_id = EntityId(2);
@@ -2594,15 +3586,15 @@ fn build_external_distinct_fan_setup(
 ///
 /// Never in practice — every literal is a hand-checked, internally-consistent
 /// fixture.
-// RATIONALE: one linear fixture that builds a self-consistent external-root
-// fan study; splitting it scatters the study across single-use helpers and hides
-// the whole-study shape a test reads at a glance.
-#[allow(
+#[expect(
     clippy::expect_used,
-    clippy::too_many_lines,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "k and its derived scenario/node ids are small fixture counts, far below i32::MAX and below f64's exact-integer range"
 )]
 #[must_use]
 pub fn external_root_fan_setup(k: usize, max_iterations: u32) -> StudySetup {
@@ -2616,7 +3608,6 @@ pub fn external_root_fan_setup(k: usize, max_iterations: u32) -> StudySetup {
         "external fan k in 2..=3"
     );
 
-    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     let policy_graph = {
         let mut nodes = Vec::with_capacity(1 + k);
         let mut transitions = Vec::with_capacity(k);
@@ -2641,14 +3632,7 @@ pub fn external_root_fan_setup(k: usize, max_iterations: u32) -> StudySetup {
                 annual_discount_rate_override: None,
             });
         }
-        HorizonGraph {
-            graph_type: PolicyGraphType::FiniteHorizon,
-            annual_discount_rate: 0.0,
-            transitions,
-            nodes,
-            stage_discount_rate_overrides: BTreeMap::new(),
-            season_map: None,
-        }
+        finite_horizon_graph(nodes, transitions)
     };
 
     let hydro_id = EntityId(2);
@@ -2783,11 +3767,15 @@ pub fn water_binding_external_fan_setup_reversed(k: usize, max_iterations: u32) 
     build_water_binding_external_fan(k, max_iterations, true)
 }
 
-#[allow(
+#[expect(
     clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "k and its derived scenario/node ids are small fixture counts, far below i32::MAX and below f64's exact-integer range"
 )]
 fn build_water_binding_external_fan(k: usize, max_iterations: u32, reversed: bool) -> StudySetup {
     assert!(
@@ -2819,20 +3807,8 @@ fn build_water_binding_external_fan(k: usize, max_iterations: u32, reversed: boo
                 annual_discount_rate_override: None,
             });
         }
-        // A reversed declaration order must resolve to the identical canonical node
-        // graph (build_node_graph sorts by id, out-edges by target).
-        if reversed {
-            nodes.reverse();
-            transitions.reverse();
-        }
-        HorizonGraph {
-            graph_type: PolicyGraphType::FiniteHorizon,
-            annual_discount_rate: 0.0,
-            transitions,
-            nodes,
-            stage_discount_rate_overrides: BTreeMap::new(),
-            season_map: None,
-        }
+        reverse_declaration_order_if(reversed, &mut nodes, &mut transitions);
+        finite_horizon_graph(nodes, transitions)
     };
 
     let hydro_id = EntityId(2);
@@ -2888,7 +3864,7 @@ fn build_water_binding_external_fan(k: usize, max_iterations: u32, reversed: boo
             };
             2
         ]],
-        1,
+        system.hydros(),
         2,
     );
     StudySetup::new(&system, &config, stochastic, hydro_models, Vec::new())
@@ -2911,7 +3887,6 @@ const BRANCHING_TREE_RIGHT_WEIGHT: f64 = 0.65;
 /// leaf (branching at ONE level only). Node ids: `0` (root), `1`/`2` (fan,
 /// [`K_FAN_BRANCH_STAGE_ID`]), `3..=6` (leaves, [`K_FAN_LEAF_STAGE_ID`], `1`'s
 /// children first). All `Generated` (no `scenario_id`).
-#[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 fn branching_tree_policy_graph(reversed: bool) -> HorizonGraph {
     let mut nodes = Vec::with_capacity(7);
     let mut transitions = Vec::with_capacity(6);
@@ -2955,21 +3930,8 @@ fn branching_tree_policy_graph(reversed: bool) -> HorizonGraph {
             });
         }
     }
-    // A reversed declaration order must resolve to the identical canonical node
-    // graph (build_node_graph sorts nodes by id, out-edges by target) — the input
-    // for the declaration-order-invariance gate.
-    if reversed {
-        nodes.reverse();
-        transitions.reverse();
-    }
-    HorizonGraph {
-        graph_type: PolicyGraphType::FiniteHorizon,
-        annual_discount_rate: 0.0,
-        transitions,
-        nodes,
-        stage_discount_rate_overrides: BTreeMap::new(),
-        season_map: None,
-    }
+    reverse_declaration_order_if(reversed, &mut nodes, &mut transitions);
+    finite_horizon_graph(nodes, transitions)
 }
 
 /// Per-study-stage `state_config` for the branching-tree fixture — the non-uniform
@@ -3063,7 +4025,10 @@ pub fn non_uniform_branching_setup_reversed(
     build_non_uniform_branching_setup(forward_passes, max_iterations, true)
 }
 
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
 fn build_non_uniform_branching_setup(
     forward_passes: u32,
     max_iterations: u32,
@@ -3082,11 +4047,7 @@ fn build_non_uniform_branching_setup(
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("non_uniform_branching_setup: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -3113,7 +4074,10 @@ fn build_non_uniform_branching_setup(
 /// # Panics
 ///
 /// Never in practice — as [`k_fan_setup`].
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
 #[must_use]
 pub fn branching_tree_setup_enumerated(max_iterations: u32) -> StudySetup {
     let system = fan_or_chain_system(3, branching_tree_policy_graph(false));
@@ -3125,11 +4089,7 @@ pub fn branching_tree_setup_enumerated(max_iterations: u32) -> StudySetup {
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("branching_tree_setup_enumerated: build_stochastic_context must succeed");
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -3140,13 +4100,13 @@ pub fn branching_tree_setup_enumerated(max_iterations: u32) -> StudySetup {
 /// Per-pool cut-state dimension (`CutStateProjection::n_slots`), pool-id-indexed
 /// — the branching-tree fixture's power self-check reads this to confirm the projection
 /// genuinely varies across pools (`build_cut_state_layouts` sizes each non-leaf
-/// pool from its successor's `state_config`). `StageData::cut_state_layouts`
+/// pool from its successor's `state_config`). `SolveInputs::cut_state_layouts`
 /// itself is `pub(crate)`, unreachable from an integration test without this
 /// accessor.
 #[must_use]
 pub fn pool_cut_state_dimensions(setup: &StudySetup) -> Vec<usize> {
     setup
-        .stage_data
+        .inputs
         .cut_state_layouts
         .iter()
         .map(CutStateProjection::n_slots)
@@ -3156,14 +4116,14 @@ pub fn pool_cut_state_dimensions(setup: &StudySetup) -> Vec<usize> {
 // ── Extensive-form oracle (shared by `branching_value_oracle.rs` and any other
 //    integration test that needs the graph's true first-stage value) ─────────
 
-/// Marginal visit probability of every node in `setup.node_graph`: `P(root) = 1`,
+/// Marginal visit probability of every node in `setup.inputs.node_graph`: `P(root) = 1`,
 /// propagated `P(child) += P(node)·prob(node→child)` in ascending-stage order. On
 /// a tree this is the product of edge probabilities on the unique root→node path
 /// — the weight each node copy's stage cost carries in
 /// [`extensive_form_optimum`]'s objective.
 #[must_use]
 pub fn node_visit_probabilities(setup: &StudySetup) -> Vec<f64> {
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let n = g.nodes.len();
     let mut has_pred = vec![false; n];
     for succs in &g.successors {
@@ -3186,7 +4146,7 @@ pub fn node_visit_probabilities(setup: &StudySetup) -> Vec<f64> {
     prob
 }
 
-/// The extensive-form LP optimum — `setup.node_graph`'s true first-stage value,
+/// The extensive-form LP optimum — `setup.inputs.node_graph`'s true first-stage value,
 /// computed independently of the node-native training algorithm: one column
 /// block per node (its engine-exact patched template via
 /// [`capture_patched_node_template`]), objective scaled by
@@ -3200,15 +4160,19 @@ pub fn node_visit_probabilities(setup: &StudySetup) -> Vec<f64> {
 ///
 /// Panics if the extensive-form LP fails to build a solver or fails to solve —
 /// unreachable for a well-formed, feasible `setup`.
-#[allow(
+#[expect(
     clippy::expect_used,
+    reason = "the extensive-form LP fails to build a solver or to solve only for a malformed, infeasible setup, unreachable for this oracle's inputs"
+)]
+#[expect(
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    reason = "node/row/column counts here are small fixture sizes, far below i32::MAX and always non-negative"
 )]
 #[must_use]
 pub fn extensive_form_optimum(setup: &StudySetup) -> f64 {
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let n = g.nodes.len();
     let state = setup.stage_state();
     let n_state = state.n_state;
@@ -3291,10 +4255,6 @@ pub fn extensive_form_optimum(setup: &StudySetup) -> f64 {
         row_lower,
         row_upper,
         n_state: 0,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
@@ -3349,7 +4309,7 @@ pub fn extensive_form_optimum(setup: &StudySetup) -> f64 {
         .expect("extensive_form_optimum: extensive-form LP must solve");
     // The template objective carries the cost-scale divisor; rescale to the physical
     // cost units the engine reports `final_lb` in.
-    solution.objective * setup.stage_data.stage_templates.cost_scale_factor
+    solution.objective * setup.inputs.stage_data.stage_templates.cost_scale_factor
 }
 
 // ── Dual-folding trunk+fan fixture ────────────────────────────────────────────
@@ -3412,10 +4372,11 @@ fn dual_folding_stage_configs(fold: LagFold) -> [StageStateConfig; 3] {
 /// terminal leaves (ids `2..=k+1`, stage [`K_FAN_LEAF_STAGE_ID`]) under
 /// non-uniform weights `i / Σj` (never uniform `1/k`). The two trunk nodes (root,
 /// mid) each own their own cut pool; the `k` leaves share one terminal pool.
-#[allow(
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "k is a small fixture fan width, far below i32::MAX and below f64's exact-integer range"
 )]
 fn dual_folding_policy_graph(k: usize) -> HorizonGraph {
     debug_assert!(k >= 2, "dual_folding_policy_graph: k must be >= 2");
@@ -3455,14 +4416,7 @@ fn dual_folding_policy_graph(k: usize) -> HorizonGraph {
             annual_discount_rate_override: None,
         });
     }
-    HorizonGraph {
-        graph_type: PolicyGraphType::FiniteHorizon,
-        annual_discount_rate: 0.0,
-        transitions,
-        nodes,
-        stage_discount_rate_overrides: BTreeMap::new(),
-        season_map: None,
-    }
+    finite_horizon_graph(nodes, transitions)
 }
 
 /// The dual-folding [`System`]: [`dual_folding_policy_graph`] over the shared
@@ -3495,7 +4449,10 @@ fn dual_folding_system(fold: LagFold) -> System {
 /// Never in practice — every literal is a hand-checked, internally-consistent
 /// fixture (as [`k_fan_setup`]); `build_stochastic_context`/`StudySetup::new`
 /// only error on a malformed study.
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context/StudySetup::new never error on this fixture's fixed, internally consistent inputs"
+)]
 #[must_use]
 pub fn dual_folding_setup(fold: LagFold, forward_passes: u32, max_iterations: u32) -> StudySetup {
     let system = dual_folding_system(fold);
@@ -3510,11 +4467,7 @@ pub fn dual_folding_setup(fold: LagFold, forward_passes: u32, max_iterations: u3
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("dual_folding_setup: build_stochastic_context must succeed");
     let mut hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -3528,7 +4481,7 @@ pub fn dual_folding_setup(fold: LagFold, forward_passes: u32, max_iterations: u3
             };
             3
         ]],
-        1,
+        system.hydros(),
         3,
     );
     StudySetup::new_with_boundary_requirements(
@@ -3568,10 +4521,11 @@ const TRUNK_FAN_STORAGE: StorageSpec = StorageSpec {
 /// [`k_fan_policy_graph`]/[`dual_folding_policy_graph`]: a uniform split would
 /// make every canonical-order reduction sum identical terms, defeating the
 /// canonical-order gate's power).
-#[allow(
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    reason = "t_trunk and k are small fixture counts, far below i32::MAX and below f64's exact-integer range"
 )]
 fn trunk_fan_policy_graph(t_trunk: usize, k: usize) -> HorizonGraph {
     debug_assert!(
@@ -3617,14 +4571,7 @@ fn trunk_fan_policy_graph(t_trunk: usize, k: usize) -> HorizonGraph {
             annual_discount_rate_override: None,
         });
     }
-    HorizonGraph {
-        graph_type: PolicyGraphType::FiniteHorizon,
-        annual_discount_rate: 0.0,
-        transitions,
-        nodes,
-        stage_discount_rate_overrides: BTreeMap::new(),
-        season_map: None,
-    }
+    finite_horizon_graph(nodes, transitions)
 }
 
 /// The trunk+fan [`System`]: [`trunk_fan_policy_graph`] over the shared
@@ -3649,7 +4596,7 @@ fn trunk_fan_system(t_trunk: usize, k: usize) -> System {
 /// Fixture bundle for the deterministic-trunk + terminal-fan [`StudySetup`],
 /// carrying the parameters callers need to derive their own expected
 /// solves/cut counts — never a magic literal, always re-derived from these
-/// fields or from `setup.node_graph` directly.
+/// fields or from `setup.inputs.node_graph` directly.
 #[derive(Debug)]
 pub struct TrunkFanFixture {
     /// The built study: a single-hydro, single-bus system over the declared
@@ -3661,7 +4608,7 @@ pub struct TrunkFanFixture {
     /// Terminal fan width: `k` distinct leaves at stage `t_trunk`, reached
     /// from the last trunk node under non-uniform weights.
     pub k: usize,
-    /// Total non-leaf (cut-generating) node count in `setup.node_graph` —
+    /// Total non-leaf (cut-generating) node count in `setup.inputs.node_graph` —
     /// every trunk node, derived from the graph's own successor lists, never
     /// assumed equal to `t_trunk` by construction alone.
     pub n_nonleaf_nodes: usize,
@@ -3671,9 +4618,14 @@ pub struct TrunkFanFixture {
 /// the stochastic context and study for `config`, injects
 /// [`TRUNK_FAN_PRODUCTIVITY`] over `default_from_system`'s `0.0` placeholder,
 /// and derives `n_nonleaf_nodes` from the resolved graph.
-// `config` is taken by value so callers pass an owned builder result inline;
-// the body only borrows it for `StudySetup::new`.
-#[allow(clippy::expect_used, clippy::needless_pass_by_value)]
+#[expect(
+    clippy::expect_used,
+    reason = "build_stochastic_context never errors on this fixture's fixed, internally consistent inputs"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "config is taken by value so callers pass an owned builder result inline; the body only borrows it for StudySetup::new"
+)]
 #[must_use]
 fn trunk_fan_fixture(t_trunk: usize, k: usize, config: Config) -> TrunkFanFixture {
     let system = trunk_fan_system(t_trunk, k);
@@ -3685,11 +4637,7 @@ fn trunk_fan_fixture(t_trunk: usize, k: usize, config: Config) -> TrunkFanFixtur
         &[],
         &[],
         OpeningTreeInputs::default(),
-        ClassSchemes {
-            inflow: Some(SamplingScheme::InSample),
-            load: Some(SamplingScheme::InSample),
-            ncs: Some(SamplingScheme::InSample),
-        },
+        in_sample_class_schemes(),
     )
     .expect("trunk_fan_fixture: build_stochastic_context must succeed");
     let mut hydro_models = PrepareHydroModelsResult::default_from_system(&system);
@@ -3700,15 +4648,15 @@ fn trunk_fan_fixture(t_trunk: usize, k: usize, config: Config) -> TrunkFanFixtur
             };
             n_stages
         ]],
-        1,
+        system.hydros(),
         n_stages,
     );
     let setup = StudySetup::new(&system, &config, stochastic, hydro_models, Vec::new())
         .expect("trunk_fan_fixture: StudySetup::new must succeed");
 
-    let n_nonleaf_nodes = (0..setup.node_graph.nodes.len())
+    let n_nonleaf_nodes = (0..setup.inputs.node_graph.nodes.len())
         .map(NodePos)
-        .filter(|&pos| !setup.node_graph.successors[pos].is_empty())
+        .filter(|&pos| !setup.inputs.node_graph.successors[pos].is_empty())
         .count();
 
     TrunkFanFixture {
@@ -3758,6 +4706,112 @@ pub fn trunk_fan_setup(
     max_iterations: u32,
 ) -> TrunkFanFixture {
     trunk_fan_fixture(t_trunk, k, k_fan_config(forward_passes, max_iterations))
+}
+
+/// Canonical byte encoding of `setup`'s stage-LP builder facts, keyed by fact
+/// group name, for the plan safety net's per-deck snapshot.
+#[must_use]
+pub fn template_fact_groups(setup: &StudySetup) -> BTreeMap<&'static str, Vec<u8>> {
+    let mut groups = FactGroups::new();
+    encode_stage_templates_facts(
+        &setup.inputs.stage_data.stage_templates,
+        &setup.inputs.stage_data.state,
+        &mut groups,
+    );
+    encode_time_value_facts(&setup.inputs.stage_data.time_value, &mut groups);
+    groups
+}
+
+/// Asserts `a` and `b` are the same LP; every `f64` compares by `to_bits()`, so
+/// `0.0` and `-0.0` differ.
+///
+/// # Panics
+///
+/// Panics with `"{label}: <field>"` at the first field that differs.
+pub fn assert_templates_byte_identical(a: &StageTemplate, b: &StageTemplate, label: &str) {
+    let StageTemplate {
+        num_cols,
+        num_rows,
+        num_nz,
+        col_starts,
+        row_indices,
+        values,
+        col_lower,
+        col_upper,
+        objective,
+        row_lower,
+        row_upper,
+        n_state,
+        col_scale,
+        row_scale,
+    } = a;
+    assert_eq!(*num_cols, b.num_cols, "{label}: num_cols");
+    assert_eq!(*num_rows, b.num_rows, "{label}: num_rows");
+    assert_eq!(*num_nz, b.num_nz, "{label}: num_nz");
+    assert_eq!(*n_state, b.n_state, "{label}: n_state");
+    assert_eq!(*col_starts, b.col_starts, "{label}: col_starts");
+    assert_eq!(*row_indices, b.row_indices, "{label}: row_indices");
+    let bits = |xs: &[f64]| xs.iter().map(|v| v.to_bits()).collect::<Vec<u64>>();
+    assert_eq!(bits(values), bits(&b.values), "{label}: values");
+    assert_eq!(bits(col_lower), bits(&b.col_lower), "{label}: col_lower");
+    assert_eq!(bits(col_upper), bits(&b.col_upper), "{label}: col_upper");
+    assert_eq!(bits(objective), bits(&b.objective), "{label}: objective");
+    assert_eq!(bits(row_lower), bits(&b.row_lower), "{label}: row_lower");
+    assert_eq!(bits(row_upper), bits(&b.row_upper), "{label}: row_upper");
+    assert_eq!(bits(col_scale), bits(&b.col_scale), "{label}: col_scale");
+    assert_eq!(bits(row_scale), bits(&b.row_scale), "{label}: row_scale");
+}
+
+/// [`assert_templates_byte_identical`] over two multi-stage builds: asserts
+/// `a`/`b` have the same stage count, then compares each stage pair.
+///
+/// # Panics
+///
+/// Panics if `a.len() != b.len()`, or at the first stage/field that differs
+/// (`"{label}: stage {n}: <field>"`).
+pub fn assert_all_templates_byte_identical(a: &[StageTemplate], b: &[StageTemplate], label: &str) {
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "{label}: stage count must match ({} vs {})",
+        a.len(),
+        b.len()
+    );
+    for (stage, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+        assert_templates_byte_identical(x, y, &format!("{label}: stage {stage}"));
+    }
+}
+
+#[cfg(test)]
+mod byte_identity_tests {
+    use super::assert_templates_byte_identical;
+    use cobre_solver::StageTemplate;
+
+    #[test]
+    #[should_panic(expected = "probe: col_scale")]
+    fn signed_zero_in_a_scale_factor_is_not_byte_identical() {
+        let a = StageTemplate {
+            num_cols: 0,
+            num_rows: 0,
+            num_nz: 0,
+            col_starts: vec![],
+            row_indices: vec![],
+            values: vec![],
+            col_lower: vec![],
+            col_upper: vec![],
+            objective: vec![],
+            row_lower: vec![],
+            row_upper: vec![],
+            n_state: 0,
+            col_scale: vec![0.0],
+            row_scale: vec![],
+        };
+        let b = StageTemplate {
+            col_scale: vec![-0.0],
+            ..a.clone()
+        };
+        assert_templates_byte_identical(&a, &b, "probe");
+    }
 }
 
 #[cfg(test)]
@@ -3837,9 +4891,9 @@ mod trunk_fan_tests {
             n_nonleaf_nodes, t_trunk,
             "every trunk node must be non-leaf, got {n_nonleaf_nodes} for t_trunk={t_trunk}"
         );
-        let leaf_count = (0..setup.node_graph.nodes.len())
+        let leaf_count = (0..setup.inputs.node_graph.nodes.len())
             .map(NodePos)
-            .filter(|&pos| setup.node_graph.successors[pos].is_empty())
+            .filter(|&pos| setup.inputs.node_graph.successors[pos].is_empty())
             .count();
         assert_eq!(
             leaf_count, k,
@@ -3868,5 +4922,39 @@ mod trunk_fan_tests {
             "trunk+fan fixture must train without error: {:?}",
             outcome.error
         );
+    }
+}
+
+#[cfg(test)]
+mod stage_context_fixture_tests {
+    use super::{
+        StageContextFixture, equipment_free_geometry, geometry_with_load_balance,
+        permissive_state_boxes, state_layout, transit_bucket_only_template,
+    };
+    use crate::setup::node_graph::StageIdx;
+
+    #[test]
+    fn stage_context_fixture_derives_counts_from_owners() {
+        let state = state_layout(2, 0);
+        let templates = vec![transit_bucket_only_template(1, state.n_state); 2];
+        let state_boxes = permissive_state_boxes(state.n_state, 2);
+        let geometry_per_stage = vec![geometry_with_load_balance(0, 1, 3); 2];
+        let load_bus_indices = vec![0_usize];
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
+            .load_bus_indices(&load_bus_indices);
+        let ctx = fixture.ctx();
+        assert_eq!(ctx.load_bus_indices.len(), 1);
+        assert_eq!(ctx.block_count(StageIdx(0)), 3);
+        assert_eq!(ctx.block_count(StageIdx(1)), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "every stage must have one geometry")]
+    fn stage_context_fixture_rejects_a_geometry_per_stage_length_mismatch() {
+        let state = state_layout(1, 0);
+        let templates = vec![transit_bucket_only_template(1, state.n_state); 2];
+        let state_boxes = permissive_state_boxes(state.n_state, 2);
+        let geometry_per_stage = equipment_free_geometry(&[0]);
+        let _ = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage);
     }
 }

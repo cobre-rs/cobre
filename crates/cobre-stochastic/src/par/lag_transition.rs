@@ -13,6 +13,7 @@ use cobre_core::{
     window_period_overlaps,
 };
 
+use super::precompute::PrecomputedPar;
 use crate::season_cast::{
     find_season_year_monthly, month_total_hours, next_season_period_window, resolved_year,
     season_period_window,
@@ -130,19 +131,20 @@ pub(crate) fn compute_period_transition(
 
 /// Derives the `downstream_par_order` gate consumed by
 /// [`precompute_stage_lag_transitions`] and by η-inversion
-/// (`standardize_historical_windows`): `par_max_order` once any stage crosses
-/// into the quarterly range (`season_id >= 12`), gated off only for `Weekly`
-/// — an ISO week number reaching 12 has nothing to do with quarters, while a
-/// `Monthly` or `Custom` cycle's `season_id >= 12` is a deliberate quarterly
-/// convention; a `None` `season_map` also leaves the ring inert (`0`). Every
-/// call site that needs this gate — the two evaluation-phase lag-transition
-/// call sites, and both the rank-0 and non-root opening-tree builds — routes
-/// through this one function; an independent re-derivation risks the two
-/// opening-tree sides diverging across MPI ranks.
+/// (`standardize_historical_windows`). The order belongs to the PAR model
+/// whose ψ the downstream ring feeds — never to a lag-state depth, which may
+/// be wider than the model's own order; `par`'s global
+/// [`max_order`](PrecomputedPar::max_order) stands in for a quarterly order
+/// until a separate quarterly PAR model exists. The gate reads
+/// `par.max_order()` once any stage crosses into the quarterly range
+/// (`season_id >= 12`), gated off only for `Weekly` — an ISO week number
+/// reaching 12 has nothing to do with quarters, while a `Monthly` or `Custom`
+/// cycle's `season_id >= 12` is a deliberate quarterly convention; a `None`
+/// `season_map` also leaves the ring inert (`0`).
 #[must_use]
 pub fn derive_downstream_par_order(
     stages: &[Stage],
-    par_max_order: usize,
+    par: &PrecomputedPar,
     season_map: Option<&SeasonMap>,
 ) -> usize {
     let cycle_admits_ring =
@@ -151,7 +153,7 @@ pub fn derive_downstream_par_order(
         .iter()
         .any(|s| s.season_id.is_some_and(|id| id >= 12));
     if has_quarterly_stages && cycle_admits_ring {
-        par_max_order
+        par.max_order()
     } else {
         0
     }
@@ -347,7 +349,33 @@ mod tests {
         DownstreamLagAccum, EntityMajor, PrimaryLagAccum, advance_lag_chain,
     };
     use crate::seeds::{DerivedInflowSeeds, derive_inflow_seeds};
-    use crate::test_support::{MonthlyLabels, monthly_season_map, weekly_season_map};
+    use crate::test_support::{
+        InflowModelSpec, MonthlyLabels, make_inflow_model, monthly_season_map, weekly_season_map,
+    };
+
+    /// A one-hydro [`PrecomputedPar`] with `max_order() == 1`: an order-1
+    /// model anchored at `stages[0]`'s id, plus a `stage_id = -1` pre-study
+    /// model with no coefficients (lag initialization).
+    fn par_of_order_one(stages: &[Stage]) -> PrecomputedPar {
+        let models = vec![
+            make_inflow_model(InflowModelSpec {
+                hydro_id: 1,
+                stage_id: stages[0].id,
+                ar_coefficients: vec![0.5],
+                ..Default::default()
+            }),
+            make_inflow_model(InflowModelSpec {
+                hydro_id: 1,
+                stage_id: -1,
+                ar_coefficients: vec![],
+                ..Default::default()
+            }),
+        ];
+        let par = PrecomputedPar::build(&models, stages, &[EntityId(1)], None)
+            .expect("par_of_order_one: valid PAR build");
+        assert_eq!(par.max_order(), 1);
+        par
+    }
 
     fn make_stage(
         index: usize,
@@ -385,7 +413,8 @@ mod tests {
             make_stage(3, d(2026, 1, 22), d(2026, 1, 29), Some(12)),
         ];
 
-        let derived = derive_downstream_par_order(&stages, 1, Some(&season_map));
+        let derived =
+            derive_downstream_par_order(&stages, &par_of_order_one(&stages), Some(&season_map));
         assert_eq!(
             derived, 0,
             "a Weekly season cycle must never activate the quarterly ring, even \
@@ -409,11 +438,12 @@ mod tests {
             make_stage(3, d(2026, 4, 1), d(2026, 7, 1), Some(12)),
         ];
 
-        let derived = derive_downstream_par_order(&stages, 1, Some(&season_map));
+        let derived =
+            derive_downstream_par_order(&stages, &par_of_order_one(&stages), Some(&season_map));
         assert_eq!(
             derived, 1,
             "a Monthly season cycle crossing season_id >= 12 must activate the \
-             quarterly ring at par_max_order"
+             quarterly ring at par.max_order()"
         );
     }
 
@@ -426,7 +456,7 @@ mod tests {
             make_stage(3, d(2026, 4, 1), d(2026, 7, 1), Some(12)),
         ];
 
-        let derived = derive_downstream_par_order(&stages, 1, None);
+        let derived = derive_downstream_par_order(&stages, &par_of_order_one(&stages), None);
         assert_eq!(derived, 0, "a None season_map must leave the ring inert");
     }
 
@@ -437,11 +467,12 @@ mod tests {
         let q3_stage = make_stage(1, d(2024, 7, 1), d(2024, 10, 1), Some(12));
         let stages = vec![june_stage, q3_stage];
 
-        let derived = derive_downstream_par_order(&stages, 1, Some(&season_map));
+        let derived =
+            derive_downstream_par_order(&stages, &par_of_order_one(&stages), Some(&season_map));
         assert_eq!(
             derived, 1,
             "a Custom season cycle crossing season_id >= 12 must keep the \
-             quarterly ring active at par_max_order — only Weekly is gated off"
+             quarterly ring active at par.max_order() — only Weekly is gated off"
         );
     }
 

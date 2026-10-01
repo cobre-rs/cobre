@@ -383,6 +383,14 @@ impl CutPool {
         self.cached_active_count
     }
 
+    /// Whether this pool carries any warm-started cuts — on the terminal
+    /// stage's pool, the boundary cuts.
+    #[must_use]
+    #[inline]
+    pub fn has_warm_start_cuts(&self) -> bool {
+        self.warm_start_count > 0
+    }
+
     /// Return the populated-slot count — the LP-row metric, independent of
     /// activity state.
     ///
@@ -1604,12 +1612,13 @@ mod tests {
     }
 
     #[test]
-    fn terminal_has_boundary_cuts_when_warm_start_count_positive() {
-        // A pool with warm_start_count > 0 signals boundary cuts at the
-        // terminal stage.
+    fn has_warm_start_cuts_follows_the_warm_start_records() {
         use cobre_io::OwnedPolicyCutRecord;
 
-        let records = vec![OwnedPolicyCutRecord {
+        let empty = CutPool::new(100, 2, 10, 0);
+        assert!(!empty.has_warm_start_cuts());
+
+        let active_record = vec![OwnedPolicyCutRecord {
             cut_id: 0,
             slot_index: 0,
             coefficients: vec![1.0],
@@ -1618,8 +1627,21 @@ mod tests {
             iteration: 0,
             forward_pass_index: 0,
         }];
-        let pool = CutPool::new_with_warm_start(1, 4, 100, &records);
-        assert!(pool.warm_start_count > 0, "terminal pool has boundary cuts");
+        let active = CutPool::new_with_warm_start(1, 4, 100, &active_record);
+        assert!(active.has_warm_start_cuts());
+
+        let inactive_record = vec![OwnedPolicyCutRecord {
+            cut_id: 0,
+            slot_index: 0,
+            coefficients: vec![1.0],
+            intercept: 5.0,
+            is_active: false,
+            iteration: 0,
+            forward_pass_index: 0,
+        }];
+        let inactive = CutPool::new_with_warm_start(1, 4, 100, &inactive_record);
+        assert!(inactive.has_warm_start_cuts());
+        assert_eq!(inactive.active_count(), 0);
     }
 
     #[test]

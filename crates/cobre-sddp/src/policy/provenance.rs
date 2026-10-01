@@ -8,6 +8,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use cobre_core::Hydro;
 use cobre_io::scenarios::estimation::{EstimationPath, EstimationReport};
 use cobre_stochastic::{ComponentProvenance, StochasticProvenance};
 
@@ -195,7 +196,7 @@ pub fn build_provenance_report(
     estimation_path: EstimationPath,
     estimation_report: Option<&EstimationReport>,
     provenance: &StochasticProvenance,
-    n_hydros: usize,
+    hydros: &[Hydro],
     hydro_provenance: &HydroModelProvenance,
 ) -> ModelProvenanceReport {
     let (seasonal_stats_source, ar_coefficients_source) = match estimation_path {
@@ -243,7 +244,7 @@ pub fn build_provenance_report(
             ar_coefficients_source,
             correlation_source,
             opening_tree_source,
-            n_hydros,
+            n_hydros: hydros.len(),
             ar_method,
             ar_max_order,
             white_noise_fallbacks,
@@ -273,6 +274,7 @@ mod tests {
     use crate::hydro_models::{
         EvaporationReferenceSource, EvaporationSource, HydroModelProvenance, ProductionModelSource,
     };
+    use crate::test_support::minimal_hydros;
     use cobre_stochastic::par::fitting::HydroEstimationEntry;
 
     use super::{
@@ -391,13 +393,13 @@ mod tests {
             EstimationPath::FullEstimation,
             None,
             &prov_all_generated(),
-            2,
+            &minimal_hydros(2),
             &empty_hydro_provenance(2),
         );
         assert!(
             report.inflow.historical_library_seed_digest.is_none(),
             "builder must leave historical_library_seed_digest unset; \
-             callers populate it from setup.scenario_libraries.training.historical \
+             callers populate it from setup.inputs.scenario_libraries.training.historical \
              when the historical scheme is active"
         );
     }
@@ -408,7 +410,7 @@ mod tests {
             EstimationPath::FullEstimation,
             None,
             &prov_all_generated(),
-            1,
+            &minimal_hydros(1),
             &empty_hydro_provenance(1),
         );
         let digest: u64 = 0xDEAD_BEEF_CAFE_F00D;
@@ -430,7 +432,7 @@ mod tests {
             EstimationPath::Deterministic,
             None,
             &prov_not_applicable(),
-            0,
+            &minimal_hydros(0),
             &empty_hydro_provenance(0),
         );
         let json = serde_json::to_string(&report).unwrap();
@@ -446,7 +448,7 @@ mod tests {
             EstimationPath::Deterministic,
             None,
             &prov_not_applicable(),
-            0,
+            &minimal_hydros(0),
             &empty_hydro_provenance(0),
         );
         assert!(
@@ -477,7 +479,7 @@ mod tests {
             EstimationPath::UserStatsWhiteNoise,
             None,
             &prov_all_generated(),
-            2,
+            &minimal_hydros(2),
             &empty_hydro_provenance(2),
         );
         assert!(
@@ -503,7 +505,7 @@ mod tests {
             EstimationPath::UserProvidedNoHistory,
             None,
             &prov_all_generated(),
-            2,
+            &minimal_hydros(2),
             &empty_hydro_provenance(2),
         );
         assert!(
@@ -530,7 +532,7 @@ mod tests {
             EstimationPath::FullEstimation,
             Some(&er),
             &prov_all_generated(),
-            2,
+            &minimal_hydros(2),
             &empty_hydro_provenance(2),
         );
         assert!(
@@ -559,7 +561,7 @@ mod tests {
             EstimationPath::UserArHistoryStats,
             Some(&er),
             &prov_all_generated(),
-            1,
+            &minimal_hydros(1),
             &empty_hydro_provenance(1),
         );
         assert!(
@@ -586,7 +588,7 @@ mod tests {
             EstimationPath::PartialEstimation,
             Some(&er),
             &prov_all_generated(),
-            3,
+            &minimal_hydros(3),
             &empty_hydro_provenance(3),
         );
         assert!(
@@ -613,7 +615,7 @@ mod tests {
             EstimationPath::UserProvidedAll,
             None,
             &prov_all_generated(),
-            4,
+            &minimal_hydros(4),
             &empty_hydro_provenance(4),
         );
         assert!(
@@ -645,7 +647,7 @@ mod tests {
             EstimationPath::FullEstimation,
             None,
             &prov_user_tree(),
-            2,
+            &minimal_hydros(2),
             &empty_hydro_provenance(2),
         );
         assert!(
@@ -673,7 +675,7 @@ mod tests {
             EstimationPath::FullEstimation,
             Some(&er),
             &prov_all_generated(),
-            1,
+            &minimal_hydros(1),
             &empty_hydro_provenance(1),
         );
         let json = serde_json::to_string_pretty(&report).unwrap();
@@ -698,7 +700,7 @@ mod tests {
             EstimationPath::Deterministic,
             None,
             &prov_not_applicable(),
-            0,
+            &minimal_hydros(0),
             &empty_hydro_provenance(0),
         );
         let json = serde_json::to_string_pretty(&report).unwrap();
@@ -728,7 +730,7 @@ mod tests {
             EstimationPath::PartialEstimation,
             Some(&er),
             &prov_all_generated(),
-            2,
+            &minimal_hydros(2),
             &empty_hydro_provenance(2),
         );
         assert_eq!(
@@ -744,7 +746,7 @@ mod tests {
             EstimationPath::Deterministic,
             None,
             &prov_not_applicable(),
-            0,
+            &minimal_hydros(0),
             &empty_hydro_provenance(0),
         );
         assert!(
@@ -761,7 +763,7 @@ mod tests {
             EstimationPath::FullEstimation,
             None,
             &prov_all_generated(),
-            2,
+            &minimal_hydros(2),
             &empty_hydro_provenance(2),
         );
         let json = serde_json::to_string(&report).unwrap();
@@ -787,7 +789,7 @@ mod tests {
             EstimationPath::FullEstimation,
             Some(&make_estimation_report("AIC", &[2, 3], &[])),
             &prov_all_generated(),
-            2,
+            &minimal_hydros(2),
             &empty_hydro_provenance(2),
         );
         let json = serde_json::to_string(&original).unwrap();
@@ -875,7 +877,7 @@ mod tests {
             EstimationPath::FullEstimation,
             None,
             &prov_all_generated(),
-            5,
+            &minimal_hydros(5),
             &hp,
         );
         assert_eq!(
@@ -910,7 +912,7 @@ mod tests {
             EstimationPath::FullEstimation,
             None,
             &prov_all_generated(),
-            2,
+            &minimal_hydros(2),
             &hp,
         );
         assert_eq!(
@@ -964,14 +966,14 @@ mod tests {
             EstimationPath::FullEstimation,
             None,
             &prov_all_generated(),
-            3,
+            &minimal_hydros(3),
             &hp_a,
         );
         let report_b = build_provenance_report(
             EstimationPath::FullEstimation,
             None,
             &prov_all_generated(),
-            3,
+            &minimal_hydros(3),
             &hp_b,
         );
         assert_eq!(

@@ -809,7 +809,7 @@ mod cell_partition_gates {
     };
     use cobre_sddp::inflow_method::InflowNonNegativityMethod;
     use cobre_sddp::resolved_parameters::ResolvedParameters;
-    use cobre_sddp::test_support::make_unit_group;
+    use cobre_sddp::test_support::{assert_templates_byte_identical, make_unit_group};
     use cobre_sddp::{StageTemplates, build_stage_templates_resolving_layout};
     use cobre_solver::StageTemplate;
     use cobre_stochastic::normal::precompute::PrecomputedNormal;
@@ -1130,7 +1130,7 @@ mod cell_partition_gates {
                     planes: vec![GENERIC_PLANE, ORIGIN_PLANE],
                 }],
             ],
-            2,
+            &cobre_sddp::test_support::minimal_hydros(2),
             1,
         )
     }
@@ -1246,35 +1246,6 @@ mod cell_partition_gates {
     }
 
     // ---- Collapse gate -----------------------------------------------------
-
-    /// Full structural equality: every integer field, the two `i32` CSC
-    /// vectors element-for-element, and every `f64` vector by `to_bits()` —
-    /// never `==` (derived `PartialEq` on `f64` treats `0.0 == -0.0` and
-    /// `NaN != NaN`; `to_bits` is what "identical LP" means here).
-    fn assert_templates_byte_identical(a: &StageTemplate, b: &StageTemplate, label: &str) {
-        assert_eq!(a.num_cols, b.num_cols, "{label}: num_cols");
-        assert_eq!(a.num_rows, b.num_rows, "{label}: num_rows");
-        assert_eq!(a.num_nz, b.num_nz, "{label}: num_nz");
-        assert_eq!(a.n_state, b.n_state, "{label}: n_state");
-        assert_eq!(a.n_transfer, b.n_transfer, "{label}: n_transfer");
-        assert_eq!(
-            a.n_dual_relevant, b.n_dual_relevant,
-            "{label}: n_dual_relevant"
-        );
-        assert_eq!(a.n_hydro, b.n_hydro, "{label}: n_hydro");
-        assert_eq!(a.max_par_order, b.max_par_order, "{label}: max_par_order");
-
-        assert_eq!(a.col_starts, b.col_starts, "{label}: col_starts");
-        assert_eq!(a.row_indices, b.row_indices, "{label}: row_indices");
-
-        let bits = |xs: &[f64]| xs.iter().map(|v| v.to_bits()).collect::<Vec<u64>>();
-        assert_eq!(bits(&a.values), bits(&b.values), "{label}: values");
-        assert_eq!(bits(&a.col_lower), bits(&b.col_lower), "{label}: col_lower");
-        assert_eq!(bits(&a.col_upper), bits(&b.col_upper), "{label}: col_upper");
-        assert_eq!(bits(&a.objective), bits(&b.objective), "{label}: objective");
-        assert_eq!(bits(&a.row_lower), bits(&b.row_lower), "{label}: row_lower");
-        assert_eq!(bits(&a.row_upper), bits(&b.row_upper), "{label}: row_upper");
-    }
 
     /// The collapse claim: a plant declaring three same-bus groups (unequal,
     /// summing EXACTLY to the plant's own declared totals) yields a
@@ -1419,7 +1390,7 @@ mod cell_partition_gates {
             vec![vec![ResolvedProductionModel::ConstantProductivity {
                 productivity: 1.0,
             }]],
-            1,
+            system.hydros(),
             1,
         );
         let evaporation = PrepareHydroModelsResult::default_from_system(&system).evaporation;
@@ -1496,8 +1467,7 @@ mod cell_partition_gates {
     // ---- State-space invariance --------------------------------------------
 
     /// Declaring groups (including the two-bus variant, which DOES add
-    /// columns) never moves `n_state`, `n_transfer`, `n_dual_relevant`,
-    /// `n_hydro`, or `max_par_order`, and an independently-built
+    /// columns) never moves `n_state`, and an independently-built
     /// `StateSpace` (unrelated to `unit_groups` at all) agrees. Checkpoint
     /// bytes and the terminal entity manifest are a separate artifact-level
     /// concern this test does not assert.
@@ -1509,16 +1479,6 @@ mod cell_partition_gates {
 
         for (label, t) in [("A", &tmpl_a), ("B", &tmpl_b), ("C", &tmpl_c)] {
             assert_eq!(t.n_state, tmpl_b.n_state, "{label}: n_state");
-            assert_eq!(t.n_transfer, tmpl_b.n_transfer, "{label}: n_transfer");
-            assert_eq!(
-                t.n_dual_relevant, tmpl_b.n_dual_relevant,
-                "{label}: n_dual_relevant"
-            );
-            assert_eq!(t.n_hydro, tmpl_b.n_hydro, "{label}: n_hydro");
-            assert_eq!(
-                t.max_par_order, tmpl_b.max_par_order,
-                "{label}: max_par_order"
-            );
         }
 
         // Independent cross-check via a totally separate code path: a

@@ -305,27 +305,34 @@ pub fn nth_previous_occurrence(
     Some(window)
 }
 
-/// The calendar year identifying which occurrence of `season_def` `stage`
-/// belongs to, disambiguating repeated season ids across years.
+/// The calendar year identifying which occurrence of `season_def` overlaps
+/// `[start, end)`, disambiguating repeated season ids across years.
 ///
 /// `Weekly` uses the ISO week-numbering year (`iso_week().year()`), not the
-/// calendar year of the window start: a week's Monday can fall in the prior
-/// December (`from_isoywd_opt(2004, 1, Mon)` is 2003-12-29), so the window
-/// start's calendar year would misclassify that week as the prior year's.
+/// calendar year of `start`: a week's Monday can fall in the prior December
+/// (`from_isoywd_opt(2004, 1, Mon)` is 2003-12-29), so `start`'s calendar year
+/// would misclassify that week as the prior year's.
+pub(crate) fn occurrence_year(
+    season_map: &SeasonMap,
+    season_def: &SeasonDefinition,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> i32 {
+    match season_map.cycle_type {
+        SeasonCycleType::Monthly => find_season_year_monthly(start, end, season_def.month_start),
+        SeasonCycleType::Weekly => start.iso_week().year(),
+        SeasonCycleType::Custom => find_season_year_custom(start, end, season_def),
+    }
+}
+
+/// The calendar year identifying which occurrence of `season_def` `stage`
+/// belongs to. See [`occurrence_year`].
 pub(crate) fn resolved_year(
     season_map: &SeasonMap,
     season_def: &SeasonDefinition,
     stage: &Stage,
 ) -> i32 {
-    match season_map.cycle_type {
-        SeasonCycleType::Monthly => {
-            find_season_year_monthly(stage.start_date, stage.end_date, season_def.month_start)
-        }
-        SeasonCycleType::Weekly => stage.start_date.iso_week().year(),
-        SeasonCycleType::Custom => {
-            find_season_year_custom(stage.start_date, stage.end_date, season_def)
-        }
-    }
+    occurrence_year(season_map, season_def, stage.start_date, stage.end_date)
 }
 
 /// One hydro's realized-inflow window over `[start_date, end_date)`.
@@ -522,10 +529,7 @@ impl<'a> StageCalendar<'a> {
                 .all(|pair| pair[0].end_date <= pair[1].start_date),
             "StageCalendar stages must be chronologically ordered and non-overlapping"
         );
-        let stage_hours = stages
-            .iter()
-            .map(|s| s.blocks.iter().map(|b| b.duration_hours).sum())
-            .collect();
+        let stage_hours = stages.iter().map(Stage::total_hours).collect();
         Self {
             stages,
             stage_hours,

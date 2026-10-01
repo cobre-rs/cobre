@@ -71,10 +71,11 @@ impl CutStateProjection {
     /// ```compile_fail
     /// use cobre_sddp::indexer::{InCol, StateDim, StateSpace};
     ///
-    /// let global = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);
-    /// let outgoing = global.lp_column_for_state(StateDim::new(0));
-    /// let mut incoming_columns: Vec<InCol> = Vec::new();
-    /// incoming_columns.push(outgoing); // fan-in swap: outgoing pushed onto the incoming-column vec
+    /// fn misuse(global: &StateSpace) {
+    ///     let outgoing = global.lp_column_for_state(StateDim::new(0));
+    ///     let mut incoming_columns: Vec<InCol> = Vec::new();
+    ///     incoming_columns.push(outgoing); // fan-in swap: outgoing pushed onto the incoming-column vec
+    /// }
     /// ```
     #[must_use]
     pub fn new(global: &StateSpace, state_config: StageStateConfig) -> Self {
@@ -132,6 +133,17 @@ impl CutStateProjection {
         self.incoming_columns.len()
     }
 
+    #[inline]
+    fn checked_slot(&self, s: CutSlot) -> usize {
+        let j = s.get();
+        debug_assert!(
+            j < self.n_slots(),
+            "cut slot {j} out of bounds (n_slots = {})",
+            self.n_slots()
+        );
+        j
+    }
+
     /// Map a cut slot `s ∈ [0, n_slots())` to the global [`StateDim`] it
     /// projects — the gather index for reading a `StateDim`-packed trial-state
     /// vector into the pool's projected slot space.
@@ -149,13 +161,7 @@ impl CutStateProjection {
     #[inline]
     #[must_use]
     pub fn global_state_index(&self, s: CutSlot) -> StateDim {
-        let j = s.get();
-        debug_assert!(
-            j < self.n_slots(),
-            "cut slot {j} out of bounds (n_slots = {})",
-            self.n_slots()
-        );
-        self.global_state_indices[j]
+        self.global_state_indices[self.checked_slot(s)]
     }
 
     /// Dot this pool's projected cut `coefficients` (length [`Self::n_slots`])
@@ -200,24 +206,26 @@ impl CutStateProjection {
     /// use cobre_core::temporal::StageStateConfig;
     /// use cobre_sddp::indexer::{CutStateProjection, StateDim, StateSpace};
     ///
-    /// let global = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);
-    /// let cut = CutStateProjection::new(
-    ///     &global,
-    ///     StageStateConfig { storage: true, inflow_lags: true },
-    /// );
-    /// let _ = cut.incoming_column(StateDim::new(0)); // StateDim substituted for CutSlot
+    /// fn misuse(global: &StateSpace) {
+    ///     let cut = CutStateProjection::new(
+    ///         global,
+    ///         StageStateConfig { storage: true, inflow_lags: true },
+    ///     );
+    ///     let _ = cut.incoming_column(StateDim::new(0)); // StateDim substituted for CutSlot
+    /// }
     /// ```
     ///
     /// ```compile_fail
     /// use cobre_core::temporal::StageStateConfig;
     /// use cobre_sddp::indexer::{CutStateProjection, OutCol, StateSpace};
     ///
-    /// let global = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);
-    /// let cut = CutStateProjection::new(
-    ///     &global,
-    ///     StageStateConfig { storage: true, inflow_lags: true },
-    /// );
-    /// let _ = cut.incoming_column(OutCol::new(0)); // OutCol substituted for CutSlot
+    /// fn misuse(global: &StateSpace) {
+    ///     let cut = CutStateProjection::new(
+    ///         global,
+    ///         StageStateConfig { storage: true, inflow_lags: true },
+    ///     );
+    ///     let _ = cut.incoming_column(OutCol::new(0)); // OutCol substituted for CutSlot
+    /// }
     /// ```
     ///
     /// # Panics (debug builds only)
@@ -226,13 +234,7 @@ impl CutStateProjection {
     #[inline]
     #[must_use]
     pub fn incoming_column(&self, s: CutSlot) -> InCol {
-        let j = s.get();
-        debug_assert!(
-            j < self.n_slots(),
-            "cut slot {j} out of bounds (n_slots = {})",
-            self.n_slots()
-        );
-        self.incoming_columns[j]
+        self.incoming_columns[self.checked_slot(s)]
     }
 
     /// Map a cut slot `s ∈ [0, n_slots())` to its LP **outgoing**-state
@@ -250,13 +252,7 @@ impl CutStateProjection {
     #[inline]
     #[must_use]
     pub fn outgoing_column(&self, s: CutSlot) -> OutCol {
-        let j = s.get();
-        debug_assert!(
-            j < self.n_slots(),
-            "cut slot {j} out of bounds (n_slots = {})",
-            self.n_slots()
-        );
-        self.outgoing_columns[j]
+        self.outgoing_columns[self.checked_slot(s)]
     }
 
     /// Iterate the cut-row render pairs `(cut_slot, outgoing_lp_column)` for this
@@ -292,25 +288,20 @@ impl CutStateProjection {
 #[cfg(test)]
 mod tests {
     use super::{CutSlot, CutStateProjection, InCol, OutCol, StageStateConfig, StateDim};
-    use crate::indexer::{StateRegion, StateSpace};
+    use crate::indexer::{HydroSys, StateRegion, StateSpace};
+    use crate::lead_time::AnticipatedResolution;
+    use crate::test_support::constant_lead_resolution;
 
     fn finalized(
         hydro_count: usize,
         max_par_order: usize,
-        n_anticipated: usize,
-        k_max: usize,
-        anticipated_lead_stages: Vec<usize>,
+        anticipated_lead_stages: &[usize],
     ) -> StateSpace {
-        let lag_counts = vec![max_par_order; hydro_count];
-        StateSpace::new(
+        finalized_with_transit_buckets(
             hydro_count,
             max_par_order,
-            0,
             Vec::new(),
-            n_anticipated,
-            k_max,
             anticipated_lead_stages,
-            &lag_counts,
         )
     }
 
@@ -318,21 +309,18 @@ mod tests {
     fn finalized_with_transit_buckets(
         hydro_count: usize,
         max_par_order: usize,
-        n_buckets: usize,
-        transit_bucket_column_order: Vec<(usize, usize)>,
-        n_anticipated: usize,
-        k_max: usize,
-        anticipated_lead_stages: Vec<usize>,
+        transit_bucket_column_order: Vec<(HydroSys, usize)>,
+        anticipated_lead_stages: &[usize],
     ) -> StateSpace {
         let lag_counts = vec![max_par_order; hydro_count];
+        let n_stages = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
+        let resolution = constant_lead_resolution(anticipated_lead_stages, n_stages);
         StateSpace::new(
             hydro_count,
             max_par_order,
-            n_buckets,
             transit_bucket_column_order,
-            n_anticipated,
-            k_max,
-            anticipated_lead_stages,
+            anticipated_lead_stages.to_owned(),
+            resolution,
             &lag_counts,
         )
     }
@@ -348,7 +336,7 @@ mod tests {
 
     #[test]
     fn default_projection_is_identity() {
-        let global = finalized(3, 2, 0, 0, vec![]);
+        let global = finalized(3, 2, &[]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(global.n_state, 9);
@@ -364,7 +352,7 @@ mod tests {
 
     #[test]
     fn storage_only_projection() {
-        let global = finalized(3, 2, 0, 0, vec![]);
+        let global = finalized(3, 2, &[]);
         let cut = CutStateProjection::new(&global, STORAGE_ONLY);
 
         assert_eq!(cut.n_slots(), 3);
@@ -379,7 +367,7 @@ mod tests {
 
     #[test]
     fn global_state_index_is_identity_for_all_enabled() {
-        let global = finalized(3, 2, 0, 0, vec![]);
+        let global = finalized(3, 2, &[]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(cut.n_slots(), global.n_state);
@@ -393,7 +381,7 @@ mod tests {
     /// off the `StateDim` axis; `global_state_index` selects the raw lag dims.
     #[test]
     fn global_state_index_selects_nonprefix_enabled_dims() {
-        let global = finalized(2, 1, 0, 0, vec![]);
+        let global = finalized(2, 1, &[]);
         let cut = CutStateProjection::new(
             &global,
             StageStateConfig {
@@ -421,7 +409,7 @@ mod tests {
     fn dot_trial_state_gathers_reduced_projection_not_positional() {
         // N=2 storage, L=3 (6 lag dims), A=1/k_max=1 (1 anticipated): full state
         // is 9 dims — storage [0,2), lag [2,8), anticipated {8}.
-        let global = finalized(2, 3, 1, 1, vec![1]);
+        let global = finalized(2, 3, &[1]);
         let cut = CutStateProjection::new(&global, STORAGE_ONLY);
 
         assert_eq!(cut.n_slots(), 3, "storage(2) + anticipated(1), lag dropped");
@@ -452,7 +440,7 @@ mod tests {
     /// gather must not disturb.
     #[test]
     fn dot_trial_state_all_enabled_matches_positional_zip() {
-        let global = finalized(3, 2, 0, 0, vec![]);
+        let global = finalized(3, 2, &[]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         let x_hat = vec![1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5];
@@ -468,7 +456,7 @@ mod tests {
     /// `n_slots() = N + A*k_max = 2 + 2 = 4`.
     #[test]
     fn storage_only_with_anticipated_includes_anticipated() {
-        let global = finalized(2, 1, 1, 2, vec![2]);
+        let global = finalized(2, 1, &[2]);
         let cut = CutStateProjection::new(&global, STORAGE_ONLY);
 
         assert_eq!(cut.n_slots(), 4);
@@ -491,7 +479,7 @@ mod tests {
     /// inflow lags (`N*L = 2` slots, no storage or anticipated).
     #[test]
     fn storage_disabled_begins_at_first_enabled_dimension() {
-        let global = finalized(2, 1, 0, 0, vec![]);
+        let global = finalized(2, 1, &[]);
         let cut = CutStateProjection::new(
             &global,
             StageStateConfig {
@@ -514,7 +502,7 @@ mod tests {
 
     #[test]
     fn default_render_matches_global_nonzero_mask() {
-        let global = finalized(3, 2, 0, 0, vec![]);
+        let global = finalized(3, 2, &[]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(cut.n_slots(), global.n_state);
@@ -541,7 +529,7 @@ mod tests {
 
     #[test]
     fn storage_only_render_touches_only_storage_columns() {
-        let global = finalized(3, 2, 0, 0, vec![]);
+        let global = finalized(3, 2, &[]);
         let cut = CutStateProjection::new(&global, STORAGE_ONLY);
 
         assert_eq!(cut.n_slots(), 3);
@@ -574,7 +562,14 @@ mod tests {
     #[test]
     fn render_drops_ar_padding_slots() {
         let lag_counts = [1usize, 3];
-        let global = StateSpace::new(2, 3, 0, Vec::new(), 0, 0, vec![], &lag_counts);
+        let global = StateSpace::new(
+            2,
+            3,
+            Vec::new(),
+            vec![],
+            AnticipatedResolution::default(),
+            &lag_counts,
+        );
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(cut.n_slots(), global.n_state);
@@ -600,7 +595,12 @@ mod tests {
     /// bucket slots between storage and anticipated.
     #[test]
     fn bucket_block_always_included_with_storage_only() {
-        let global = finalized_with_transit_buckets(2, 1, 2, vec![(0, 1), (1, 1)], 1, 2, vec![2]);
+        let global = finalized_with_transit_buckets(
+            2,
+            1,
+            vec![(HydroSys::new(0), 1), (HydroSys::new(1), 1)],
+            &[2],
+        );
         let cut = CutStateProjection::new(&global, STORAGE_ONLY);
 
         assert_eq!(cut.n_slots(), 6);
@@ -635,7 +635,12 @@ mod tests {
     /// column.
     #[test]
     fn bucket_render_pairs_sit_between_lag_and_anticipated() {
-        let global = finalized_with_transit_buckets(2, 1, 2, vec![(0, 1), (1, 1)], 1, 2, vec![2]);
+        let global = finalized_with_transit_buckets(
+            2,
+            1,
+            vec![(HydroSys::new(0), 1), (HydroSys::new(1), 1)],
+            &[2],
+        );
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(global.transit_buckets_out, 4..6);
@@ -672,7 +677,7 @@ mod tests {
     /// byte-identically to the pre-bucket walk.
     #[test]
     fn b_zero_projection_matches_pre_transit_bucket_walk() {
-        let global = finalized_with_transit_buckets(3, 2, 0, vec![], 2, 2, vec![1, 2]);
+        let global = finalized_with_transit_buckets(3, 2, vec![], &[1, 2]);
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
         assert_eq!(global.n_buckets, 0);
@@ -713,11 +718,13 @@ mod tests {
         let global = finalized_with_transit_buckets(
             1,
             1,
-            4,
-            vec![(0, 0), (0, 1), (0, 2), (0, 3)],
-            0,
-            0,
-            vec![],
+            vec![
+                (HydroSys::new(0), 0),
+                (HydroSys::new(0), 1),
+                (HydroSys::new(0), 2),
+                (HydroSys::new(0), 3),
+            ],
+            &[],
         );
         let cut = CutStateProjection::new(&global, ALL_ENABLED);
 
@@ -782,8 +789,8 @@ mod tests {
     /// this inclusion.
     #[test]
     fn commitment_hold_post_study_target_joins_the_projection() {
-        let pre_ring = finalized(2, 1, 0, 0, vec![]);
-        let with_ring = finalized(2, 1, 1, 2, vec![2]);
+        let pre_ring = finalized(2, 1, &[]);
+        let with_ring = finalized(2, 1, &[2]);
 
         let cut_pre = CutStateProjection::new(&pre_ring, ALL_ENABLED);
         let cut_with = CutStateProjection::new(&with_ring, ALL_ENABLED);
@@ -811,7 +818,8 @@ mod proptests {
     use proptest::test_runner::RngSeed;
 
     use super::{CutSlot, CutStateProjection, OutCol, StageStateConfig, StateDim};
-    use crate::indexer::StateSpace;
+    use crate::indexer::{HydroSys, StateSpace};
+    use crate::lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime};
 
     const ALL_ENABLED: StageStateConfig = StageStateConfig {
         storage: true,
@@ -829,47 +837,69 @@ mod proptests {
     }
 
     /// A valid [`StateSpace`] over the small parameter space (`hydro_count`,
-    /// `max_par_order`, `n_buckets`, `n_anticipated`, `k_max` each `0..=4` or
-    /// `0..=3`), with every dependent-length vector sized and bounded to satisfy
-    /// `StateSpace::new`'s debug-asserts:
-    /// `transit_bucket_column_order.len() == n_buckets`,
-    /// `anticipated_lead_stages.len() == n_anticipated` (each `<= k_max`), and
+    /// `max_par_order`, `n_buckets`, `n_anticipated` each `0..=4` or `0..=3`,
+    /// per-plant leads `0..=3`, a delivery axis `n_decision <= n_delivery`
+    /// both `<= 7`), with every dependent-length vector sized and bounded to
+    /// satisfy `StateSpace::new`'s debug-asserts:
+    /// `anticipated_lead_stages.len() == n_anticipated`, and
     /// `effective_lag_count.len() == hydro_count` (each `<= max_par_order`).
+    /// `n_buckets` sizes `transit_bucket_column_order` (`StateSpace::new`
+    /// derives its own bucket count from that vector's length). `k_max` is
+    /// derived — `AnticipatedResolution::resolve`'s own
+    /// `ring_size(&anticipated_lead_stages)` — never ranged independently of
+    /// the leads: a ring deeper than its leads is covered wherever a
+    /// resolution produces one.
     fn state_layout_strategy() -> impl Strategy<Value = StateSpace> {
-        (0..=4usize, 0..=3usize, 0..=3usize, 0..=3usize, 0..=3usize)
-            .prop_flat_map(
-                |(hydro_count, max_par_order, n_buckets, n_anticipated, k_max)| {
-                    (
-                        Just(hydro_count),
-                        Just(max_par_order),
-                        Just(n_buckets),
-                        Just(n_anticipated),
-                        Just(k_max),
-                        prop::collection::vec((0..=4usize, 0..=3usize), n_buckets),
-                        prop::collection::vec(0..=k_max, n_anticipated),
-                        prop::collection::vec(0..=max_par_order, hydro_count),
-                    )
-                },
-            )
+        (0..=4usize, 0..=3usize, 0..=3usize, 0..=3usize)
+            .prop_flat_map(|(hydro_count, max_par_order, n_buckets, n_anticipated)| {
+                (
+                    Just(hydro_count),
+                    Just(max_par_order),
+                    Just(n_buckets),
+                    Just(n_anticipated),
+                    prop::collection::vec(0..=3usize, n_anticipated),
+                    0..=5usize,
+                    0..=2usize,
+                    prop::collection::vec((0..=4usize, 0..=3usize), n_buckets),
+                    prop::collection::vec(0..=max_par_order, hydro_count),
+                )
+            })
             .prop_map(
                 |(
                     hydro_count,
                     max_par_order,
-                    n_buckets,
-                    n_anticipated,
-                    k_max,
-                    transit_bucket_column_order,
+                    _n_buckets,
+                    _n_anticipated,
                     anticipated_lead_stages,
+                    n_decision,
+                    extra_delivery,
+                    transit_bucket_column_order,
                     effective_lag_count,
                 )| {
+                    let leads: Vec<LeadTime> = anticipated_lead_stages
+                        .iter()
+                        .map(|&l| LeadTime::Stages(u32::try_from(l).unwrap_or(u32::MAX)))
+                        .collect();
+                    let study_stage_hours = vec![720.0; n_decision];
+                    let post_study_stage_hours = vec![720.0; extra_delivery];
+                    let resolution = AnticipatedResolution::resolve(
+                        &leads,
+                        DeliveryAxis {
+                            study_stage_hours: &study_stage_hours,
+                            post_study_stage_hours: &post_study_stage_hours,
+                        },
+                    );
+                    let transit_bucket_column_order: Vec<(HydroSys, usize)> =
+                        transit_bucket_column_order
+                            .into_iter()
+                            .map(|(p, lag)| (HydroSys::new(p), lag))
+                            .collect();
                     StateSpace::new(
                         hydro_count,
                         max_par_order,
-                        n_buckets,
                         transit_bucket_column_order,
-                        n_anticipated,
-                        k_max,
                         anticipated_lead_stages,
+                        resolution,
                         &effective_lag_count,
                     )
                 },

@@ -10,7 +10,7 @@ use std::sync::mpsc::{Sender, SyncSender};
 use chrono::NaiveDate;
 use cobre_comm::Communicator;
 use cobre_core::commissioning::commissioning_active;
-use cobre_core::{EntityId, HydroPastDefluence, TrainingEvent};
+use cobre_core::{ContractType, EntityId, HydroPastDefluence, TrainingEvent};
 use cobre_solver::ActiveProfile;
 use cobre_solver::{SolverInterface, StageTemplate};
 use cobre_stochastic::{ClassSampleRequest, ForwardNoiseTables, ForwardSampler, SampleRequest};
@@ -20,7 +20,7 @@ use crate::error::SddpError::Infeasible;
 use crate::error::SddpError::Solver;
 use crate::lp::builder::GenericConstraintRowEntry;
 use crate::lp::builder::StageGeometry;
-use crate::lp::indexer::StudyDimensions;
+use crate::lp::indexer::{AnticipatedPlants, BlockIdx, BlockRowFamily, StudyDimensions};
 use crate::noise::DownstreamAccumState;
 use crate::noise::LagAccumState;
 use crate::stage_solve::StageInputs;
@@ -32,23 +32,21 @@ use crate::{
     FutureCostFunction, SddpError,
     context::{StageContext, TrainingContext},
     dcs::{DcsSolveContext, build_initial_resident_set, lazy_solve_preloaded},
-    lp::indexer::{HydroCellIndex, StateSpace},
+    lp::indexer::HydroCellIndex,
     setup::node_graph::{NodeId, NodePos, StageIdx, Traversal, advance_sampled_node},
     simulation::{
         config::SimulationConfig,
         error::SimulationError,
         extraction::EntityCounts,
         extraction::{
-            HydroReverseLookup, SolutionView, StageExtractionSpec, ThermalReverseLookup,
-            TransitSeedArc, accumulate_category_costs, build_transit_seed,
-            extract_anticipated_lanes, extract_stage_result_with_lookups,
+            HydroReverseLookup, SolutionView, StageExtractionSpec, TransitSeedArc,
+            accumulate_category_costs, build_transit_seed, extract_anticipated_lanes,
+            extract_stage_result_with_lookups,
         },
         types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
     solver_stats::SolverStatsDelta,
-    training::stage_solve_prep::{
-        InflowNoise, LoadNoise, StageSolvePrep, StageSolvePrepParams, StateSource,
-    },
+    training::stage_solve_prep::{InflowNoise, StageSolvePrep, StageSolvePrepParams, StateSource},
     workspace::{CapturedBasis, SolverWorkspace},
 };
 
@@ -94,10 +92,6 @@ pub struct SimulationOutputSpec<'a> {
     /// Bounded channel used to stream completed scenario results to the caller.
     pub result_tx: &'a SyncSender<SimulationScenarioResult>,
 
-    /// Per-stage productivity factor (hm³/MWh) for converting LP water-balance
-    /// RHS values to volumetric inflow (m³/s) in output records.
-    pub zeta_per_stage: &'a [f64],
-
     /// Per-stage block hours used to compute hourly energy from block dispatch.
     pub block_hours_per_stage: &'a [Vec<f64>],
 
@@ -107,28 +101,8 @@ pub struct SimulationOutputSpec<'a> {
     /// Per-stage active generic-constraint row metadata for extraction.
     pub generic_constraint_row_entries: &'a [Vec<GenericConstraintRowEntry>],
 
-    /// Per-stage column index of the first NCS generation variable.
-    pub ncs_col_starts: &'a [usize],
-
-    /// NCS column count — a single scalar, identical at every stage: under the
-    /// dense layout a dormant NCS keeps its column.
-    pub n_ncs: usize,
-
-    /// Per-stage column index of the first pumping-flow variable. The per-stage
-    /// `StageLayout` is the sole owner of this base.
-    pub pumping_col_starts: &'a [usize],
-
-    /// Pumping-station column count — a single scalar, identical at every stage:
-    /// a commissioning-dormant station keeps its column (pinned to `[0, 0]`).
-    pub n_pumping: usize,
-
-    /// Per-stage equipment geometry for extraction, from the per-stage
-    /// `StageLayout`. A single global stage-0 geometry carries `n_blks`-striped
-    /// bases that misread any stage with a differing block count.
-    pub geometry_per_stage: &'a [StageGeometry],
-
     /// Study-scope hydro-cell partition, threaded into every stage's
-    /// `StageExtractionSpec` the same way `geometry_per_stage` is.
+    /// `StageExtractionSpec`.
     pub hydro_cell_index: &'a HydroCellIndex,
 
     /// Per-station pumping power-consumption rate \[MW/(m³/s)\], ID-sorted
@@ -143,12 +117,9 @@ pub struct SimulationOutputSpec<'a> {
     /// — never the `col_scale`-scaled LP objective.
     pub contract_prices_per_stage: &'a [Vec<f64>],
 
-    /// Direction per contract, ID-sorted parallel to `entity_counts.contract_ids`
-    /// (`true` = import). Stage-invariant.
-    pub contract_is_import: &'a [bool],
-
-    /// Per-stage NCS entity IDs, in ID-sorted system order (dense — all NCS).
-    pub ncs_entity_ids_per_stage: &'a [Vec<i32>],
+    /// Per-contract `(ContractType, per-family slot)`, ID-sorted parallel to
+    /// `entity_counts.contract_ids`. Stage-invariant.
+    pub contract_slots: &'a [(ContractType, usize)],
 
     /// Map from target hydro ID to source hydro indices that divert to it; empty
     /// when no hydros have diversion.
@@ -200,7 +171,6 @@ pub(crate) struct ScenarioIds<'a> {
     /// the transition draw — the scenario's own native id, mirroring how a
     /// training forward pass's global scenario index plays the same role.
     pub(crate) global_scenario: u32,
-    pub(crate) num_stages: usize,
     /// Total simulation scenario count, passed to `SampleRequest::total_scenarios`.
     pub(crate) total_scenarios: u32,
     /// Caller-owned buffer for raw noise output (reused across stages).
@@ -224,8 +194,7 @@ fn build_row_lower_unscaled<'a>(
     row_scale: &[f64],
     load_rhs_buf: &[f64],
     scratch_buf: &'a mut Vec<f64>,
-    n_load_buses: usize,
-    load_balance_row_start: usize,
+    load_rows: BlockRowFamily,
     n_blks: usize,
     load_bus_indices: &[usize],
 ) -> &'a [f64] {
@@ -246,11 +215,11 @@ fn build_row_lower_unscaled<'a>(
     }
 
     // load_rhs_buf is already in unscaled MW.
-    if n_load_buses > 0 && !load_rhs_buf.is_empty() {
+    if !load_bus_indices.is_empty() && !load_rhs_buf.is_empty() {
         let mut rhs_idx = 0;
         for &bus_pos in load_bus_indices {
             for blk in 0..n_blks {
-                scratch_buf[load_balance_row_start + bus_pos * n_blks + blk] =
+                scratch_buf[load_rows.row(bus_pos, BlockIdx::new(blk), n_blks)] =
                     load_rhs_buf[rhs_idx];
                 rhs_idx += 1;
             }
@@ -323,28 +292,29 @@ impl<'a> SimScenarioLoadSpec<'a> {
 /// every per-stage extraction call to eliminate per-`(scenario, stage)`
 /// allocations on the hot path.
 ///
-/// Thermal membership is study-invariant (one table); FPHA/evaporation membership
-/// is per-`(hydro, stage)`, so a single global hydro lookup would misclassify any
-/// stage whose membership differs from stage 0's.
+/// Thermal (anticipated-plant) membership is study-invariant (one owner);
+/// FPHA/evaporation membership is per-`(hydro, stage)`, so a single global
+/// hydro lookup would misclassify any stage whose membership differs from
+/// stage 0's.
 pub(crate) struct SimLookups {
-    /// Reverse-lookup table for anticipated thermal indices (study-invariant).
-    pub(crate) thermal: ThermalReverseLookup,
+    /// The study's anticipated-plant set (study-invariant).
+    pub(crate) anticipated_plants: AnticipatedPlants,
     /// Per-stage hydro FPHA/evaporation lookups, indexed by stage.
     pub(crate) hydro_per_stage: Vec<HydroReverseLookup>,
 }
 
 impl SimLookups {
-    /// Build the reverse-lookup tables from study dimensions, the per-stage
-    /// geometry table, and entity counts.
+    /// Build the per-stage hydro lookups and clone the study's anticipated-plant
+    /// set, from study dimensions, the per-stage geometry table, and entity
+    /// counts.
     pub(crate) fn build(
         study_dims: &StudyDimensions,
         geometry_per_stage: &[StageGeometry],
         hydro_cell_index: &HydroCellIndex,
-        n_thermals: usize,
         n_hydros: usize,
     ) -> Self {
         Self {
-            thermal: ThermalReverseLookup::build(study_dims, n_thermals),
+            anticipated_plants: study_dims.anticipated_plants.clone(),
             hydro_per_stage: HydroReverseLookup::build_per_stage(
                 geometry_per_stage,
                 hydro_cell_index,
@@ -354,7 +324,7 @@ impl SimLookups {
     }
 }
 
-/// Map a stage-solve [`SddpError`](crate::error::SddpError) to a
+/// Map a stage-solve [`SddpError`] to a
 /// [`SimulationError`], carrying the scenario/stage ids. Shared by the frozen
 /// `run_stage_solve` path and the DCS `lazy_solve_preloaded` path so both report
 /// failures identically.
@@ -425,7 +395,6 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
     }
     let prep_params = StageSolvePrepParams {
         state_source: StateSource(&ws.current_state),
-        load_noise: LoadNoise::Present,
         inflow_noise: InflowNoise::Transform,
         raw_noise,
     };
@@ -456,8 +425,7 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
     let col_scale = &ctx.template(t).col_scale;
     let row_scale = &ctx.template(t).row_scale;
 
-    let node = ids.node;
-    let pool_id = training_ctx.node_graph.nodes[node].pool_id;
+    let pool_id = training_ctx.node_graph.nodes[ids.node].pool_id;
 
     let view_objective: f64 = if let Some(params) = dcs {
         // Simulation has no iteration counter; seed with `current_iteration = 0`.
@@ -524,16 +492,8 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
     ws.scratch.unscaled_primal = unscaled_primal;
     ws.scratch.unscaled_dual = unscaled_dual;
 
-    // Study-level terminal-boundary flag, mirroring the forward pass's
-    // `terminal_has_boundary_cuts`; the pool read runs only at the terminal stage.
-    let num_stages = training_ctx.horizon.num_stages();
-    let include_terminal_theta = training_ctx.horizon.is_terminal(t.next().0)
-        && training_ctx
-            .node_graph
-            .any_stage_node(StageIdx(num_stages - 1))
-            .is_some_and(|n| {
-                fcf.pools[training_ctx.node_graph.nodes[n].pool_id].warm_start_count > 0
-            });
+    let include_terminal_theta =
+        training_ctx.horizon.is_terminal(t.next().0) && fcf.pools[pool_id].has_warm_start_cuts();
 
     let (immediate_cost, result) = extract_sim_stage_result(
         &mut ws.scratch.inflow_m3s_buf,
@@ -547,28 +507,20 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
         include_terminal_theta,
         ctx,
         output,
-        state,
-        study_dims,
+        training_ctx,
         ids,
         stage_id,
         n_stochastic_ncs,
         lookups,
     );
     // Snapshot incoming lags before state is overwritten below.
-    let lag_start = state.inflow_lags.start;
-    let lag_len = state.hydro_count * state.max_par_order;
     ws.scratch.lag_matrix_buf.clear();
     ws.scratch
         .lag_matrix_buf
-        .extend_from_slice(&ws.current_state[lag_start..lag_start + lag_len]);
+        .extend_from_slice(&ws.current_state[state.inflow_lags.clone()]);
 
     let stage_lag = ctx.stage_lag(t);
-    let downstream_par_order = ws
-        .scratch
-        .downstream_completed_lags
-        .len()
-        .checked_div(ws.scratch.lag_accumulator.len())
-        .unwrap_or(0);
+    let downstream_par_order = study_dims.downstream_par_order;
     // Pass unscaled_primal as a separate borrow so the borrow checker sees it is
     // disjoint from the &mut ws.scratch.lag_* fields passed alongside it.
     let unscaled_primal_ref: &[f64] = &ws.scratch.unscaled_primal;
@@ -595,6 +547,16 @@ pub(crate) fn solve_simulation_stage<S: SolverInterface>(
     Ok((immediate_cost, result))
 }
 
+/// `t`'s load-balance row family and block count, or the empty family with `0`
+/// blocks when the stage has no stochastic load buses.
+fn resolve_load_rows(ctx: &StageContext<'_>, t: StageIdx) -> (BlockRowFamily, usize) {
+    if ctx.load_bus_indices.is_empty() {
+        (BlockRowFamily::default(), 0)
+    } else {
+        (ctx.geometry_per_stage[t.0].load_balance, ctx.block_count(t))
+    }
+}
+
 /// Extract the cost and result record from a solved simulation stage LP.
 ///
 /// RATIONALE (`too_many_arguments`): takes individual scratch field borrows rather
@@ -617,8 +579,7 @@ pub(crate) fn extract_sim_stage_result(
     include_terminal_theta: bool,
     ctx: &StageContext<'_>,
     output: &SimulationOutputSpec<'_>,
-    state: &StateSpace,
-    study_dims: &StudyDimensions,
+    training_ctx: &TrainingContext<'_>,
     ids: &SimStageIds,
     stage_id: i32,
     n_stochastic_ncs: usize,
@@ -635,66 +596,41 @@ pub(crate) fn extract_sim_stage_result(
         let theta_obj_coeff = ctx
             .templates
             .get(t.0)
-            .and_then(|tmpl| tmpl.objective.get(state.theta).copied())
+            .and_then(|tmpl| tmpl.objective.get(training_ctx.state.theta).copied())
             .unwrap_or(1.0);
-        let theta_contribution = unscaled_primal[state.theta] * theta_obj_coeff;
+        let theta_contribution = unscaled_primal[training_ctx.state.theta] * theta_obj_coeff;
         (view_objective - theta_contribution) * ctx.cost_scale_factor
     };
     // Realized inflow Z_t from the z_h primal: total natural inflow (PAR lag
     // included), gross of withdrawal.
     inflow_m3s_buf.clear();
-    for h in 0..ctx.n_hydros {
-        inflow_m3s_buf.push(unscaled_primal[state.z_inflow.start + h]);
-    }
-    let blk_hrs = output
-        .block_hours_per_stage
-        .get(t.0)
-        .map_or(&[][..], |v| v.as_slice());
-    let (load_row_start, load_n_blks) = if ctx.n_load_buses > 0 {
-        (ctx.load_balance_row_start(t), ctx.block_count(t))
-    } else {
-        (0, 0)
-    };
+    inflow_m3s_buf.extend_from_slice(&unscaled_primal[training_ctx.state.z_inflow.clone()]);
+    debug_assert_eq!(inflow_m3s_buf.len(), training_ctx.state.hydro_count);
+    let blk_hrs = output.block_hours_per_stage[t.0].as_slice();
+    let (load_rows, load_n_blks) = resolve_load_rows(ctx, t);
     let row_lower_ref = build_row_lower_unscaled(
         &ctx.template(t).row_lower,
         &ctx.template(t).row_scale,
         load_rhs_buf,
         row_lower_buf,
-        ctx.n_load_buses,
-        load_row_start,
+        load_rows,
         load_n_blks,
         ctx.load_bus_indices,
     );
     // NCS upper bounds for extraction, in dense system-column order
     // (`ncs_sys * stage_n_blks + blk`).
-    let ncs_n = output.n_ncs;
-    let ncs_col_start = output.ncs_col_starts.get(t.0).copied().unwrap_or(0);
     let stage_n_blks = ctx.block_count(t);
-    let pumping_col_start = output.pumping_col_starts.get(t.0).copied().unwrap_or(0);
-    let n_pumping = output.n_pumping;
-    debug_assert!(
-        output.geometry_per_stage.is_empty()
-            || output.geometry_per_stage.len() == ctx.templates.len(),
-        "geometry_per_stage must carry one entry per study stage when populated",
-    );
-    let geometry_default = StageGeometry::default();
-    let geometry = output
-        .geometry_per_stage
-        .get(t.0)
-        .unwrap_or(&geometry_default);
+    let geometry = &ctx.geometry_per_stage[t.0];
     // Start from the template `col_upper`, then overwrite each non-dormant
     // stochastic column with the per-scenario realized availability. A dormant slot
     // is skipped so its template `0` survives — copying its stochastic cap would
     // report a nonzero available for a column the LP pinned to `0`.
-    let ncs_col_upper: &[f64] = if ncs_n > 0 && stage_n_blks > 0 {
-        let start = ncs_col_start;
-        let end = start + ncs_n * stage_n_blks;
+    let ncs_col_upper: &[f64] = if geometry.ncs_generation.is_empty() {
+        &[]
+    } else {
+        let ncs_cols = geometry.ncs_generation.clone();
         ncs_col_upper_extract_buf.clear();
-        if end <= ctx.template(t).col_upper.len() {
-            ncs_col_upper_extract_buf.extend_from_slice(&ctx.template(t).col_upper[start..end]);
-        } else {
-            ncs_col_upper_extract_buf.resize(ncs_n * stage_n_blks, 0.0);
-        }
+        ncs_col_upper_extract_buf.extend_from_slice(&ctx.template(t).col_upper[ncs_cols]);
         if n_stochastic_ncs > 0 && !ncs_col_upper_buf.is_empty() {
             let dense_col = ctx.ncs_stochastic_dense_col;
             let windows = ctx.ncs_stochastic_windows;
@@ -718,23 +654,8 @@ pub(crate) fn extract_sim_stage_result(
             }
         }
         ncs_col_upper_extract_buf.as_slice()
-    } else {
-        &[]
     };
-    // Per-stage hydro FPHA/evap lookup (membership is per-`(hydro, stage)`). The
-    // empty-table fallback is sized to `hydro_ids.len()` so `lookup.fpha[h]` stays
-    // in bounds; built only on that path, never on the production hot path.
-    let hydro_lookup_default;
-    let hydro_lookup = if let Some(l) = lookups.hydro_per_stage.get(t.0) {
-        l
-    } else {
-        hydro_lookup_default = HydroReverseLookup::build(
-            &StageGeometry::default(),
-            output.hydro_cell_index,
-            output.entity_counts.hydro_ids.len(),
-        );
-        &hydro_lookup_default
-    };
+    let hydro_lookup = &lookups.hydro_per_stage[t.0];
     let view = SolutionView {
         primal: unscaled_primal,
         dual: unscaled_dual,
@@ -743,38 +664,20 @@ pub(crate) fn extract_sim_stage_result(
         row_lower: row_lower_ref,
     };
     let spec = StageExtractionSpec {
-        state,
-        study_dims,
-        n_blks: stage_n_blks,
+        state: training_ctx.state,
+        study_dims: training_ctx.study_dims,
         geometry,
         hydro_cell_index: output.hydro_cell_index,
         entity_counts: output.entity_counts,
         inflow_m3s_per_hydro: inflow_m3s_buf,
         block_hours: blk_hrs,
-        generic_constraint_entries: output
-            .generic_constraint_row_entries
-            .get(t.0)
-            .map_or(&[], Vec::as_slice),
-        ncs_col_start,
-        n_ncs: ncs_n,
-        ncs_entity_ids: output
-            .ncs_entity_ids_per_stage
-            .get(t.0)
-            .map_or(&[], Vec::as_slice),
+        generic_constraint_entries: &output.generic_constraint_row_entries[t.0],
         ncs_col_upper,
-        pumping_col_start,
-        n_pumping,
         pumping_consumption_mw_per_m3s: output.pumping_consumption_mw_per_m3s,
-        contract_prices: output
-            .contract_prices_per_stage
-            .get(t.0)
-            .map_or(&[], Vec::as_slice),
-        contract_is_import: output.contract_is_import,
+        contract_prices: &output.contract_prices_per_stage[t.0],
+        contract_slots: output.contract_slots,
         diversion_upstream: output.diversion_upstream,
-        hydro_productivities: output
-            .hydro_productivities_per_stage
-            .get(t.0)
-            .map_or(&[], Vec::as_slice),
+        hydro_productivities: &output.hydro_productivities_per_stage[t.0],
         col_scale: &ctx.template(t).col_scale,
         row_scale: &ctx.template(t).row_scale,
         cumulative_discount_factor: ctx.cumulative_discount_factor(t),
@@ -782,7 +685,7 @@ pub(crate) fn extract_sim_stage_result(
         energy_conversion: output.energy_conversion,
         hydro_min_storage_hm3: output.hydro_min_storage_hm3,
         stage_index: t.0,
-        n_stages: ctx.templates.len(),
+        horizon: training_ctx.horizon,
         anticipated_windows: ctx.anticipated_windows,
         study_stage_ids: ctx.study_stage_ids,
     };
@@ -792,7 +695,7 @@ pub(crate) fn extract_sim_stage_result(
         ids.stage_id_u32,
         ids.node_id,
         hydro_lookup,
-        &lookups.thermal,
+        &lookups.anticipated_plants,
     );
     result.anticipated_lanes = extract_anticipated_lanes(
         &view,
@@ -861,7 +764,7 @@ pub(crate) fn reset_scenario_state<S: SolverInterface>(
 
 /// Advance `node` to the one this scenario visits at `t + 1` (chain-parity
 /// contract stated once at
-/// [`advance_sampled_node`](crate::setup::node_graph::advance_sampled_node)).
+/// [`advance_sampled_node`]).
 fn advance_simulation_node(
     training_ctx: &TrainingContext<'_>,
     node: NodePos,
@@ -888,8 +791,12 @@ pub(crate) fn process_scenario_stages<S: SolverInterface>(
     lookups: &SimLookups,
 ) -> Result<(f64, Vec<SimulationStageResult>), SimulationError> {
     let TrainingContext {
-        state, node_graph, ..
+        horizon,
+        state,
+        node_graph,
+        ..
     } = training_ctx;
+    let num_stages = horizon.num_stages();
     reset_scenario_state(
         ws,
         ids.sampler,
@@ -900,11 +807,11 @@ pub(crate) fn process_scenario_stages<S: SolverInterface>(
         ids.root_node,
     );
     let mut total_cost = 0.0_f64;
-    let mut stage_results = Vec::with_capacity(ids.num_stages);
+    let mut stage_results = Vec::with_capacity(num_stages);
     let mut node = ids.root_node;
 
     #[allow(clippy::needless_range_loop)] // t indexes load_spec, ctx arrays, and SimStageIds
-    for t in (0..ids.num_stages).map(StageIdx) {
+    for t in (0..num_stages).map(StageIdx) {
         // Seeds key off the positional stage index `t` (unchanged — a re-key here
         // would perturb the noise/transition draws); the output stage_id is the
         // declared domain id, resolved by position from the ordered study ids.
@@ -955,7 +862,7 @@ pub(crate) fn process_scenario_stages<S: SolverInterface>(
         total_cost += cum_d * cost;
         stage_results.push(result);
 
-        if t.next().0 < ids.num_stages {
+        if t.next().0 < num_stages {
             node = advance_simulation_node(training_ctx, node, stage_seed, ids.global_scenario);
         }
     }
@@ -1038,9 +945,8 @@ pub(crate) fn dispatch_scenario_result(
 /// feasible solution, `Err(SimulationError::SolverError { .. })` for other
 /// terminal LP solver failures, and `Err(SimulationError::ChannelClosed)` when
 /// the channel receiver has been dropped.
-// RATIONALE: simulate() is a thin argument-forwarding shim to
-// SimulationState::run; splitting would only relocate the parameter list, not
-// reduce it — SimulationInputs already bundles what can be bundled.
+// RATIONALE: splitting would only relocate the parameter list, not reduce it —
+// SimulationInputs already bundles what can be bundled.
 #[allow(clippy::too_many_arguments)]
 pub fn simulate<S, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],

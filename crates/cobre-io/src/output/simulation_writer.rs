@@ -173,7 +173,9 @@ pub struct HydroWriteRecord {
     pub stored_energy_final_mwh: f64,
     /// Spillage regularization cost.
     pub spillage_cost: f64,
-    /// Water value (storage balance dual) in cost/hm³.
+    /// Marginal water value: the dual of the row's own water-balance constraint
+    /// (each block's own row in chronological stages; the stage row, repeated on
+    /// every block row, in parallel stages), in cost/hm³.
     pub water_value_per_hm3: f64,
     /// Storage binding code.
     pub storage_binding_code: i8,

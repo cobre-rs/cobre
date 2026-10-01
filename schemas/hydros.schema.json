@@ -59,7 +59,7 @@
         },
         "reference_volumes_hm3": {
           "default": null,
-          "description": "Monthly reservoir reference volumes [hm³] used as the linearization\nreference point for evaporation, one per calendar month.\nIndex 0 = January, index 11 = December.\nAbsent = no reference volume override; the calling algorithm uses its\nown default (e.g., mid-point of the storage range).",
+          "description": "Monthly reservoir reference volumes \\[hm³\\] used as the linearization\nreference point for evaporation, one per calendar month.\nIndex 0 = January, index 11 = December.\nAbsent = no reference volume override; the calling algorithm uses its\nown default (e.g., mid-point of the storage range).",
           "items": {
             "format": "double",
             "type": "number"
@@ -104,7 +104,7 @@
           "description": "Constant productivity: `power = productivity * turbined_m3s`.\n\nThe productivity coefficient is read from\n`system/hydro_production_models.json` per `(hydro, stage)`. It is not\naccepted in `hydros.json`; supplying `productivity_mw_per_m3s` here\nproduces a hard parse error.",
           "properties": {
             "max_generation_mw": {
-              "description": "Maximum electrical generation [MW].",
+              "description": "Maximum electrical generation \\[MW\\].",
               "format": "double",
               "type": "number"
             },
@@ -114,7 +114,7 @@
               "type": "number"
             },
             "min_generation_mw": {
-              "description": "Minimum electrical generation [MW].",
+              "description": "Minimum electrical generation \\[MW\\].",
               "format": "double",
               "type": "number"
             },
@@ -142,7 +142,7 @@
           "description": "Head-dependent productivity linearized around an operating point.\n\nThe productivity coefficient is read from\n`system/hydro_production_models.json` per `(hydro, stage)`. It is not\naccepted in `hydros.json`; supplying `productivity_mw_per_m3s` here\nproduces a hard parse error.",
           "properties": {
             "max_generation_mw": {
-              "description": "Maximum electrical generation [MW].",
+              "description": "Maximum electrical generation \\[MW\\].",
               "format": "double",
               "type": "number"
             },
@@ -152,7 +152,7 @@
               "type": "number"
             },
             "min_generation_mw": {
-              "description": "Minimum electrical generation [MW].",
+              "description": "Minimum electrical generation \\[MW\\].",
               "format": "double",
               "type": "number"
             },
@@ -180,7 +180,7 @@
           "description": "Full production function with head-area-productivity tables (FPHA model).\n\nProductivity is derived from the FPHA tables in\n`system/hydro_production_models.json`. The `productivity_mw_per_m3s`\nfield is not accepted here or in any other `generation` variant.",
           "properties": {
             "max_generation_mw": {
-              "description": "Maximum electrical generation [MW].",
+              "description": "Maximum electrical generation \\[MW\\].",
               "format": "double",
               "type": "number"
             },
@@ -190,7 +190,7 @@
               "type": "number"
             },
             "min_generation_mw": {
-              "description": "Minimum electrical generation [MW].",
+              "description": "Minimum electrical generation \\[MW\\].",
               "format": "double",
               "type": "number"
             },
@@ -245,7 +245,7 @@
               "type": "string"
             },
             "value_m": {
-              "description": "Fixed head loss [m].",
+              "description": "Fixed head loss \\[m\\].",
               "format": "double",
               "type": "number"
             }
@@ -558,12 +558,12 @@
       "description": "Intermediate type for the `reservoir` sub-object.",
       "properties": {
         "max_storage_hm3": {
-          "description": "Maximum operational storage [hm³].",
+          "description": "Maximum operational storage \\[hm³\\].",
           "format": "double",
           "type": "number"
         },
         "min_storage_hm3": {
-          "description": "Minimum operational storage (dead volume) [hm³].",
+          "description": "Minimum operational storage (dead volume) \\[hm³\\].",
           "format": "double",
           "type": "number"
         }
@@ -627,7 +627,7 @@
       "description": "Intermediate type for a single piecewise tailrace breakpoint.",
       "properties": {
         "height_m": {
-          "description": "Downstream water level (tailrace height) at this outflow [m].",
+          "description": "Downstream water level (tailrace height) at this outflow \\[m\\].",
           "format": "double",
           "type": "number"
         },
@@ -658,7 +658,7 @@
           "type": "integer"
         },
         "max_generation_mw": {
-          "description": "Maximum electrical generation [MW].",
+          "description": "Maximum electrical generation \\[MW\\].",
           "format": "double",
           "type": "number"
         },
@@ -668,7 +668,7 @@
           "type": "number"
         },
         "min_generation_mw": {
-          "description": "Minimum electrical generation [MW].",
+          "description": "Minimum electrical generation \\[MW\\].",
           "format": "double",
           "type": "number"
         },

@@ -45,10 +45,6 @@ fn make_fixture_stage_template() -> StageTemplate {
         row_lower: vec![6.0, 14.0],
         row_upper: vec![6.0, 14.0],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -151,10 +147,6 @@ fn test_fixture_stage_template_data() {
     assert_eq!(t.row_lower, vec![6.0, 14.0]);
     assert_eq!(t.row_upper, vec![6.0, 14.0]);
     assert_eq!(t.n_state, 1);
-    assert_eq!(t.n_transfer, 0);
-    assert_eq!(t.n_dual_relevant, 1);
-    assert_eq!(t.n_hydro, 1);
-    assert_eq!(t.max_par_order, 0);
 }
 
 #[test]
@@ -485,7 +477,7 @@ fn test_solver_highs_dual_normalization_cut_relevant_row() {
         .solve(None)
         .expect("solve() must succeed on feasible LP");
 
-    // dual[0] is the cut-relevant state-fixing row dual (n_dual_relevant = 1)
+    // dual[0] is the dual of fixture row 0 (`x0 = 6`)
     let pi_0 = solution.dual[0];
     assert!(
         (pi_0 - (-100.0)).abs() < 1e-6,
@@ -510,7 +502,7 @@ fn test_solver_highs_dual_normalization_sensitivity_check() {
         "expected original objective = 100.0, got {z_original}"
     );
 
-    // Perturb the state-fixing RHS by +0.01 (the divisor below).
+    // Perturb row 0's RHS by +0.01 (the divisor below).
     solver.set_row_bounds(&[0], &[6.01], &[6.01]);
     let z_perturbed = solver
         .solve(None)
@@ -738,10 +730,6 @@ fn test_solver_highs_solve_infeasible() {
         row_lower: vec![],
         row_upper: vec![],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
@@ -796,10 +784,6 @@ fn test_solver_highs_solve_unbounded() {
         row_lower: vec![],
         row_upper: vec![],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
@@ -860,10 +844,6 @@ fn make_larger_lp_template() -> StageTemplate {
         row_lower: vec![10.0, 8.0, 6.0, 4.0],
         row_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, f64::INFINITY],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -1013,10 +993,6 @@ fn test_solver_highs_infeasible_with_rows() {
         row_lower: vec![10.0, f64::NEG_INFINITY],
         row_upper: vec![f64::INFINITY, 5.0],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 2,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
@@ -1053,10 +1029,6 @@ fn test_solver_highs_infeasible_with_presolve() {
         row_lower: vec![10.0, f64::NEG_INFINITY],
         row_upper: vec![f64::INFINITY, 5.0],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 2,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
@@ -1104,10 +1076,6 @@ fn test_solver_highs_unbounded_with_primal_ray() {
         row_lower: vec![f64::NEG_INFINITY],
         row_upper: vec![10.0],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
@@ -1154,10 +1122,6 @@ fn test_solver_highs_unbounded_or_infeasible() {
         row_lower: vec![10.0, f64::NEG_INFINITY],
         row_upper: vec![f64::INFINITY, 5.0],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 2,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };

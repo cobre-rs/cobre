@@ -495,7 +495,11 @@ fn description_for(file: &str, column: &str) -> &'static str {
             "Stored energy at end of block, averaged over the stage's total hours"
         }
         ("hydros", "spillage_cost") => "Spillage regularization cost",
-        ("hydros", "water_value_per_hm3") => "Marginal water value",
+        ("hydros", "water_value_per_hm3") => {
+            "Marginal water value: the dual of the row's own water-balance constraint \
+             (each block's own row in chronological stages; the stage row, repeated on \
+             every block row, in parallel stages)"
+        }
         ("hydros", "storage_binding_code") => "Storage bound binding code",
         ("hydros", "operative_state_code") => "Operative state code",
         ("hydros", "turbined_slack_m3s") => "Turbined minimum slack",

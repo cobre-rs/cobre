@@ -35,7 +35,6 @@ def _make_metadata(
     if cost_scale_factor is not None:
         producer["cost_scale_factor"] = cost_scale_factor
     metadata = {
-        "cobre_version": "0.13.0",
         "created_at": "2026-07-30T00:00:00Z",
         "num_stages": 1,
         "producer": producer,
@@ -108,6 +107,26 @@ def test_write_policy_checkpoint_round_trip(tmp_path: pathlib.Path) -> None:
     assert cuts[0]["coefficients"] == pytest.approx([1.0, 2.0, 3.0])
     assert cuts[1]["cut_id"] == 2
     assert cuts[1]["coefficients"] == pytest.approx([0.5, -1.5, 2.5])
+
+
+def test_write_policy_checkpoint_stamps_the_running_version(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A caller-supplied cobre_version is ignored; the checkpoint always
+    records the running cobre version.
+    """
+    import cobre  # noqa: PLC0415
+    import cobre.results  # noqa: PLC0415
+
+    metadata = _make_metadata()
+    metadata["cobre_version"] = "0.13.0"
+
+    cobre.write_policy_checkpoint(
+        str(tmp_path / "policy"), _make_stage_cuts(), metadata
+    )
+
+    loaded = cobre.results.load_policy(str(tmp_path))
+    assert loaded["metadata"]["cobre_version"] == cobre.__version__
 
 
 def test_write_policy_checkpoint_cost_scale_factor_omitted_reads_as_none(

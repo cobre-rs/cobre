@@ -21,9 +21,11 @@ use cobre_sddp::SddpError::BasisShapeMismatch;
 use cobre_sddp::SddpError::Communication;
 use cobre_sddp::SddpError::Infeasible;
 use cobre_sddp::SddpError::Io;
+use cobre_sddp::SddpError::PolicyVersionMismatch;
 use cobre_sddp::SddpError::Simulation;
 use cobre_sddp::SddpError::Solver;
 use cobre_sddp::SddpError::Stochastic;
+use cobre_sddp::SddpError::StoredBasisDimensionMismatch;
 use cobre_sddp::SddpError::Validation;
 use cobre_sddp::SddpError::WireVersionMismatch;
 use cobre_sddp::SimulationError;
@@ -250,6 +252,12 @@ impl From<cobre_sddp::SddpError> for CliError {
             ref shape_mismatch @ BasisShapeMismatch { .. } => Self::Internal {
                 message: shape_mismatch.to_string(),
             },
+            ref mismatch @ (PolicyVersionMismatch { .. } | StoredBasisDimensionMismatch { .. }) => {
+                Self::Validation {
+                    report: mismatch.to_string(),
+                    already_rendered: false,
+                }
+            }
         }
     }
 }
@@ -508,6 +516,49 @@ mod tests {
             "SddpError::Validation must map to CliError::Validation, got: {cli_err:?}"
         );
         assert_eq!(cli_err.exit_code(), 1);
+    }
+
+    #[test]
+    fn from_sddp_error_policy_version_mismatch_maps_to_validation() {
+        let sddp_err = PolicyVersionMismatch {
+            policy_version: "0.0.1".to_string(),
+        };
+        let cli_err = CliError::from(sddp_err);
+        assert!(
+            matches!(cli_err, CliError::Validation { .. }),
+            "SddpError::PolicyVersionMismatch must map to CliError::Validation, got: {cli_err:?}"
+        );
+        assert_eq!(cli_err.exit_code(), 1);
+        let CliError::Validation { report, .. } = cli_err else {
+            unreachable!("checked above")
+        };
+        assert!(report.contains("0.0.1"), "{report}");
+        assert!(
+            report.contains(cobre_sddp::POLICY_COBRE_VERSION),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn from_sddp_error_stored_basis_dimension_mismatch_maps_to_validation() {
+        let sddp_err = SddpError::StoredBasisDimensionMismatch {
+            node_id: 3,
+            expected_cols: 4,
+            found_cols: 5,
+            expected_template_rows: 3,
+            found_rows: 6,
+            found_cut_rows: 2,
+        };
+        let cli_err = CliError::from(sddp_err);
+        assert!(
+            matches!(cli_err, CliError::Validation { .. }),
+            "SddpError::StoredBasisDimensionMismatch must map to CliError::Validation, got: {cli_err:?}"
+        );
+        assert_eq!(cli_err.exit_code(), 1);
+        let CliError::Validation { report, .. } = cli_err else {
+            unreachable!("checked above")
+        };
+        assert!(report.contains("stored basis for node"), "{report}");
     }
 
     #[test]

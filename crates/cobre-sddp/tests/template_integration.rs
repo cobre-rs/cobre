@@ -3,8 +3,8 @@
 //! Covers structural (column/row counts, CSC validity), objective coefficient
 //! wiring, and constraint-matrix entries for hydro / FPHA / evaporation /
 //! water-withdrawal / multi-segment deficit / generic constraints / operational
-//! violation slacks / inflow non-negativity / stochastic load balance and PAR
-//! max-order derivation.
+//! violation slacks / inflow non-negativity / stochastic load balance / PAR
+//! max-order derivation / water-balance z-inflow coupling.
 
 #![allow(
     clippy::doc_markdown,
@@ -38,8 +38,9 @@ use cobre_sddp::{
         EvaporationModel, EvaporationModelSet, FphaPlane, LinearizedEvaporation,
         PrepareHydroModelsResult, ProductionModelSet, ResolvedProductionModel,
     },
-    indexer::{BlockGrid, StateSpace},
+    indexer::{BlockGrid, BlockRowFamily, StateSpace},
     inflow_method::InflowNonNegativityMethod,
+    lead_time::AnticipatedResolution,
     lp::builder::PatchBuffer,
     resolved_parameters::ResolvedParameters,
 };
@@ -69,7 +70,11 @@ fn production_set(productivities: &[f64], n_stages: usize) -> ProductionModelSet
         .iter()
         .map(|&p| vec![ResolvedProductionModel::ConstantProductivity { productivity: p }; n_stages])
         .collect();
-    ProductionModelSet::new(models, n_hydros, n_stages)
+    ProductionModelSet::new(
+        models,
+        &cobre_sddp::test_support::minimal_hydros(n_hydros),
+        n_stages,
+    )
 }
 
 fn no_penalty_config() -> InflowNonNegativityMethod {
@@ -663,7 +668,7 @@ fn fpha_system_with_turbined_cost(
     };
     let planes = vec![plane; n_planes];
     let models = vec![vec![ResolvedProductionModel::Fpha { planes }]];
-    let production = ProductionModelSet::new(models, 1, 1);
+    let production = ProductionModelSet::new(models, system.hydros(), 1);
 
     (system, production)
 }
@@ -1106,7 +1111,7 @@ fn one_fpha_hydro_system(n_planes: usize) -> (cobre_core::System, ProductionMode
     };
     let planes = vec![plane; n_planes];
     let models = vec![vec![ResolvedProductionModel::Fpha { planes }]];
-    let production = ProductionModelSet::new(models, 1, 1);
+    let production = ProductionModelSet::new(models, system.hydros(), 1);
 
     (system, production)
 }
@@ -1408,7 +1413,7 @@ fn four_hydro_mixed_system() -> (cobre_core::System, ProductionModelSet) {
             planes: fpha_planes,
         }],
     ];
-    let production = ProductionModelSet::new(models, 4, 1);
+    let production = ProductionModelSet::new(models, system.hydros(), 1);
 
     (system, production)
 }
@@ -1435,8 +1440,8 @@ fn fpha_solve_system() -> (cobre_core::System, ProductionModelSet) {
         3
     ];
     let models = vec![vec![ResolvedProductionModel::Fpha { planes }]];
-    let production = ProductionModelSet::new(models, 1, 1);
     let (system, _) = one_fpha_hydro_system(3);
+    let production = ProductionModelSet::new(models, system.hydros(), 1);
     (system, production)
 }
 
@@ -3403,7 +3408,7 @@ fn two_thermal_col_thermal_start(lead_stages: usize) -> usize {
 /// - `n_ant_state = 2 * 2 = 4`
 /// - `theta = 8` (N=0 → N*(3+L) = 0; theta = 2 * n_ant_state, outgoing + incoming)
 /// - `col_thermal_start = 9` (decision_start = theta+1 = 9; 0 turbine/spillage/diversion)
-/// - `col_anticipated_slots_out_start = 0` (N*(1+L)=0, outgoing ring)
+/// - `StateSpace::commit_out.start = 0` (N*(1+L)=0, outgoing ring)
 #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 fn two_anticipated_thermal_system(n_stages: usize) -> cobre_core::System {
     use chrono::NaiveDate;
@@ -3781,7 +3786,7 @@ fn one_hydro_one_ant_system(n_stages: usize) -> cobre_core::System {
 //
 // Two-anticipated-thermal system geometry:
 //   n_hydros=0, n_anticipated=2 (K_0=1, K_1=2), k_max=2, n_ant_state=4
-//   col_anticipated_slots_out_start = 0   (N*(1+L) = 0, outgoing ring)
+//   StateSpace::commit_out.start = 0   (N*(1+L) = 0, outgoing ring)
 //   theta = 2 * n_ant_state = 8  (outgoing + incoming ring blocks)
 //   decision_start = 9
 //   col_thermal_start = 9  (0 turbine/spillage/diversion cols)
@@ -3789,7 +3794,7 @@ fn one_hydro_one_ant_system(n_stages: usize) -> cobre_core::System {
 //
 // One-anticipated-thermal system geometry (K=2):
 //   n_hydros=0, n_anticipated=1, k_max=2, n_ant_state=2
-//   col_anticipated_slots_out_start = 0
+//   StateSpace::commit_out.start = 0
 //   col_anticipated_decision_start = anticipated_decision_col(2) = 6
 
 // ─── Anticipated Thermals K=1/2/3 Roundtrip ────────────────────────────────
@@ -3798,7 +3803,7 @@ fn one_hydro_one_ant_system(n_stages: usize) -> cobre_core::System {
 // for synthetic systems with one hydro + one anticipated thermal at K=1, K=2,
 // and K=3.  They verify all cross-cutting structural invariants simultaneously:
 // column count, row count, n_state, anticipated_decision bounds, NPV objective
-// coefficient, state-fixing CSC diagonal, decision-write CSC, and fishing-row
+// coefficient, decision-write CSC, and fishing-row
 // CSC pattern.
 //
 // System geometry (shared across K=1/2/3):
@@ -3807,38 +3812,15 @@ fn one_hydro_one_ant_system(n_stages: usize) -> cobre_core::System {
 //   B=1 bus, n_blks=2, block_hours=360h
 //   n_stages=4, no FPHA, no evaporation, no generic constraints
 //
-// Column layout derivation (K >= 1 anticipated; for the K=0 non-anticipated
-// baseline the formula differs — see the K=0 baseline test below):
-//   n_ant_state = 1 * K = K
-//   n_state = N*(1+L) + n_ant_state = 1 + K
-//   col_anticipated_state_start = N*(1+L) = 1
-//   col_anticipated_state_out_start = 1+K  (state region: = commit_in.end, 1 per plant)
-//   z_inflow = [2+K, 2+K+N) = [2+K, 3+K)
-//   storage_in = [3+K, 3+K+N) = [3+K, 4+K)
-//   theta = 4+K
-//   decision_start = 5+K
-//   col_thermal_start = 5+K + 3*N*n_blks = 5+K+6 = 11+K
-//   col_anticipated_decision_start = 11+K + 1*2 = 13+K
-//   line_fwd/rev: 0 (no lines)
-//   deficit: B*1*n_blks = 2 columns → cols 14+K..15+K
-//   excess:  B*n_blks = 2 columns  → cols 16+K..17+K
-//   withdrawal_neg/pos: N each = 2 → cols 18+K..19+K
-//   op_slacks (4*N*n_blks): 8 → cols 20+K..27+K
-//   num_cols = 28+K  (valid for K >= 1)
+// Columns are addressed through `rt_col_thermal_start` and its siblings below.
 //
-// Row layout derivation (K arbitrary, stage t):
-//   rows 0..1     = hydro storage-fixing (N=1)
-//   rows 1..1+K   = anticipated_state_fixing (K rows)
-//   row 1+K       = z_inflow def (N=1)
-//   row 2+K       = water_balance (N=1)
-//   rows 3+K..4+K = load_balance (B=1, n_blks=2 → 2 rows)
-//   rows 5+K..6+K = min_outflow (N*n_blks=2)
-//   rows 7+K..8+K = max_outflow
-//   rows 9+K..10+K = min_turbine
-//   rows 11+K..12+K = min_generation
-//   row 13+K      = anticipated_fishing (0 or 1 row; active iff K <= stage_idx)
-//   row/rows after fishing = anticipated_state_out_def (active iff stage_idx+K < n_stages)
-//   num_rows = 13+K + (1 if K <= stage_idx else 0) + (1 if stage_idx+K < n_stages else 0)
+// Row layout derivation (K arbitrary, stage t; state is pinned via column
+// bounds, so the row layout carries no K-dependent state row block): the
+// K-independent z_inflow/water_balance/load_balance/min_outflow/max_outflow/
+// min_turbine/min_generation rows total 12, so `anticipated_fishing` (always
+// active) starts at row 12 (`rt_row_ant_fishing_start`). The remaining rows —
+// `anticipated_state_out_def` and the interior ring-shift definition rows —
+// are counted by `rt_expected_num_rows`.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -4340,9 +4322,10 @@ fn rt_col_ant_dec_start(k: usize) -> usize {
     12 + 2 * k
 }
 
-/// `row_anticipated_fishing_start` for the roundtrip geometry. With no state-fixing
-/// rows, = min_generation_start + n_op_rows = 11 + 1 = 12 (K-independent: row
-/// layout does not depend on the anticipated ring's column width).
+/// `row_anticipated_fishing_start` for the roundtrip geometry. Incoming state
+/// is pinned by column bounds, so no row pins it: = min_generation_start +
+/// n_op_rows = 11 + 1 = 12 (K-independent: row layout does not depend on the
+/// anticipated ring's column width).
 fn rt_row_ant_fishing_start(_k: usize) -> usize {
     12
 }
@@ -4358,14 +4341,15 @@ fn rt_expected_num_cols(k: usize) -> usize {
 }
 
 /// Expected `num_rows` for the roundtrip geometry with anticipation K=k and stage
-/// `stage_idx` (`n_stages=4`, single anticipated plant). No state-fixing rows.
+/// `stage_idx` (`n_stages=4`, single anticipated plant). Incoming state is
+/// pinned by column bounds; no row pins it.
 /// Fishing row always-active (one per anticipated plant); the newest-slot
 /// `anticipated_state_out_def` row is active iff `stage_idx + k < 4` (strict
 /// gate); each of the `k - 1` interior ring slots gets its own ring-shift
 /// definition row iff it is within the horizon-reachable cap
 /// `slot < n_stages - stage_idx - 1`.
 fn rt_expected_num_rows(k: usize, stage_idx: usize) -> usize {
-    // base = 12 (no state-fixing rows)
+    // base = 12 (incoming state is pinned by column bounds; no row pins it)
     let fishing = 1_usize; // always-active: 1 fishing row per anticipated plant
     let state_out_def = usize::from(stage_idx + k < 4);
     let horizon_cap = 4_usize.saturating_sub(stage_idx + 1);
@@ -4397,3 +4381,5 @@ mod stochastic_load;
 mod turbined_cost;
 #[path = "template_integration/violations_par_anticipated.rs"]
 mod violations_par_anticipated;
+#[path = "template_integration/water_balance_coupling.rs"]
+mod water_balance_coupling;

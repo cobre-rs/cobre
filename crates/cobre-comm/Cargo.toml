@@ -14,7 +14,7 @@ categories = ["science", "network-programming"]
 
 [dependencies]
 thiserror = "2"
-ferrompi = { version = "0.5", optional = true }
+ferrompi = { version = "0.6", optional = true }
 gethostname = "1.1.0"
 
 [features]

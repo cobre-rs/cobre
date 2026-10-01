@@ -294,7 +294,10 @@ pub struct NodeOpenings {
 }
 
 impl NodeOpenings {
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "opening counts are far inside f64's exact-integer range"
+    )]
     fn new(source: OpeningSource, offset: usize, len: usize) -> Self {
         Self {
             source,
@@ -485,7 +488,11 @@ fn build_chain_node_graph(
             successors.push(Vec::new());
         }
     }
-    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation,
+        reason = "stage counts are far below i32::MAX"
+    )]
     let node_ids: TypedVec<NodePos, NodeId> = (0..n_stages as i32).map(NodeId).collect();
     NodeGraph {
         node_ids,
@@ -711,7 +718,7 @@ fn build_declared_node_graph(
 /// Single owner for the backward pass
 /// (`training::backward_pass_state::assemble_successor_outcome_weights`) and
 /// the lower-bound root evaluation
-/// (`training::lower_bound::assemble_outcome_weights`) — both delegate here so
+/// (`training::lower_bound::assemble_root_outcome_weights`) — both delegate here so
 /// the length precompute, weight formula, and fill order can never diverge
 /// between the two call sites.
 pub(crate) fn assemble_outcome_weights(
@@ -902,10 +909,10 @@ impl NodeGraph {
     /// exactly `0.0`, and the floor is `F` bit-for-bit for every pool — the
     /// sacred-parity chain identity falls out of this one formula with no shape
     /// branch.
-    #[allow(
-        clippy::cast_precision_loss,
+    #[expect(
         clippy::cast_sign_loss,
-        clippy::cast_possible_truncation
+        clippy::cast_possible_truncation,
+        reason = "the ceiled probability-weighted pass count is non-negative and far below u64::MAX"
     )]
     pub(crate) fn pool_cut_stride(&self, forward_passes: u32) -> Vec<u64> {
         let n = self.nodes.len();
@@ -978,10 +985,6 @@ pub(crate) fn enumerated_pool_cut_stride(graph: &NodeGraph) -> Vec<u64> {
 /// # Errors
 ///
 /// Returns [`SddpError::Validation`] when a path-product-sum exceeds `u64`.
-// Backs the enumerated engine's debug-assert + test solve-count validation;
-// legitimately unused only in a release non-test build (removing it deletes the
-// gate and breaks the tests), so the dead-code lint is allowed just there.
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
 pub(crate) fn enumerated_node_visit_counts(
     graph: &NodeGraph,
 ) -> Result<TypedVec<NodePos, u64>, SddpError> {
@@ -1032,9 +1035,6 @@ impl NodeGraph {
     /// # Errors
     ///
     /// Returns [`SddpError::Validation`] when a path-product-sum exceeds `u64`.
-    // Consumed by the single-rank solve-count debug-assert and the node-graph
-    // tests; legitimately unused only in a release non-test build.
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub(crate) fn forward_solve_counts(&self) -> Result<Vec<u64>, SddpError> {
         let prefix_count = enumerated_node_visit_counts(self)?;
         let mut pool_sum = vec![0_u64; self.n_pools];
@@ -1062,13 +1062,13 @@ impl NodeGraph {
 /// graph has no interior branching (a chain, or any trunk+terminal-fan
 /// shape).
 ///
-/// [`crate::training::forward::enumerated::run_enumerated_forward`] populates
+/// [`crate::training::forward::run_enumerated_forward`] populates
 /// a node's persisted outgoing state only on the ranks whose assigned paths
 /// visit it, leaving every other rank's slot zero-filled
 /// (`EnumeratedForwardScratch::ensure_sized`'s zero-fill); a trunk node sits
 /// on every path and so is replicated on every rank, but an interior branch
 /// node is not.
-/// [`crate::training::backward::replicated::run_backward_node_replicated`]
+/// [`crate::training::backward::run_backward_node_replicated`]
 /// partitions a cut-generating node's successor openings across ALL ranks
 /// regardless of whether a rank actually holds that node's true state — sound
 /// only when this predicate returns `None`; the caller hard-rejects otherwise.
@@ -1148,6 +1148,16 @@ impl NodeGraph {
     /// resolves the same pool.
     pub(crate) fn any_stage_node(&self, stage: StageIdx) -> Option<NodePos> {
         self.stage_frontier(stage).next()
+    }
+
+    /// The pool every terminal-stage node shares (this module's leaf-sharing
+    /// rule): `nodes[any_stage_node(num_stages - 1)].pool_id`. `None` for a
+    /// zero-stage horizon.
+    #[inline]
+    #[must_use]
+    pub fn terminal_pool(&self, num_stages: usize) -> Option<usize> {
+        let last = num_stages.checked_sub(1)?;
+        Some(self.nodes[self.any_stage_node(StageIdx(last))?].pool_id)
     }
 }
 
@@ -1731,7 +1741,10 @@ mod tests {
     /// with `n_hydros` hydro entities carrying independent noise and
     /// `branching_factor` openings per stage — enough to exercise
     /// `stochastic.opening_tree()` without any external library.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
+    )]
     fn stochastic_context(
         n_stages: usize,
         n_hydros: usize,
@@ -1956,7 +1969,10 @@ mod tests {
     // ── Chain degeneracy ────────────────────────────────────────────────────
 
     #[test]
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "test counts are small, far inside f64's exact-integer range"
+    )]
     fn chain_degeneracy_one_node_per_stage_1to1_pools_uniform_q_bit_pattern() {
         let n_stages = 4;
         let branching = 5;
@@ -2046,6 +2062,40 @@ mod tests {
             "a node with successors never shares the leaf pool"
         );
         assert_eq!(ng.n_pools, 2, "one pool for the root, one shared leaf pool");
+    }
+
+    #[test]
+    fn terminal_pool_resolves_the_chain_and_the_shared_fan_leaf_pool() {
+        let chain = crate::test_support::oracle_chain_setup(1);
+        let chain_num_stages = chain.training_ctx().horizon.num_stages();
+        assert_eq!(
+            chain.inputs.node_graph.terminal_pool(chain_num_stages),
+            Some(chain.fcf.pools.len() - 1),
+            "a chain's terminal pool is its last stage's identity pool"
+        );
+
+        let fan = crate::test_support::terminal_generated_fan_setup(2, 1);
+        let fan_num_stages = fan.training_ctx().horizon.num_stages();
+        let terminal = fan
+            .inputs
+            .node_graph
+            .terminal_pool(fan_num_stages)
+            .expect("the fan's terminal stage carries alive nodes");
+        assert_eq!(
+            terminal,
+            fan.fcf.pools.len() - 1,
+            "the shared leaf pool owns the highest id"
+        );
+        let last = StageIdx(fan_num_stages - 1);
+        assert!(
+            fan.inputs
+                .node_graph
+                .nodes
+                .iter()
+                .filter(|n| n.stage == last)
+                .all(|n| n.pool_id == terminal),
+            "every terminal-stage node must resolve to the same pool"
+        );
     }
 
     #[test]
@@ -2839,10 +2889,9 @@ mod tests {
 
     /// A 3-stage K-fan (root -> fan -> leaf), `branching_factor` 1, non-uniform
     /// root out-edges `i / Σj` — the shape the enumerated forward driver walks.
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_possible_wrap
+        reason = "test counts are small, far inside f64's exact-integer range"
     )]
     fn enumerated_k_fan(k: usize) -> NodeGraph {
         let stochastic = stochastic_context(3, 1, 1);

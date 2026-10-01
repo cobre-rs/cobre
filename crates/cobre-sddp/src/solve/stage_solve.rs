@@ -71,12 +71,10 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
     let stored_basis = filtered_stored_basis(inputs);
 
     let solved = if let Some(captured) = stored_basis {
+        let template = inputs.stage_context.template(inputs.stage_index);
         // `base_row_count` is the non-frozen template row count so cut rows are
         // matched by slot identity, not positional copy from the stored basis.
-        let target = ReconstructionTarget {
-            base_row_count: inputs.stage_context.template(inputs.stage_index).num_rows,
-            num_cols: inputs.stage_context.template(inputs.stage_index).num_cols,
-        };
+        let target = ReconstructionTarget::from_template(template);
 
         let _ = reconstruct_basis(
             captured,
@@ -351,12 +349,15 @@ mod tests {
     };
     use crate::{
         SddpError,
-        context::StageContext,
         cut::pool::CutPool,
-        lp::builder::{PatchBuffer, StateBox},
+        lp::builder::{PatchBuffer, StageGeometry, StateBox},
+        lp::indexer::HydroSys,
         noise::{DownstreamAccumState, LagAccumState, accumulate_and_shift_lag_state},
         setup::{NodeId, StageIdx},
-        test_support::state_layout_with_transit_buckets,
+        test_support::{
+            StageContextFixture, TrainingContextFixture, equipment_free_geometry, state_layout,
+            state_layout_with_transit_buckets,
+        },
         workspace::{CapturedBasis, SolverWorkspace, WorkspaceSizing},
     };
 
@@ -367,7 +368,7 @@ mod tests {
     /// Minimal LP: 3 columns, 2 rows (same fixture used in cobre-solver tests).
     ///
     ///   min  0*x0 + 1*x1 + 50*x2
-    ///   s.t. x0            = 6   (state-fixing)
+    ///   s.t. x0            = 6   (pins x0)
     ///        2*x0 + x2     = 14  (power balance)
     ///   x0 in [0, 10], x1 in [0, +inf), x2 in [0, 8]
     fn make_template() -> StageTemplate {
@@ -384,10 +385,6 @@ mod tests {
             row_lower: vec![6.0, 14.0],
             row_upper: vec![6.0, 14.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -408,10 +405,6 @@ mod tests {
             row_lower: vec![],
             row_upper: vec![],
             n_state: 0,
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -421,44 +414,26 @@ mod tests {
     fn make_workspace(template: &StageTemplate) -> SolverWorkspace<ActiveSolver> {
         let mut solver = ActiveSolver::new().expect("ActiveSolver::new()");
         solver.load_model(template);
+        let training_fixture = TrainingContextFixture::new(state_layout(0, 0));
+        let training_ctx = training_fixture.training_ctx();
+        let stage_ctx_fixture = StageContextFixture::new(&[], &[], &[]);
         SolverWorkspace::new(
             0,
             0,
             solver,
-            PatchBuffer::new(0, 0, 0, 0, 0, 0, 0),
-            0,
+            PatchBuffer::new(training_ctx.state, &[], &[]),
+            &training_ctx,
+            &stage_ctx_fixture.ctx(),
             WorkspaceSizing::default(),
         )
     }
 
-    /// Build a minimal `StageContext` wrapping a single template.
-    fn make_context(templates: &[StageTemplate]) -> StageContext<'_> {
-        StageContext {
-            geometry_per_stage: &[],
-            templates,
-            state_boxes: &[],
-            base_rows: &[],
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        }
+    /// Build a minimal `StageContext` fixture wrapping a single template.
+    fn make_context<'a>(
+        templates: &'a [StageTemplate],
+        geometry_per_stage: &'a [StageGeometry],
+    ) -> StageContextFixture<'a> {
+        StageContextFixture::new(templates, &[], geometry_per_stage)
     }
 
     /// Build an empty `CutPool` (no active cuts, `populated_count = 0`).
@@ -474,7 +449,9 @@ mod tests {
     fn run_stage_solve_cold_start_returns_view() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
 
@@ -511,7 +488,9 @@ mod tests {
     fn run_stage_solve_warm_start_frozen_path_succeeds() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
         ws.scratch.recon_slot_lookup = vec![None; 16];
@@ -573,7 +552,9 @@ mod tests {
     fn run_stage_solve_propagates_infeasible() {
         let template = make_infeasible_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = CutPool::new(16, 0, 1, 0);
         let mut ws = make_workspace(&template);
 
@@ -616,7 +597,9 @@ mod tests {
     fn basis_deficit_rejected_before_solver_sees_it() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
         ws.scratch.recon_slot_lookup = vec![None; 16];
@@ -672,7 +655,9 @@ mod tests {
     fn run_stage_solve_cross_node_stored_basis_is_treated_as_cold() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
         ws.scratch.recon_slot_lookup = vec![None; 16];
@@ -720,7 +705,9 @@ mod tests {
     fn run_stage_solve_terminal_static_applies_basis_1to1_without_reconstruct_basis() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
 
@@ -794,7 +781,9 @@ mod tests {
     fn run_stage_solve_interior_warm_start_invokes_reconstruct_basis() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
         ws.scratch.recon_slot_lookup = vec![None; 16];
@@ -846,7 +835,9 @@ mod tests {
     fn run_stage_solve_terminal_static_cross_node_stored_basis_is_treated_as_cold() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
 
@@ -889,7 +880,9 @@ mod tests {
     fn run_stage_solve_terminal_static_shape_mismatch_is_treated_as_cold() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
+        let geometry = equipment_free_geometry(&[0]);
+        let fixture = make_context(templates, &geometry);
+        let ctx = fixture.ctx();
         let pool = make_empty_pool();
         let mut ws = make_workspace(&template);
 
@@ -953,7 +946,12 @@ mod tests {
 
     #[test]
     fn debug_assert_bucket_copy_gap_intact_passes_when_bucket_matches_primal() {
-        let layout = state_layout_with_transit_buckets(0, 0, 2, vec![(0, 0), (0, 1)], 0, 0, vec![]);
+        let layout = state_layout_with_transit_buckets(
+            0,
+            0,
+            vec![(HydroSys::new(0), 0), (HydroSys::new(0), 1)],
+            vec![],
+        );
         let primal = vec![7.0, 11.0];
         let assembled = primal.clone();
         super::debug_assert_bucket_copy_gap_intact(&assembled, &primal, &layout);
@@ -962,7 +960,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "bucket/commitment-hold state must equal the LP primal's identity")]
     fn debug_assert_bucket_copy_gap_intact_panics_when_bucket_diverges() {
-        let layout = state_layout_with_transit_buckets(0, 0, 2, vec![(0, 0), (0, 1)], 0, 0, vec![]);
+        let layout = state_layout_with_transit_buckets(
+            0,
+            0,
+            vec![(HydroSys::new(0), 0), (HydroSys::new(0), 1)],
+            vec![],
+        );
         let primal = vec![7.0, 11.0];
         let mut assembled = primal.clone();
         assembled[1] = 999.0; // simulate an accidental overwrite of the bucket block
@@ -971,7 +974,7 @@ mod tests {
 
     #[test]
     fn debug_assert_bucket_copy_gap_intact_passes_when_commitment_hold_matches_primal() {
-        let layout = state_layout_with_transit_buckets(0, 0, 0, vec![], 2, 1, vec![1, 1]);
+        let layout = state_layout_with_transit_buckets(0, 0, vec![], vec![1, 1]);
         let primal = vec![3.0, 5.0];
         let assembled = primal.clone();
         super::debug_assert_bucket_copy_gap_intact(&assembled, &primal, &layout);
@@ -980,7 +983,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "bucket/commitment-hold state must equal the LP primal's identity")]
     fn debug_assert_bucket_copy_gap_intact_panics_when_commitment_hold_diverges() {
-        let layout = state_layout_with_transit_buckets(0, 0, 0, vec![], 2, 1, vec![1, 1]);
+        let layout = state_layout_with_transit_buckets(0, 0, vec![], vec![1, 1]);
         let primal = vec![3.0, 5.0];
         let mut assembled = primal.clone();
         assembled[0] = 999.0; // simulate an accidental overwrite of the commitment-hold slot
@@ -995,7 +998,7 @@ mod tests {
     /// (storage, lag0, `bucket_out`, `commit_out`), mirroring the
     /// `transit_bucket_copy_gap` fixture shape.
     fn seam_layout() -> crate::lp::indexer::StateSpace {
-        state_layout_with_transit_buckets(1, 1, 1, vec![(0, 0)], 1, 1, vec![1])
+        state_layout_with_transit_buckets(1, 1, vec![(HydroSys::new(0), 0)], vec![1])
     }
 
     fn identity_stage_lag() -> StageLagTransition {

@@ -60,6 +60,25 @@ for both pinning and dual extraction — via
 `StateSpace::state_to_lp_incoming_column`; never assume a fixing-row index.
 Read: `lp/indexer/state_space.rs`.
 
+## Inflow noise enters only through the z rows
+
+The inflow-noise patch touches only hydro `h`'s z-inflow row. Every
+water-balance row instead reads the deterministic column `z_h` through
+`push_z_inflow_coupling`: at `−ζ` on a parallel stage, and at `−τ_k` (block
+`k`'s duration hours times `M3S_TO_HM3`) on each chronological block row — on
+the hydro's own water-balance row(s), or its `PreFilling` short-circuit
+target's. The water rows themselves carry no lag, base, or patch of their
+own; re-encoding the inflow there routes a chronological hydro's noise onto
+another hydro's block row.
+
+Read: `lp/builder/entries.rs` (`push_z_inflow_coupling`), `stochastic/noise.rs`
+(`transform_inflow_noise`). Pinned by
+`chronological_inflow_noise_moves_only_its_own_hydro`
+(`tests/chronological_inflow_noise.rs`) and
+`every_noise_dimension_patches_only_its_own_entity`
+(`tests/patch_ownership_sweep.rs`), whose inflow ownership set is the z row
+alone.
+
 ## FPHA uses average storage
 
 The FPHA generation constraint is
@@ -69,6 +88,31 @@ alone. (Discovered during deterministic case D06.)
 Read: `lp/builder/entries.rs` (`fill_fpha_entries` — pushes `−γᵥ/2` onto both the
 incoming- and outgoing-storage columns), `lp/builder/rows.rs` (`fill_fpha_rows`),
 and `lp/builder/template.rs`.
+
+## Parallel evaporation is one stage-level slot
+
+On a parallel stage each evaporating hydro has **one** evaporation slot, on the
+stage endpoints `(S⁰, Sᴷ)`, coupled into the single water-balance row with
+`+ζ`; its violation slacks (`f_evap_plus`/`f_evap_minus`) are priced at the
+violation cost times the **total stage hours**
+(`stage.blocks.iter().map(|b| b.duration_hours).sum::<f64>()`). A chronological
+stage keeps one slot per block, each on that block's own `(Sᵏ⁻¹, Sᵏ)`, priced at
+that block's own hours. `evaporation_slot_count(block_mode, n_blks)` is the
+single owner of the slot count (`1` parallel, `n_blks` chronological); every
+column/row family and the generic-constraint resolver derive their stride from
+it — no consumer keeps a `* n_blks` evaporation stride on a parallel stage.
+
+Allocating one evaporation slot per BLOCK on a parallel stage is the
+wrong-but-compiling alternative: every extra slot beyond the first is a
+decoupled variable (no water-row or objective term ties it to anything), and
+the one coupled slot's violation slack is still priced at only ONE block's
+hours while its flow moves the WHOLE stage's water — understating the true
+violation cost by a factor of `K`.
+
+Read: `lp/builder/layout.rs` (`evaporation_slot_count`), `lp/builder/columns.rs`
+(`fill_evaporation_columns`).
+Pinned by `parallel_multi_block_evap_slack_price_matches_water_it_moves` and
+`parallel_multiblock_evaporation_study_has_one_priced_stage_slot`.
 
 ## Hydro-cell aggregation assumes one production map per cell
 
@@ -141,7 +185,7 @@ before summing them, exactly as this sub-contract requires — each group's
 supplies one, the declaration otherwise, via `GroupBoundLookup`), never the
 bare declared value.
 
-Read: `crates/cobre-sddp/src/lp/builder/columns.rs` (`cell_max_turbined`).
+Read: `crates/cobre-sddp/src/lp/builder/hydro_state.rs` (`cell_max_turbined`).
 Pinned by `test_same_bus_groups_sum_into_one_cell_box`, mutation-verified
 against sum-then-fold on a two-group fixture whose groups bind on opposite
 sides.
@@ -198,7 +242,7 @@ sit up to that tolerance above declared — the plant term could tighten by
 that same margin. No shipped fixture exercises this; do not round it up to
 "provably inert."
 
-Read: `crates/cobre-sddp/src/lp/builder/columns.rs` (`cell_max_turbined`,
+Read: `crates/cobre-sddp/src/lp/builder/hydro_state.rs` (`cell_max_turbined`,
 `cell_max_generation`), `crates/cobre-io/src/validation/semantic/block_bounds.rs`
 (`check_bound_raises_declared_capacity`, the no-raising rule),
 `crates/cobre-io/src/validation/semantic/hydro.rs` (rule 41). Pinned by
@@ -280,8 +324,9 @@ basis to split by), while a per-cell floor VIOLATION is DETERMINED — each
 cell owns its own row and its own slack column, so there is exactly one
 correct per-cell slack value to sum, never a manufactured one.
 
-Read: `crates/cobre-sddp/src/lp/builder/columns.rs` (`cell_min_turbined`,
-`cell_min_generation`, `fill_cell_block_family`), `crates/cobre-sddp/src/lp/builder/rows.rs`
+Read: `crates/cobre-sddp/src/lp/builder/hydro_state.rs` (`cell_min_turbined`,
+`cell_min_generation`), `crates/cobre-sddp/src/lp/builder/columns.rs`
+(`fill_cell_block_family`), `crates/cobre-sddp/src/lp/builder/rows.rs`
 (`fill_operational_violation_rows`), `crates/cobre-sddp/src/lp/builder/entries.rs`
 (`fill_operational_violation_entries`), `crates/cobre-sddp/src/lp/builder/layout.rs`
 (`OperViolationRanges`), `crates/cobre-sddp/src/simulation/extraction.rs`
@@ -489,6 +534,14 @@ real bug caught during D15). The patch inputs ride on `StageContext`
 (`ncs_max_gen`, `ncs_allow_curtailment`), the same struct every other solve
 site reads.
 Read: `training/lower_bound.rs`, `training/stage_solve_prep.rs`.
+
+The lower bound patches stochastic load-balance rows the same way, through the
+same `StageSolvePrep` call's load patch over the root opening's own load
+segment. Skipping that patch leaves stage-0 load uncertainty out of the bound
+and still compiles: the LP solves, converges, and reports a bound that never
+reflects the root's load-noise draw. Pinned by
+`lower_bound_root_lp_matches_the_forward_root_lp` in
+`tests/patch_ownership_sweep.rs`.
 
 ## Per-level exchange in the backward pass
 
@@ -745,32 +798,38 @@ The forward trajectory cost and the simulation per-scenario cost both reconstruc
 a path total as `Σ_t cum_d(t)·stage_cost(t)`, where the interior `stage_cost(t) =
 (view.objective − d_t·θ_t)·cost_scale` subtracts the discounted epigraph `θ_t` —
 the future cost-to-go a later stage realizes as its own immediate cost. At the
-TERMINAL stage under a boundary policy (`terminal_has_boundary_cuts`, i.e.
-`fcf.pools[terminal].warm_start_count > 0`) `θ_t` prices the POST-HORIZON
-value-to-go, which no later stage realizes, so it is KEPT in the reported cost
-(`stage_cost = view.objective·cost_scale`) — matching the lower bound, which
-already carries it through `θ_0`'s cuts (`evaluate_lower_bound` pushes the full
-stage-0 `view.objective`). The present values coincide exactly because `θ_t`'s
-objective coefficient IS `d_t`, so `cum_d(t)·d_t·θ_t = cum_d(t+1)·θ_t` is the same
-term the LB books.
+TERMINAL stage under a boundary policy (`CutPool::has_warm_start_cuts` on the
+terminal stage's pool, i.e. `warm_start_count > 0`) `θ_t` prices the
+POST-HORIZON value-to-go, which no later stage realizes, so it is KEPT in the
+reported cost (`stage_cost = view.objective·cost_scale`) — matching the lower
+bound, which already carries it through `θ_0`'s cuts (`evaluate_lower_bound`
+pushes the full stage-0 `view.objective`). The present values coincide exactly
+because `θ_t`'s objective coefficient IS `d_t`, so
+`cum_d(t)·d_t·θ_t = cum_d(t+1)·θ_t` is the same term the LB books.
 
 Subtracting `θ_t` at the terminal boundary stage — the interior form — is the
 wrong-but-compiling alternative: it drops the post-horizon FCF from the UB /
 simulation cost alone, leaving `LB ≫ UB` (a NEGATIVE gap the stopping rule's
 `.max(0.0)` clamp then reads as "converged"). The branch is gated on
-`terminal && terminal_has_boundary_cuts`; a non-boundary study pins terminal `θ`
+`terminal && pool.has_warm_start_cuts()`; a non-boundary study pins terminal `θ`
 to `[0, 0]` (forward) or leaves the terminal pool empty with `θ`'s `0.0` lower
 bound driving it to `0` (simulation), so the fix is byte-neutral there.
 
-Read: `training/forward/enumerated.rs` (`solve_forward_node`),
+Read: `cut/pool.rs` (`CutPool::has_warm_start_cuts`, the flag's only formula),
+`training/forward/enumerated.rs` (`solve_forward_node`),
 `training/forward/stage_solve.rs` (`run_forward_stage`), `simulation/pipeline.rs`
-(`extract_sim_stage_result`, flag computed in `solve_simulation_stage`). Do NOT
-change `evaluate_lower_bound` (`training/lower_bound.rs`) — it is correct — and do
-NOT fold `θ` into the per-stage `compute_cost_result` breakdown
-(`simulation/extraction.rs`), which reports `immediate_cost`/`future_cost`
-separately by design. Pinned by `terminal_boundary_fcf_training_gap_is_consistent`
-and `terminal_boundary_fcf_simulation_cost_includes_post_horizon`
-(`tests/branching_value_oracle.rs`).
+(`extract_sim_stage_result`, flag read from the stage's pool in
+`solve_simulation_stage`). Do NOT change `evaluate_lower_bound`
+(`training/lower_bound.rs`) — it is correct — and do NOT fold `θ` into the
+per-stage `compute_cost_result` breakdown (`simulation/extraction.rs`), which
+reports `immediate_cost`/`future_cost` separately by design. Pinned by
+`terminal_boundary_fcf_training_gap_is_consistent`,
+`terminal_boundary_fcf_simulation_cost_includes_post_horizon`,
+`terminal_boundary_records_all_inactive_leave_the_plain_chain_bounds`, and
+`terminal_boundary_records_all_inactive_leave_the_plain_fan_bounds`
+(`tests/branching_value_oracle.rs`), and
+`terminal_boundary_flag_formulas_agree_on_chain_and_terminal_fan`
+(`setup/tests.rs`).
 
 ## Fused terminal slice projects with the parent pool, not the leaf pool
 
@@ -946,6 +1005,32 @@ selector itself is pinned by `policy_load.rs`'s own
 A checkpoint predating `FORMAT_VERSION` is pinned by
 `boundary_load_rejects_pre_format_version_checkpoint`, also in
 `tests/boundary_self_describing_clean_break.rs`.
+
+### A policy written by another Cobre version is refused first
+
+The first check of `validate_policy_load`, for every `PolicyLoadKind` and
+ahead of its check matrix, refuses a source whose recorded `cobre_version`
+(the checkpoint's `manifest.bin` `CheckpointManifest` root) is not exactly
+`POLICY_COBRE_VERSION`, the version this build stamps into every checkpoint
+it writes: the trainer's `write_checkpoint` and `cobre.write_policy_checkpoint`,
+which ignores a caller-supplied version. The refusal is
+`SddpError::PolicyVersionMismatch`, naming both versions. Only same-version
+loads are supported; a looser rule (a version range, a `major.minor` match,
+a per-study predicate) is the wrong-but-compiling alternative, since cuts
+and stored bases of another version describe that version's LP. The version
+is checkpoint provenance, not a study-global fact, so reading it from the
+root on a `BoundaryInjection` load does not widen the season-descriptor
+carve-out below. Every step after `validate_policy_load` (the check matrix,
+the boundary rebind, FCF construction and stored-basis decoding) sees only
+same-version checkpoints.
+
+Read: `policy/policy_load.rs` (`validate_policy_load`, `POLICY_COBRE_VERSION`).
+Pinned by `policy_version_refused_for_every_kind`,
+`policy_version_checked_before_the_layout` and
+`policy_version_refused_at_boundary_load` in `policy/policy_load.rs`, and by
+`warm_start_refuses_a_policy_written_by_another_version` and
+`boundary_policy_written_by_another_version_is_refused_at_run` in
+`crates/cobre-cli/tests/cli_validate.rs`.
 
 ### Boundary loads gate on season-cycle and PAR-order identity before reconciling
 
@@ -1372,15 +1457,17 @@ declared, each of the following is a contract.
 ### Shared lagged-delivery ring skeleton
 
 The water in-transit bucket ring and the anticipated-thermal ring are one
-lagged-delivery ring construct, owned by `DeliveryRing`: a borrowed outgoing
-block (identity-resolved, contributing to `n_state`) and a separate borrowed
-incoming block (pinned via `state_to_lp_incoming_column`), advanced one
-Markov-1 slot per stage by the same interior shift row
-(`DeliveryRing::emit_shift_rows`) and the same paired row-cap/column-freeze
-masking (`DeliveryRing::freeze_masked_columns`). The two rings differ only in
-how each deposits into its newest slot and in what a masked terminal slot
-means — both differences live entirely at each ring's own call site, never a
-second skeleton implementation:
+lagged-delivery ring construct, owned by `DeliveryRing`. They share a borrowed
+outgoing block (identity-resolved, contributing to `n_state`), a separate
+borrowed incoming block (pinned via `state_to_lp_incoming_column`), and the
+paired row-cap/column-freeze masking (`DeliveryRing::freeze_masked_columns`).
+The interior transition differs: water shifts one Markov-1 slot per stage
+(`DeliveryRing::emit_shift_rows`, slot → slot+1), while anticipated holds each
+commitment in its own slot (`DeliveryRing::emit_carry_rows`, same slot). The
+rings also differ in how each deposits into its newest slot and in what a
+masked terminal slot means. Every difference lives entirely at each ring's own
+call site, never a second skeleton implementation; the side-by-side table in
+`docs/design/anticipated-thermals-and-water-travel-time.md` §4 lists them:
 
 - **Deposit.** Water's block-mode-coupled per-lag deposit share is emitted at
   its own call site (`fill_arc_release_block_entries`), never through
@@ -1401,14 +1488,14 @@ a frozen `[0, 0]` outgoing column (`freeze_masked_columns`, the column-freeze
 side) in the SAME pass — wiring only one side leaves either a dangling row
 referencing a frozen column or a free column with no defining constraint, both
 wrong-but-compiling. Water instantiates one ring per downstream plant
-(`transit_bucket_ring`, `n_lanes = 1`, over that plant's ragged contiguous
-sub-range); anticipated instantiates ONE dense ring spanning every plant
-(`anticipated_ring`, `n_lanes = n_anticipated`, slot-major/plant-minor) — both
-addressing schemes resolve through the same `out_col`/`in_col` formula
-(`block.start + slot * n_lanes + lane`).
+(`DeliveryRing::transit_buckets`, `n_lanes = 1`, over that plant's ragged
+contiguous sub-range); anticipated instantiates ONE dense ring spanning every
+plant (`DeliveryRing::anticipated`, `n_lanes = n_anticipated`,
+slot-major/plant-minor) — both addressing schemes resolve through the same
+`out_col`/`in_col` formula (`block.start + slot * n_lanes + lane`).
 Read: `lp/builder/delivery_ring.rs` (`DeliveryRing::emit_shift_rows`,
-`freeze_masked_columns`, `emit_deposit`, `out_col`/`in_col`, `slot_target`),
-`lp/builder/entries.rs` (`transit_bucket_ring`, `anticipated_ring`).
+`freeze_masked_columns`, `emit_deposit`, `out_col`/`in_col`, `slot_target`,
+`DeliveryRing::anticipated`, `DeliveryRing::transit_buckets`).
 
 ### In-transit bucket dynamics & sign
 
@@ -1434,7 +1521,8 @@ wrong direction — a wrong bound that still compiles. A fold implementation
 cost as the correct one, so total cost alone cannot discriminate — only the
 dual's sign/magnitude and the per-stage delivery split do.
 Read: `lp/builder/entries.rs` (`fill_transit_bucket_definition_entries`,
-`fill_arc_release_block_entries`, `transit_bucket_ring`), `lp/indexer/state_space.rs`
+`fill_arc_release_block_entries`), `lp/builder/delivery_ring.rs`
+(`DeliveryRing::transit_buckets`), `lp/indexer/state_space.rs`
 (`StateSpace::state_to_lp_incoming_column`, `StateSpace::lp_column_for_state`),
 `training/backward/duals_extraction.rs` (`extract_duals_from_view`), `cut/row.rs`
 (`push_scaled_coefficient`, `push_cut_row`). Pinned by the bucket-arm
@@ -1490,11 +1578,11 @@ order. `build_transit_bucket_topology` derives `column_order` from that canonica
 iteration alone. Emitting buckets in traversal order instead makes the state
 layout input-declaration-order-dependent, breaking the
 declaration-order-invariance hard rule.
-Read: `setup/bucket_topology.rs` (`build_transit_bucket_topology`,
+Read: `bucket_topology.rs` (`build_transit_bucket_topology`,
 `TransitBucketTopology::column_order`). Pinned by the bucket column-order
 declaration-invariance regression: two systems differing only in the
-declaration order of their hydros produce identical `column_order`,
-`per_plant_depth`, and `n_buckets`.
+declaration order of their hydros produce identical `column_order` and
+`n_buckets`.
 
 ### Stage-0 seed: windowed IC anchor
 
@@ -1551,7 +1639,8 @@ that must not be flattened into one shared keep-live helper:
   whole `anticipated_slot_row_pos`, never a boundary-conditional appended block. Its
   EXISTENCE is gated on the study declaring a `post_study_stages.json` calendar (the
   only thing that extends the delivery axis past the horizon:
-  `delivery_stage_count = n_delivery.max(n_stages)`, so
+  `StateSpace::n_delivery` is the attached resolution's decider length, the
+  study stages plus the post-study continuation, so
   `build_anticipated_slot_row_pos` gates reachability on `m < n_delivery`, not
   `m < n_stages`) plus the plant's own lead reaching the slot — never on a loaded
   boundary. With no post-study calendar the axis is study-only and every
@@ -1600,7 +1689,7 @@ reproduction, alongside the passing `t_v <= horizon` round-trip, in
 `tests/hydro_sim.rs`.
 Read: `lp/indexer/state_space.rs` (`StateRegion::cut_enabled`),
 `lp/indexer/cut_state_projection.rs` (`CutStateProjection::new`),
-`setup/bucket_topology.rs` (`horizon_cap_active`), `lp/builder/columns.rs`
+`bucket_topology.rs` (`horizon_cap_active`), `lp/builder/columns.rs`
 (`fill_anticipated_slot_columns`, `fill_transit_bucket_columns`),
 `crates/cobre-io/src/config/policy.rs` (`PolicyConfig::boundary`). Pinned by
 `every_bucket_dim_projects_including_deep_terminal_lags` (every bucket dim, the
@@ -1633,16 +1722,16 @@ convention above handles, keeping the terminal bucket state live and pricing it
 through the shared cut-state projection, gated on `config.policy.boundary`
 presence so this drop stays byte-for-byte for a zero-terminal-value study. This
 under-values end-of-horizon upstream release; it is a documented target-stage
-imprecision, not a bug to patch by capping
-`TransitBucketTopology::per_plant_depth`/`column_order` too — those size from the
-global max over every anchor and must retain what the earliest stages need. Both
+imprecision, not a bug to patch by capping `TransitBucketTopology::column_order`
+too — it sizes from the global max over every anchor and must retain what the
+earliest stages need. Both
 drop sites (`fill_arc_release_block_entries`, `fill_arc_release_chrono_block_entries`)
 now assert the confinement directly: a debug-only check at the `None` row-lookup
 arm requires the dropped lag `d` at stage `t` to satisfy `t + d >= n_stages`,
 so the drop is provably confined to a target past the horizon and unreachable
 once `boundary_present` un-caps the mask; the `HashMap` lookup the check needs
 lives inside the `debug_assert!` argument, so it does not exist in release.
-Read: `setup/bucket_topology.rs` (`horizon_cap_active`), `lp/builder/layout.rs`
+Read: `bucket_topology.rs` (`horizon_cap_active`), `lp/builder/layout.rs`
 (`build_transit_bucket_row_pos`), `lp/builder/columns.rs` (`fill_transit_bucket_columns`).
 Pinned by the horizon-depth-cap regression (the last stage's active-lag cap
 reaches zero, so no slot targets past the horizon), `build_transit_bucket_row_pos`'s
@@ -1650,7 +1739,7 @@ own consumption regression (that same cap sequence emitting correspondingly
 fewer rows), a sub-stage-delay case's last-stage release, whose dropped
 share surfaces as an uneven per-stage delivery split rather than a credited
 one, and `transit_bucket_mask_covers_every_arc_deposit_depth_under_boundary`
-(`setup/bucket_topology.rs`), which asserts `per_stage_mask` dominates every
+(`bucket_topology.rs`), which asserts `per_stage_mask` dominates every
 arc's deposit depth on both the parallel and chronological tables under
 `boundary_present` and is strictly exceeded at some stage without it.
 
@@ -1661,10 +1750,10 @@ The bucket state stays a pure function of stage lengths, never of
 
 - **Depth from stage lengths alone.** Bucket depth and `n_buckets` derive from
   the per-stage calendar, the declared post-study calendar, and the pre-study
-  anchor alone (`study_stage_durations`, `delivery_stage_durations`,
-  `build_transit_bucket_topology`) — never from `n_blks` or `block_mode`.
-  Deriving any part of the depth inside a block-aware code path re-couples the
-  state dimension to how a stage happens to be resolved.
+  anchor alone (`DeliveryCalendar`, `build_transit_bucket_topology`) — never
+  from `n_blks` or `block_mode`. Deriving any part of the depth inside a
+  block-aware code path re-couples the state dimension to how a stage happens
+  to be resolved.
 - **Shared arrival density.** A chronological stage's per-block deposit shares
   `block_deposits`/`within_stage_routing` and the stage-level `stage_weights`
   come from the same shared arrival density (`resolve_spread`'s
@@ -1676,7 +1765,7 @@ The bucket state stays a pure function of stage lengths, never of
 - **Fixed delivery density.** A maturing bucket delivers into its arrival
   stage's blocks through a fixed, `block_mode`-independent `arrival_density`
   looked up from the setup-precomputed per-`(arc, arrival stage)` table
-  (`resolve_chrono_arrival_density` reading
+  (`resolve_bucket_arrival_density` reading
   `TemplateBuildCtx::arc_arrival_density`, built by `build_arc_arrival_density`
   as a blend over every contributing source stage's lag, resolved in the
   ARRIVAL stage's own frame), never by tracking which origin block a unit came
@@ -1687,8 +1776,9 @@ The bucket state stays a pure function of stage lengths, never of
 Read: `lead_time/mod.rs` (`resolve_spread`'s
 `block_deposits`/`within_stage_routing`/`arrival_density` fields,
 `resolve_block_factors`'s `BlockFactors`, `resolve_arrival_density_at`),
-`setup/bucket_topology.rs` (`build_arc_arrival_density`), `lp/builder/entries.rs`
-(`fill_chronological_water_entries`, `resolve_chrono_arrival_density`). Pinned
+`bucket_topology.rs` (`build_arc_arrival_density`), `lp/builder/entries.rs`
+(`fill_chronological_water_entries`),
+`lp/builder/delivery_ring.rs` (`resolve_bucket_arrival_density`). Pinned
 by the shared-density-consistency regression exercising the aggregation
 debug_assert directly, the chronological block-table regression matching the
 worked kappa/chi numbers, and the `K = 1` chronological-vs-parallel
@@ -1869,7 +1959,7 @@ Read: `lead_time/mod.rs` (`PointResolution::ring_index`, `physical_target`,
 The ring depth is `k_max = max(occupancy_max, n_none_in_study)`, resolved in
 ring-axis (excised) space and owned by `PointResolution::ring_depth`: the
 global `k_max = max_i ring_depth_i` (`AnticipatedResolution::resolve`) and the
-per-plant reachability bound `k_i` (`StateSpace::anticipated_lead_stages`, the
+per-plant lead `k_i` (`StateSpace::anticipated_lead_stages`, the
 `LeadTime` arm) both read it. The `LeadStages(l)` arm instead returns `l`
 VERBATIM — the byte-identity anchor `n_none_in_study <= l` by construction
 makes safe (`debug_assert!(ring_depth() <= l)`). Sizing from `occupancy_max`
@@ -1880,8 +1970,9 @@ every simultaneous pre-study seed is in flight (stage 0, before the first
 fishing) — the last seeded stage then silently delivers an earlier stage's MW,
 a silent-wrong-value bug that still compiles and still converges.
 Read: `lead_time/mod.rs` (`PointResolution::ring_depth`,
-`AnticipatedResolution::resolve`), `setup/mod.rs`
-(`resolve_anticipated_commitments_core`'s `LeadStages`/`LeadTime` split).
+`AnticipatedResolution::resolve`, `AnticipatedResolution::ring_size`),
+`setup/mod.rs` (`resolve_anticipated_commitments_core`'s `LeadStages`/`LeadTime`
+split).
 Pinned by `ring_depth_covers_every_simultaneous_pre_study_seed`,
 `ring_depth_equals_the_occupancy_max_when_no_seed_overflows`,
 `ring_depth_ignores_post_study_none_deciders`, and
@@ -1971,17 +2062,20 @@ instead of a full `k_max` stages past it, silently zeroing a real post-study
 delivery; `t_out + slot_idx` (the older retired shift-ring form, wrong
 whenever `t_out mod k_max != 0`); and dating the raw ring-axis `r` directly
 instead of `physical_target(r)` — it lands on the excised fixed post-horizon
-window's stub stage whenever a plant declares one. Reachability uses the
-plant's OWN `StateSpace::anticipated_lead_stages[plant]` bound (`slot_idx <
-k_i`), not a depth- or decider-only check
-(`AnticipatedResolution::decision_sets`/`depth` count only within-study-decided
-commitments and silently exclude a still-draining pre-study seed): a slot beyond
-that bound is structural padding dated at the sentinel even when its delivery
-target `m` still lands inside the horizon — the multi-plant heterogeneous-lead
-case, where plants sharing one `k_max`-wide ring have different reachable widths,
-unaffected by which anchor `reachable_delivery_target` resolves against.
-`build_stage_entity_manifest` applies this before populating
-`EntitySlot::interval_start`/`interval_end`.
+window's stub stage whenever a plant declares one. A ring slot is live at
+the pool's stage `t` if and only if `for_each_live_commitment_slot` visits
+it: its target lands in the window `{t+1 ..= t+k_max}`, inside the delivery
+calendar, and is ready (`PointResolution::is_ready_at`). The retired
+per-plant lead bound `slot_idx < k_i` is the wrong-but-compiling
+alternative — under residue keying a short-lead plant cycles through every
+residue, so a slot beyond its own lead can still be a live carry or
+deposit — the multi-plant heterogeneous-lead case, where plants sharing one
+`k_max`-wide ring have different reachable widths.
+`build_stage_entity_manifest` applies this same rule before populating
+`EntitySlot::interval_start`/`interval_end`, and `StateSpace::set_nonzero_mask`
+applies it to the cut mask's `CommitmentHold` region as the union of this rule
+over every decision stage, computed once at construction from the attached
+resolution.
 
 The sign / `col_scale` invariants are unchanged from storage and the water buckets:
 the incoming column's reduced cost is DIVIDED by `col_scale` on extract
@@ -1993,9 +2087,9 @@ Read: `lp/indexer/state_space.rs` (`StateSpace::commit_out`,
 `StateSpace::commit_in`, `commitment_hold_in_study_offset`, `state_to_lp_column`,
 `state_to_lp_incoming_column`), `lp/builder/delivery_ring.rs`
 (`DeliveryRing::emit_carry_rows`, `emit_deposit`, `freeze_masked_columns`,
-`slot_lane_at`), `lp/builder/entries.rs`
+`slot_lane_at`, `DeliveryRing::anticipated`), `lp/builder/entries.rs`
 (`fill_anticipated_slot_definition_entries`,
-`fill_anticipated_state_out_def_entries`, `anticipated_ring`), `lp/builder/rows.rs`
+`fill_anticipated_state_out_def_entries`), `lp/builder/rows.rs`
 (`fill_anticipated_slot_definition_rows`, `fill_anticipated_state_out_def_rows`),
 `lp/builder/layout.rs` (`build_anticipated_slot_row_pos`), `lp/builder/columns.rs`
 (`fill_anticipated_slot_columns`), `policy/policy_export.rs`
@@ -2016,12 +2110,15 @@ the backward-cut coefficient-propagation regressions
 manifest delivery-anchor regressions
 (`anticipated_slot_delivery_anchor_matches_delivery_stage_year_month`,
 `anticipated_slot_delivery_anchor_past_horizon_is_sentinel`,
-`anticipated_slot_padding_beyond_own_lead_is_sentinel`), and the
+`anticipated_short_lead_slot_dates_the_residue_it_latches`), the
 outgoing-anchor re-anchoring regressions
 (`terminal_maturing_residue_dates_onto_its_post_study_delivery`,
 `terminal_maturing_residue_stays_sentinel_without_a_post_study_calendar`,
 `anticipated_slot_date_matches_the_resolved_physical_delivery_stage`,
-`anticipated_padding_slots_beyond_plant_lead_stay_sentinel`). The ring-axis
+`anticipated_slots_the_lp_does_not_latch_stay_sentinel`), and the
+mixed-lead reachability regressions
+(`mixed_lead_nonzero_mask_covers_every_slot_the_lp_latches`,
+`mixed_lead_manifest_dates_exactly_the_slots_the_lp_latches`). The ring-axis
 excision itself is additionally pinned by the collision/identity regressions
 `excision_keeps_each_study_stage_fishing_its_own_seed`,
 `zero_gap_with_post_study_resolves_an_identity_ring_and_occupancy_depth`, and
@@ -2081,7 +2178,7 @@ commitment — in-study or post-study-targeted — is ever discarded at the
 delivery-axis boundary; none is created past it in the first place.
 `is_anticipated_decision_active_for_delivery` gates a decision column's
 existence on the strict clause `stage_idx + K_i < n_delivery`, against the
-EXTENDED delivery calendar (`n_delivery = StateSpace::delivery_stage_count`, the
+EXTENDED delivery calendar (`n_delivery = StateSpace::n_delivery`, the
 study stages plus the `post_study_stages.json` continuation), not merely
 `n_stages`; `PointResolution::decider` has the matching domain
 `m in [0, n_delivery)`, so no code path ever computes a commitment targeting a
@@ -2107,7 +2204,7 @@ computed, for a delivery target past the extended delivery axis `n_delivery`.
 Read: `lp/indexer/anticipated_gate.rs`
 (`is_anticipated_decision_active_for_delivery`), `lead_time/mod.rs`
 (`PointResolution::decider`), `lp/indexer/state_space.rs`
-(`StateSpace::delivery_stage_count`), `lp/builder/layout.rs`
+(`StateSpace::n_delivery`), `lp/builder/layout.rs`
 (`build_anticipated_slot_row_pos`), `lp/builder/columns.rs`
 (`fill_anticipated_slot_columns`). Pinned by
 `is_anticipated_decision_active_for_delivery_strict_extended_bound` (the strict
@@ -2210,11 +2307,18 @@ base is safe here only because a load-time rule rejects a `block_id` bound row
 on an anticipated thermal — see `cobre-io`'s
 `check_block_id_on_anticipated_thermal`),
 `thermal_bounds(thermal_idx, delivery_stage).cost_per_mwh` for its cost,
-`delivery_total_hours[delivery_stage]` and
-`delivery_cumulative_discount_factors[delivery_stage]` for its present-value objective,
+`TimeValue::delivery_total_hours(delivery_stage)` for its hours,
+`TimeValue::relative_delivery_discount(stage_idx, delivery_stage)` (the delivery
+stage's cumulative discount over the decision stage's, `D(m)/D(t)`, one
+division) for its discount, so the objective `cost * hours * D(m)/D(t)` is in
+stage-`t` units like every other stage-`t` cost,
 and `is_anticipated_decision_active_for_delivery` (the plant's window at
-`delivery_stage`) for its dormancy — each at the plant's own genuine delivery
-stage, never at `stage_idx`. The delivered commitment is a hard equality with
+`delivery_stage`) for its dormancy — each read at the plant's own genuine
+delivery stage (the discount relative to the decision stage), never at
+`stage_idx` alone. Pricing with the absolute `D(m)` discounts a decision taken
+after stage 0 twice (once in its own coefficient and once through the
+discounted future cost) and still compiles, since the two agree at stage 0
+(`D(0) = 1`). The delivered commitment is a hard equality with
 no slack (the fishing coupling pins the plant's delivery-stage generation to
 the committed value), so relatively-complete recourse requires the committed
 value always lie within the delivery stage's own generation bounds. A
@@ -2249,15 +2353,19 @@ overlay-ignoring base read safe, must update BOTH readers; updating only one
 prices a commitment against a different bound than its own box permits.
 
 Read: `lp/builder/columns.rs` (`fill_anticipated_columns`),
+`time_value.rs` (`TimeValue::relative_delivery_discount`),
+`lp/builder/template.rs` (`finalize_stage_objective`, which divides the stage-`t` price by the cost scale and gives θ the one-step factor that carries it to the root),
 `lp/builder/state_box.rs` (`fill_commitment_hold_box`, the box reader of the same
 delivery-anchored base),
 `lp/indexer/anticipated_gate.rs` (`is_anticipated_decision_active_for_delivery`),
-`lp/generic_constraints.rs` (`resolve_anticipated_decision`),
+`lp/builder/generic_constraints.rs` (`resolve_anticipated_decision`),
 `cobre-io` `validation/semantic/thermal.rs`
 (`warn_thermal_generation_on_anticipated_thermal`), `cobre-io`
 `validation/semantic/block_bounds.rs`
 (`check_block_id_on_anticipated_thermal`, the rule the base read's safety
 depends on). Pinned by
+`test_anticipated_decision_after_stage_zero_is_priced_relative_to_its_own_stage`
+(a decision after stage 0 priced relative to its own stage),
 `test_anticipated_decision_delivery_anchored_bounds` (stage-varying delivery
 bounds/cost, mutation-verified against the decision-anchored read), the
 end-to-end

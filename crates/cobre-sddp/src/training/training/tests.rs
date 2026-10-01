@@ -37,7 +37,7 @@ use super::train;
 use crate::{
     SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
     config::{CutManagementConfig, EventConfig, LoopConfig},
-    context::{StageContext, TrainingContext},
+    context::TrainingContext,
     cut::fcf::FutureCostFunction,
     error::SddpError,
     horizon_mode::HorizonMode,
@@ -45,39 +45,34 @@ use crate::{
     risk_measure::RiskMeasure,
     setup::NodeId,
     solver_stats::{SolverStatsDelta, SolverStatsLogEntry},
-    test_support::{self, permissive_state_boxes},
+    test_support::{self, StageContextFixture, equipment_free_geometry, permissive_state_boxes},
 };
 
 /// Minimal LP for N=1 hydro, L=0 PAR order.
 ///
 /// Column layout (N=1, L=0):
 /// - col 0: `storage_out` (no NZ in structural rows)
-/// - col 1: `z_inflow` (no NZ — `z_inflow` row at row 1)
-/// - col 2: `storage_in` (1 NZ: row 0, storage-fixing row)
+/// - col 1: `z_inflow` (1 NZ: row 0, z-inflow definition row)
+/// - col 2: `storage_in` (1 NZ: row 1, this mock's pin row)
 /// - col 3: `theta` (no NZ)
 ///
 /// Row layout:
-/// - row 0: storage-fixing (`storage_out` fixed to incoming state)
-/// - row 1: `z_inflow` definition row
-fn minimal_template(n_state: usize) -> StageTemplate {
-    let _ = n_state;
+/// - row 0: `z_inflow` definition row
+/// - row 1: this mock's pin row (`storage_in` at +1.0, not `storage_out`)
+fn minimal_template(_n_state: usize) -> StageTemplate {
     StageTemplate {
         num_cols: 4,
         num_rows: 2,
-        num_nz: 1,
-        col_starts: vec![0_i32, 0, 0, 1, 1],
-        row_indices: vec![0_i32],
-        values: vec![1.0],
+        num_nz: 2,
+        col_starts: vec![0_i32, 0, 1, 2, 2],
+        row_indices: vec![0_i32, 1],
+        values: vec![1.0, 1.0],
         col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
         col_upper: vec![f64::INFINITY; 4],
         objective: vec![0.0, 0.0, 0.0, 1.0],
         row_lower: vec![0.0, 0.0],
         row_upper: vec![0.0, 0.0],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -407,7 +402,6 @@ fn ac_train_completes_with_iteration_limit() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -423,7 +417,6 @@ fn ac_train_completes_with_iteration_limit() {
             max_iterations: 5,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -444,32 +437,9 @@ fn ac_train_completes_with_iteration_limit() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     let result = train(
         &mut solver,
         config,
@@ -513,7 +483,6 @@ fn ac_train_returns_partial_on_infeasible() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -529,7 +498,6 @@ fn ac_train_returns_partial_on_infeasible() {
             max_iterations: 5,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -550,32 +518,9 @@ fn ac_train_returns_partial_on_infeasible() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     let result = train(
         &mut solver,
         config,
@@ -630,7 +575,6 @@ fn ac_train_emits_correct_event_sequence() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -648,7 +592,6 @@ fn ac_train_emits_correct_event_sequence() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(2),
         },
         cut_management: CutManagementConfig {
@@ -669,32 +612,9 @@ fn ac_train_emits_correct_event_sequence() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     train(
         &mut solver,
         config,
@@ -830,12 +750,9 @@ fn ac_train_emits_correct_event_sequence() {
 
 #[test]
 fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
-    use cobre_core::WorkerTimingPhase;
-
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -853,7 +770,6 @@ fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 4,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(1),
         },
         cut_management: CutManagementConfig {
@@ -874,32 +790,9 @@ fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     train(
         &mut solver,
         config,
@@ -992,14 +885,13 @@ fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
     // Setup-sum invariant: sum of per-worker BWD_SETUP equals
     // BackwardPassComplete.setup_time_ms within ±1 ms tolerance.
     // (BackwardPassComplete.setup_time_ms is u64; per-worker timings are f64.)
-    let bwd_setup_total_ms_u64 = events
+    let bwd_setup_total_ms = events
         .iter()
         .find_map(|e| match e {
             TrainingEvent::BackwardPassComplete { setup_time_ms, .. } => Some(*setup_time_ms),
             _ => None,
         })
-        .expect("BackwardPassComplete event must exist");
-    let bwd_setup_total_ms = bwd_setup_total_ms_u64 as f64;
+        .expect("BackwardPassComplete event must exist") as f64;
     assert!(
         (bwd_setup_sum_ms - bwd_setup_total_ms).abs() < 1.0,
         "sum of per-worker BWD_SETUP ({bwd_setup_sum_ms} ms) must match \
@@ -1012,7 +904,6 @@ fn ac_train_result_fields_populated() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1028,7 +919,6 @@ fn ac_train_result_fields_populated() {
             max_iterations: 5,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -1049,32 +939,9 @@ fn ac_train_result_fields_populated() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     let result = train(
         &mut solver,
         config,
@@ -1118,7 +985,6 @@ fn ac_train_with_no_event_sender() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1134,7 +1000,6 @@ fn ac_train_with_no_event_sender() {
             max_iterations: 2,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(2),
         },
         cut_management: CutManagementConfig {
@@ -1155,32 +1020,9 @@ fn ac_train_with_no_event_sender() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     let result = train(
         &mut solver,
         config,
@@ -1221,7 +1063,6 @@ fn ac_total_time_ms_is_non_negative() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1237,7 +1078,6 @@ fn ac_total_time_ms_is_non_negative() {
             max_iterations: 1,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(1),
         },
         cut_management: CutManagementConfig {
@@ -1258,32 +1098,9 @@ fn ac_total_time_ms_is_non_negative() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     let result = train(
         &mut solver,
         config,
@@ -1330,7 +1147,6 @@ fn cut_selection_none_skips_step() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1348,7 +1164,6 @@ fn cut_selection_none_skips_step() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -1369,32 +1184,9 @@ fn cut_selection_none_skips_step() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     train(
         &mut solver,
         config,
@@ -1447,7 +1239,6 @@ fn cut_selection_level1_runs_at_frequency() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1465,7 +1256,6 @@ fn cut_selection_level1_runs_at_frequency() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -1489,32 +1279,9 @@ fn cut_selection_level1_runs_at_frequency() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     train(
         &mut solver,
         config,
@@ -1576,7 +1343,6 @@ fn cut_selection_stage0_exempt_preserves_cuts() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1594,7 +1360,6 @@ fn cut_selection_stage0_exempt_preserves_cuts() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(2),
         },
         cut_management: CutManagementConfig {
@@ -1618,32 +1383,9 @@ fn cut_selection_stage0_exempt_preserves_cuts() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     train(
         &mut solver,
         config,
@@ -1720,7 +1462,6 @@ fn existing_train_tests_pass_with_none() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1736,7 +1477,6 @@ fn existing_train_tests_pass_with_none() {
             max_iterations: 3,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(3),
         },
         cut_management: CutManagementConfig {
@@ -1757,32 +1497,9 @@ fn existing_train_tests_pass_with_none() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     let result = train(
         &mut solver,
         config,
@@ -1826,7 +1543,6 @@ fn ac_train_partial_result_on_mid_iteration_failure() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1844,7 +1560,6 @@ fn ac_train_partial_result_on_mid_iteration_failure() {
             max_iterations: 5,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -1869,32 +1584,9 @@ fn ac_train_partial_result_on_mid_iteration_failure() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     let outcome = train(
         &mut solver,
         config,
@@ -1957,7 +1649,6 @@ fn start_iteration_resumes_from_offset() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -1973,7 +1664,6 @@ fn start_iteration_resumes_from_offset() {
             max_iterations: 5,
             start_iteration: 3,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -1994,32 +1684,9 @@ fn start_iteration_resumes_from_offset() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     let outcome = train(
         &mut solver,
         config,
@@ -2065,7 +1732,6 @@ fn start_iteration_at_or_beyond_max_runs_zero_iterations() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -2081,7 +1747,6 @@ fn start_iteration_at_or_beyond_max_runs_zero_iterations() {
             max_iterations: 5,
             start_iteration: 5,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(5),
         },
         cut_management: CutManagementConfig {
@@ -2102,32 +1767,9 @@ fn start_iteration_at_or_beyond_max_runs_zero_iterations() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
     let outcome = train(
         &mut solver,
         config,
@@ -2825,7 +2467,6 @@ fn template_freeze_event_emitted() {
     let n_stages = 2;
     let state = test_support::state_layout(1, 0);
     let templates = vec![minimal_template(state.n_state); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let stochastic = make_stochastic_context(n_stages, 1);
     let stages = make_stages(n_stages);
@@ -2843,7 +2484,6 @@ fn template_freeze_event_emitted() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit_rules(2),
         },
         cut_management: CutManagementConfig {
@@ -2864,32 +2504,9 @@ fn template_freeze_event_emitted() {
     let comm = StubComm;
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1],
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let geometry = equipment_free_geometry(&[1usize, 1]);
+    let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = fixture.ctx();
 
     train(
         &mut solver,

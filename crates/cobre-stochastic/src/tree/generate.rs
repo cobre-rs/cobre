@@ -2,6 +2,8 @@
 //! and deterministic per-opening seeds. Each `(opening_index, stage)` pair
 //! receives independent noise with spatial correlation applied in-place.
 
+use std::ops::Range;
+
 use cobre_core::{EntityId, Stage, temporal::NoiseMethod};
 use rand::RngExt;
 use rand_distr::StandardNormal;
@@ -20,9 +22,7 @@ use crate::{
 };
 
 /// Per-class entity counts splitting the flat noise vector into segments for
-/// independent spectral correlation. Layout is `[hydros | load buses | NCS]`;
-/// `n_hydros + n_load_buses + n_ncs` must equal the `dim` argument to
-/// `generate_opening_tree`.
+/// independent spectral correlation. Layout is `[hydros | load buses | NCS]`.
 #[derive(Debug, Clone, Copy)]
 pub struct ClassDimensions {
     /// Hydro (inflow) entities.
@@ -36,8 +36,46 @@ pub struct ClassDimensions {
 impl ClassDimensions {
     /// Sum of the three per-class entity counts.
     #[must_use]
+    #[inline]
     pub fn total(&self) -> usize {
         self.n_hydros + self.n_load_buses + self.n_ncs
+    }
+
+    /// The hydro segment's range within the noise vector.
+    #[must_use]
+    #[inline]
+    pub fn hydro_range(&self) -> Range<usize> {
+        0..self.n_hydros
+    }
+
+    /// The load-bus segment's range within the noise vector.
+    #[must_use]
+    #[inline]
+    pub fn load_bus_range(&self) -> Range<usize> {
+        self.n_hydros..self.n_hydros + self.n_load_buses
+    }
+
+    /// The NCS segment's range within the noise vector.
+    #[must_use]
+    #[inline]
+    pub fn ncs_range(&self) -> Range<usize> {
+        let start = self.load_bus_range().end;
+        start..start + self.n_ncs
+    }
+
+    /// Splits `noise` into its `[hydros | load buses | NCS]` segments.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `noise.len() < self.n_hydros + self.n_load_buses`.
+    #[inline]
+    pub fn split_segments_mut<'b>(
+        &self,
+        noise: &'b mut [f64],
+    ) -> (&'b mut [f64], &'b mut [f64], &'b mut [f64]) {
+        let (hydro, rest) = noise.split_at_mut(self.n_hydros);
+        let (load, ncs) = rest.split_at_mut(self.n_load_buses);
+        (hydro, load, ncs)
     }
 
     /// Asserts `entity_order` observes the `[hydros | load buses | NCS]`
@@ -140,6 +178,11 @@ fn try_copy_noise_group(
     true
 }
 
+fn opening_slice_mut(data: &mut [f64], opening_idx: usize, dim: usize) -> &mut [f64] {
+    let start = opening_idx * dim;
+    &mut data[start..start + dim]
+}
+
 /// Generate raw noise for one stage into `stage_slice` using its configured method.
 ///
 /// Returns `Ok(true)` when the method embeds its own correlation
@@ -157,11 +200,11 @@ fn generate_stage_raw_noise(
     stage: &Stage,
     stage_idx: usize,
     n_openings: usize,
-    dim: usize,
     dims: ClassDimensions,
     historical_library: Option<&HistoricalScenarioLibrary>,
     stage_slice: &mut [f64],
 ) -> Result<bool, StochasticError> {
+    let dim = dims.total();
     match stage.scenario_config.noise_method {
         NoiseMethod::Saa => {
             generate_saa(base_seed, stage, n_openings, dim, stage_slice);
@@ -216,14 +259,13 @@ fn generate_stage_raw_noise(
             }
 
             for opening_idx in 0..n_openings {
-                let start = opening_idx * dim;
-                let noise_slice = &mut stage_slice[start..start + dim];
+                let noise_slice = opening_slice_mut(stage_slice, opening_idx, dim);
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let seed = derive_opening_seed(base_seed, opening_idx as u32, stage.id as u32);
                 #[allow(clippy::cast_possible_truncation)]
                 let window_idx = (seed % (n_windows as u64)) as usize;
                 let eta = lib.eta_slice(window_idx, stage_idx);
-                noise_slice[..dims.n_hydros].copy_from_slice(eta);
+                noise_slice[dims.hydro_range()].copy_from_slice(eta);
             }
             return Ok(true);
         }
@@ -234,8 +276,7 @@ fn generate_stage_raw_noise(
 /// Fill all `n_openings` noise vectors for one stage using SAA (pure Monte Carlo).
 fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, output: &mut [f64]) {
     for opening_idx in 0..n_openings {
-        let start = opening_idx * dim;
-        let noise_slice = &mut output[start..start + dim];
+        let noise_slice = opening_slice_mut(output, opening_idx, dim);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let seed = derive_opening_seed(base_seed, opening_idx as u32, stage.id as u32);
         let mut rng = rng_from_seed(seed);
@@ -254,8 +295,7 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 /// returns an error; the other methods are supported. Per-stage opening counts
 /// and `noise_group_ids` sharing are described on [`OpeningTreeGenerationInputs`].
 ///
-/// `entity_order` must have layout `[hydros | load buses | NCS]` and
-/// `dims.n_hydros + dims.n_load_buses + dims.n_ncs` must equal `dim`.
+/// `entity_order` must have layout `[hydros | load buses | NCS]`.
 ///
 /// # Errors
 ///
@@ -272,12 +312,12 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 pub fn generate_opening_tree<'a>(
     base_seed: u64,
     stages: &'a [Stage],
-    dim: usize,
     correlation: &'a DecomposedCorrelation,
     entity_order: &'a [EntityId],
     dims: ClassDimensions,
     inputs: &OpeningTreeGenerationInputs<'a>,
 ) -> Result<OpeningTree, StochasticError> {
+    let dim = dims.total();
     let historical_library = inputs.historical_library;
     let external_scenario_counts = inputs.external_scenario_counts;
     let noise_group_ids = inputs.noise_group_ids;
@@ -338,7 +378,6 @@ pub fn generate_opening_tree<'a>(
             stage,
             stage_idx,
             n_openings,
-            dim,
             dims,
             historical_library,
             stage_slice,
@@ -351,28 +390,20 @@ pub fn generate_opening_tree<'a>(
         let groups = correlation.groups_for_stage(stage.id);
 
         for opening_idx in 0..n_openings {
-            let start = opening_idx * dim;
-            let noise = &mut stage_slice[start..start + dim];
-            let (inflow_noise, rest) = noise.split_at_mut(dims.n_hydros);
-            let (load_noise, ncs_noise) = rest.split_at_mut(dims.n_load_buses);
-            DecomposedCorrelation::apply_groups_for_class(
-                groups,
-                EntityClass::Inflow,
-                inflow_noise,
-                &mut corr_scratch,
-            );
-            DecomposedCorrelation::apply_groups_for_class(
-                groups,
-                EntityClass::Load,
-                load_noise,
-                &mut corr_scratch,
-            );
-            DecomposedCorrelation::apply_groups_for_class(
-                groups,
-                EntityClass::Ncs,
-                ncs_noise,
-                &mut corr_scratch,
-            );
+            let noise = opening_slice_mut(stage_slice, opening_idx, dim);
+            let (inflow_noise, load_noise, ncs_noise) = dims.split_segments_mut(noise);
+            for (class, class_noise) in [
+                (EntityClass::Inflow, inflow_noise),
+                (EntityClass::Load, load_noise),
+                (EntityClass::Ncs, ncs_noise),
+            ] {
+                DecomposedCorrelation::apply_groups_for_class(
+                    groups,
+                    class,
+                    class_noise,
+                    &mut corr_scratch,
+                );
+            }
         }
     }
 
@@ -499,6 +530,25 @@ mod tests {
     }
 
     #[test]
+    fn class_dimensions_ranges_and_split_match_the_layout() {
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 3,
+        };
+        assert_eq!(dims.hydro_range(), 0..2);
+        assert_eq!(dims.load_bus_range(), 2..2);
+        assert_eq!(dims.ncs_range(), 2..5);
+        assert_eq!(dims.total(), 5);
+
+        let mut noise = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let (hydro, load, ncs) = dims.split_segments_mut(&mut noise);
+        assert_eq!(hydro, &[1.0, 2.0]);
+        assert!(load.is_empty());
+        assert_eq!(ncs, &[3.0, 4.0, 5.0]);
+    }
+
+    #[test]
     fn determinism_same_inputs_produce_identical_trees() {
         let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3)];
         let corr = identity_correlation(&[1, 2]);
@@ -513,7 +563,6 @@ mod tests {
         let tree1 = generate_opening_tree(
             42,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -523,7 +572,6 @@ mod tests {
         let tree2 = generate_opening_tree(
             42,
             &stages,
-            2,
             &corr2,
             &entity_order,
             dims,
@@ -557,7 +605,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -587,7 +634,6 @@ mod tests {
         let tree_a = generate_opening_tree(
             42,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -597,7 +643,6 @@ mod tests {
         let tree_b = generate_opening_tree(
             99,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -632,7 +677,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -665,7 +709,6 @@ mod tests {
         let tree = generate_opening_tree(
             7,
             &stages,
-            3,
             &corr,
             &entity_order,
             dims,
@@ -696,7 +739,6 @@ mod tests {
         let tree = generate_opening_tree(
             12345,
             &stages,
-            1,
             &corr,
             &entity_order,
             dims,
@@ -742,7 +784,6 @@ mod tests {
         let tree = generate_opening_tree(
             99,
             &stages,
-            4,
             &corr,
             &entity_order,
             dims,
@@ -779,7 +820,6 @@ mod tests {
         let tree = generate_opening_tree(
             54321,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -833,7 +873,6 @@ mod tests {
         let tree = generate_opening_tree(
             0,
             &stages,
-            1,
             &corr,
             &entity_order,
             dims,
@@ -875,7 +914,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -934,7 +972,6 @@ mod tests {
         let result = generate_opening_tree(
             42,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -975,7 +1012,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            dim,
             &corr,
             &entity_order,
             dims,
@@ -1022,7 +1058,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            dim,
             &corr,
             &entity_order,
             dims,
@@ -1098,7 +1133,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            dim,
             &corr,
             &entity_order,
             dims,
@@ -1120,14 +1154,13 @@ mod tests {
     /// `Err(StochasticError::DimensionExceedsCapacity)` with the correct fields.
     #[test]
     fn test_sobol_dimension_exceeds_capacity() {
-        let dim_over = 21_202; // one above MAX_SOBOL_DIM = 21_201
         let stages = vec![make_stage_with_method(0, 0, 4, NoiseMethod::QmcSobol)];
-        // Build a minimal identity correlation with a single entity; `dim` is passed
-        // separately to `generate_opening_tree`.
+        // Correlation is never read on this early-return path, so a
+        // one-entity correlation stands in for the 21_202-entity dims below.
         let corr = identity_correlation(&[1]);
-        let entity_order = vec![EntityId(1)];
+        let entity_order: Vec<EntityId> = (1..=21_202).map(EntityId).collect();
         let dims = ClassDimensions {
-            n_hydros: 1,
+            n_hydros: 21_202, // one above MAX_SOBOL_DIM = 21_201
             n_load_buses: 0,
             n_ncs: 0,
         };
@@ -1135,7 +1168,6 @@ mod tests {
         let result = generate_opening_tree(
             42,
             &stages,
-            dim_over,
             &corr,
             &entity_order,
             dims,
@@ -1162,7 +1194,6 @@ mod tests {
     #[test]
     fn test_sobol_saa_mixing() {
         let n_openings = 32;
-        let dim = 2;
         let stages = vec![
             make_stage_with_method(0, 0, n_openings, NoiseMethod::QmcSobol),
             make_stage_with_method(1, 1, n_openings, NoiseMethod::Saa),
@@ -1178,7 +1209,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            dim,
             &corr,
             &entity_order,
             dims,
@@ -1224,7 +1254,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            dim,
             &corr,
             &entity_order,
             dims,
@@ -1247,7 +1276,6 @@ mod tests {
     #[test]
     fn test_halton_saa_mixing() {
         let n_openings = 32;
-        let dim = 2;
         let stages = vec![
             make_stage_with_method(0, 0, n_openings, NoiseMethod::QmcHalton),
             make_stage_with_method(1, 1, n_openings, NoiseMethod::Saa),
@@ -1263,7 +1291,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            dim,
             &corr,
             &entity_order,
             dims,
@@ -1335,7 +1362,6 @@ mod tests {
         let result = generate_opening_tree(
             42,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -1387,7 +1413,6 @@ mod tests {
         let tree = generate_opening_tree(
             base_seed,
             &stages,
-            n_hydros,
             &corr,
             &entity_order,
             dims,
@@ -1455,7 +1480,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            dim,
             &corr,
             &entity_order,
             dims,
@@ -1506,7 +1530,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            n_hydros,
             &corr,
             &entity_order,
             dims,
@@ -1550,7 +1573,6 @@ mod tests {
         let tree1 = generate_opening_tree(
             base_seed,
             &stages,
-            n_hydros,
             &corr,
             &entity_order,
             dims,
@@ -1563,7 +1585,6 @@ mod tests {
         let tree2 = generate_opening_tree(
             base_seed,
             &stages,
-            n_hydros,
             &corr,
             &entity_order,
             dims,
@@ -1608,7 +1629,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            1,
             &corr,
             &entity_order,
             dims,
@@ -1640,7 +1660,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            1,
             &corr,
             &entity_order,
             dims,
@@ -1682,7 +1701,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            n_hydros,
             &corr,
             &entity_order,
             dims,
@@ -1720,7 +1738,6 @@ mod tests {
         let _ = generate_opening_tree(
             42,
             &stages,
-            1,
             &corr,
             &entity_order,
             dims,
@@ -1756,7 +1773,6 @@ mod tests {
         let tree_none = generate_opening_tree(
             42,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -1768,7 +1784,6 @@ mod tests {
         let tree_unique = generate_opening_tree(
             42,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -1814,7 +1829,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -1862,7 +1876,6 @@ mod tests {
         let tree = generate_opening_tree(
             42,
             &stages,
-            2,
             &corr,
             &entity_order,
             dims,
@@ -1918,7 +1931,6 @@ mod tests {
         let tree_none = generate_opening_tree(
             999,
             &stages,
-            3,
             &corr,
             &entity_order,
             dims,
@@ -1931,7 +1943,6 @@ mod tests {
         let tree_unique = generate_opening_tree(
             999,
             &stages,
-            3,
             &corr,
             &entity_order,
             dims,

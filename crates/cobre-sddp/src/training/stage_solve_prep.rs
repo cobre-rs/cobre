@@ -15,8 +15,7 @@ use crate::{
     lp::builder::{PatchBuffer, StateBox},
     lp::indexer::BlockGrid,
     noise::{
-        NcsNoiseOffsets, apply_ncs_col_bounds, transform_inflow_noise, transform_load_noise,
-        transform_ncs_noise,
+        apply_ncs_col_bounds, transform_inflow_noise, transform_load_noise, transform_ncs_noise,
     },
     setup::node_graph::StageIdx,
     workspace::ScratchBuffers,
@@ -28,17 +27,8 @@ use crate::{
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StateSource<'a>(pub &'a [f64]);
 
-/// Whether this stage solve patches stochastic load-bus bounds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LoadNoise {
-    /// Patch stochastic load-bus bounds (forward, backward, simulation).
-    Present,
-    /// Skip them: the lower bound has no load-bus noise dimension.
-    Absent,
-}
-
-/// How the water-balance noise buffers this solve reads
-/// (`scratch.noise_buf`, `scratch.z_inflow_rhs_buf`) are populated.
+/// How the water-balance noise buffer this solve reads
+/// (`scratch.z_inflow_rhs_buf`) is populated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InflowNoise {
     /// Fill the buffers from `raw_noise` (forward, backward, simulation).
@@ -52,13 +42,11 @@ pub(crate) enum InflowNoise {
 /// among the four solve sites.
 ///
 /// The NCS availability patch is not a variation point: [`StageSolvePrep::run`]
-/// derives its own gate (`n_stochastic_ncs() > 0`, `has_ncs`) internally, the
-/// same gate every solve site applies.
+/// gates it on `n_stochastic_ncs() > 0` internally, the same gate every solve
+/// site applies.
 pub(crate) struct StageSolvePrepParams<'a> {
     /// Which slice this solve pins as incoming state.
     pub state_source: StateSource<'a>,
-    /// Whether to patch stochastic load-bus bounds.
-    pub load_noise: LoadNoise,
     /// How the inflow-noise buffers are populated.
     pub inflow_noise: InflowNoise,
     /// This solve's realized noise draw, laid out `[hydro | load-bus | NCS]`.
@@ -147,32 +135,21 @@ impl StageSolvePrep {
         let pinned_state = params.state_source.0;
 
         if params.inflow_noise == InflowNoise::Transform {
-            transform_inflow_noise(
-                params.raw_noise,
-                stage,
-                pinned_state,
-                ctx,
-                training_ctx,
-                scratch,
-            );
+            transform_inflow_noise(params.raw_noise, stage, pinned_state, training_ctx, scratch);
         }
 
-        let load_blocks = if ctx.n_load_buses > 0 {
-            ctx.block_count(stage)
-        } else {
+        let load_blocks = if ctx.load_bus_indices.is_empty() {
             0
+        } else {
+            ctx.block_count(stage)
         };
-        if params.load_noise == LoadNoise::Present {
-            transform_load_noise(
-                params.raw_noise,
-                ctx.n_hydros,
-                ctx.n_load_buses,
-                training_ctx.stochastic,
-                stage,
-                load_blocks,
-                &mut scratch.load_rhs_buf,
-            );
-        }
+        transform_load_noise(
+            params.raw_noise,
+            training_ctx.stochastic,
+            stage,
+            load_blocks,
+            &mut scratch.load_rhs_buf,
+        );
 
         patch_buf.fill_col_state_patches(
             training_ctx.state,
@@ -180,26 +157,18 @@ impl StageSolvePrep {
             &ctx.template(stage).col_scale,
             producer_box,
         );
-        patch_buf.fill_forward_patches(
-            training_ctx.state,
-            pinned_state,
-            &scratch.noise_buf,
-            ctx.base_row(stage),
-            &ctx.template(stage).row_scale,
-        );
-        if params.load_noise == LoadNoise::Present && ctx.n_load_buses > 0 {
+        if !ctx.load_bus_indices.is_empty() {
             let grid = BlockGrid::new(load_blocks, training_ctx.study_dims.max_deficit_segments);
             patch_buf.fill_load_patches(
-                ctx.load_balance_row_start(stage),
+                ctx.geometry_per_stage[stage.0].load_balance,
                 grid,
                 &scratch.load_rhs_buf,
                 ctx.load_bus_indices,
                 &ctx.template(stage).row_scale,
             );
         }
-        let z_inflow_row_start = ctx.geometry(stage).map_or(0, |g| g.z_inflow_row_start);
         patch_buf.fill_z_inflow_patches(
-            z_inflow_row_start,
+            training_ctx.state,
             &scratch.z_inflow_rhs_buf,
             &ctx.template(stage).row_scale,
         );
@@ -221,10 +190,6 @@ impl StageSolvePrep {
         if training_ctx.stochastic.n_stochastic_ncs() > 0 {
             transform_ncs_noise(
                 params.raw_noise,
-                &NcsNoiseOffsets {
-                    n_hydros: ctx.n_hydros,
-                    n_load_buses: ctx.n_load_buses,
-                },
                 training_ctx.stochastic,
                 stage,
                 ctx.block_count(stage),
@@ -233,24 +198,21 @@ impl StageSolvePrep {
                 &mut scratch.ncs_col_lower_buf,
                 &mut scratch.ncs_col_upper_buf,
             );
-            if training_ctx.study_dims.has_ncs {
-                // Stage id is the dormancy key (NOT the index `stage`; filtered
-                // placeholder stages can shift the id off the index).
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                let stage_id = training_ctx
-                    .stages
-                    .get(stage.0)
-                    .map_or(stage.0 as i32, |s| s.id);
-                apply_ncs_col_bounds(
-                    solver,
-                    scratch,
-                    ctx.ncs_col_start(stage),
-                    ctx.ncs_stochastic_dense_col,
-                    ctx.ncs_stochastic_windows,
-                    stage_id,
-                    ctx.block_count(stage),
-                );
-            }
+            // Stage id is the dormancy key (NOT the index `stage`; filtered
+            // placeholder stages can shift the id off the index).
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let stage_id = training_ctx
+                .stages
+                .get(stage.0)
+                .map_or(stage.0 as i32, |s| s.id);
+            apply_ncs_col_bounds(
+                solver,
+                scratch,
+                &ctx.geometry_per_stage[stage.0],
+                ctx.ncs_stochastic_dense_col,
+                ctx.ncs_stochastic_windows,
+                stage_id,
+            );
         }
     }
 }

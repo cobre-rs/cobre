@@ -34,7 +34,7 @@ mod simulation_only {
             build_active_indices, build_stage_basis_records, build_stage_cut_records,
             build_stage_cuts_payloads, convert_basis_cache,
         },
-        setup::prepare_stochastic,
+        setup::{NodePos, prepare_stochastic},
     };
     use cobre_solver::ActiveSolver;
 
@@ -94,7 +94,7 @@ mod simulation_only {
         let original_active_cuts = setup.fcf.total_active_cuts();
         assert!(original_active_cuts > 0, "training should produce cuts");
 
-        let n_stages = setup.stage_data.stage_templates.templates.len();
+        let n_stages = setup.inputs.stage_data.stage_templates.templates.len();
         let state_dim = setup.fcf.state_dimension;
 
         let test_state: Vec<f64> = vec![50.0; state_dim];
@@ -114,7 +114,7 @@ mod simulation_only {
         let study_stage_end_dates = ascending_stage_end_dates(fcf.pools.len());
         let stage_cuts = build_stage_cuts_payloads(
             fcf,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &study_stage_ids,
             &study_stage_end_dates,
             1_000_000.0,
@@ -127,7 +127,7 @@ mod simulation_only {
         let stage_bases = build_stage_basis_records(
             fcf,
             &training_result,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &basis_col_u8,
             &basis_row_u8,
         );
@@ -201,9 +201,9 @@ mod simulation_only {
         let loaded_basis_cache = build_basis_cache_from_checkpoint(
             &checkpoint.stage_bases,
             &checkpoint.stage_cuts,
-            &setup.node_graph.node_ids,
-            &setup.node_graph.node_pool_ids(),
-        );
+            &setup,
+        )
+        .expect("a current-build checkpoint must load without a dimension mismatch");
         assert_eq!(
             loaded_basis_cache.len(),
             n_stages,
@@ -211,6 +211,21 @@ mod simulation_only {
         );
         let has_basis = loaded_basis_cache.iter().any(Option::is_some);
         assert!(has_basis, "at least one stage should have basis data");
+
+        for (pos, cb) in loaded_basis_cache.iter().enumerate() {
+            let Some(cb) = cb else { continue };
+            let stage = setup.inputs.node_graph.nodes[NodePos(pos)].stage;
+            let expected_rows = setup.inputs.stage_data.stage_templates.templates[stage.0].num_rows;
+            assert_eq!(
+                cb.base_row_count, expected_rows,
+                "node {pos} base_row_count must equal the study's own template row count"
+            );
+            assert_eq!(
+                cb.cut_row_slots.len(),
+                cb.basis.row_status.len() - cb.base_row_count,
+                "node {pos} cut_row_slots length must equal the trailing cut-row count"
+            );
+        }
     }
 }
 
@@ -753,7 +768,7 @@ mod multi_resolution_integration {
 
         let mut setup = build_setup(&case_dir, &config);
 
-        let groups = &setup.stage_data.noise_group_ids;
+        let groups = &setup.inputs.stage_data.noise_group_ids;
         assert_eq!(
             groups.len(),
             10,
@@ -882,6 +897,7 @@ mod sparse_dense {
     use cobre_sddp::FutureCostFunction;
     use cobre_sddp::build_cut_row_batch_into;
     use cobre_sddp::indexer::StateSpace;
+    use cobre_sddp::lead_time::AnticipatedResolution;
     use cobre_sddp::setup::NodeId;
     use cobre_sddp::test_support::cut_state_projection;
     use cobre_solver::RowBatch;
@@ -897,11 +913,9 @@ mod sparse_dense {
         let state = StateSpace::new(
             n_hydro,
             max_par_order,
-            0,
             Vec::new(),
-            0,
-            0,
             vec![],
+            AnticipatedResolution::default(),
             &[0, 1, 2],
         );
         // Expected mask = storage [0,1,2] + lag0 of h1,h2 [4,5] + lag1 of h2 [8].
@@ -1023,7 +1037,7 @@ mod decomp_integration {
         let study_stage_end_dates = ascending_stage_end_dates(fcf.pools.len());
         let stage_cuts = build_stage_cuts_payloads(
             fcf,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &study_stage_ids,
             &study_stage_end_dates,
             1_000_000.0,
@@ -1032,8 +1046,13 @@ mod decomp_integration {
             stage_manifests,
         );
         let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases =
-            build_stage_basis_records(fcf, result, &setup.node_graph, &basis_col, &basis_row);
+        let stage_bases = build_stage_basis_records(
+            fcf,
+            result,
+            &setup.inputs.node_graph,
+            &basis_col,
+            &basis_row,
+        );
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,
@@ -1268,11 +1287,12 @@ mod decomp_integration {
             !boundary_records.is_empty(),
             "source stage must have cuts after training"
         );
-        cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records);
+        cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records).unwrap();
 
-        let terminal_pool = &setup_c.fcf.pools[num_stages - 1];
+        let terminal_pool_id = setup_c.inputs.node_graph.terminal_pool(num_stages).unwrap();
+        let terminal_pool = &setup_c.fcf.pools[terminal_pool_id];
         assert!(
-            terminal_pool.warm_start_count > 0,
+            terminal_pool.has_warm_start_cuts(),
             "terminal pool must have boundary cuts after injection; warm_start_count == 0"
         );
         assert!(
@@ -1813,12 +1833,13 @@ mod transit_seed_round_trip {
     const PINNED_STORAGE_HM3: f64 = 1_000.0;
     const TOL: f64 = 1e-9;
     /// The receiving study's own stage count for the round-trip reconstruction:
-    /// must be `>= per_plant_depth` or `build_initial_transit_bucket_state`'s
+    /// must be `>=` every plant's own run length in
+    /// `StateSpace::transit_bucket_plants`, or `build_initial_transit_bucket_state`'s
     /// `StageCalendar` (built from the receiving study's own, un-padded
     /// stages) truncates `hour_window_shares`'s returned weight vector before
     /// it reaches the deepest lags — losing an in-study-release contribution
     /// that has nothing to do with the leftover-seed stitch. `8` comfortably
-    /// exceeds every `per_plant_depth` this module's fixtures produce, so it
+    /// exceeds every such run length this module's fixtures produce, so it
     /// isolates the stitch-specific behavior from this unrelated,
     /// receiver-sizing precondition.
     const SEED_RECEIVER_STAGES: usize = 8;
@@ -2194,8 +2215,9 @@ mod transit_seed_round_trip {
     /// `StageCalendar` from the CURRENT study's own (un-padded)
     /// stage list, so `hour_window_shares` can never populate a lag deeper
     /// than that study's own stage count — for ANY declared arc whose
-    /// `t_v > H` (by definition, `per_plant_depth > n_stages` whenever stage
-    /// widths are uniform), a wide pre-study window's seed is silently
+    /// `t_v > H` (by definition, that plant's `transit_bucket_plants` run
+    /// is longer than `n_stages` whenever stage widths are uniform), a wide
+    /// pre-study window's seed is silently
     /// truncated at both ends of the rolling seam: study 1 itself can only
     /// ever seed the window's first `n_stages` lags (delivering, not
     /// carrying, the remainder before the terminal), while re-emitting that
@@ -2893,7 +2915,7 @@ mod water_arc_and_post_study_anticipated_coexist_on_extended_layout {
         ]
     }
 
-    /// Per-stage total hours, mirroring `bucket_topology::study_stage_durations`
+    /// Per-stage total hours, mirroring `DeliveryCalendar::study_total_hours`
     /// for the [`resolve_spread`](cobre_sddp::lead_time::resolve_spread) calls
     /// property 3 drives directly.
     fn study_durations() -> Vec<f64> {
@@ -3234,7 +3256,7 @@ mod water_arc_and_post_study_anticipated_coexist_on_extended_layout {
             1.0,
         ))
         .expect("boundary cut must load");
-        inject_boundary_cuts(setup, &boundary_cuts);
+        inject_boundary_cuts(setup, &boundary_cuts).unwrap();
     }
 
     /// Build the terminal pool's frozen LP template: the base structural
@@ -3418,7 +3440,11 @@ mod water_arc_and_post_study_anticipated_coexist_on_extended_layout {
             ant_slot,
         );
 
-        let terminal_pool_id = setup.fcf.pools.len() - 1;
+        let terminal_pool_id = setup
+            .inputs
+            .node_graph
+            .terminal_pool(setup.num_stages())
+            .unwrap();
         let template = freeze_terminal_template(&setup, terminal_pool_id);
         let pool = &setup.fcf.pools[terminal_pool_id];
         let node_id = NodeId(i32::try_from(setup.num_stages() - 1).unwrap_or(0));

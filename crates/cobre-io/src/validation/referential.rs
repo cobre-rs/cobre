@@ -1039,7 +1039,7 @@ fn check_ncs_bounds_and_factors(
     }
 }
 
-/// Validate that a [`VariableRef`] references an existing entity.
+/// Validate that a [`VariableRef`](cobre_core::VariableRef) references an existing entity.
 ///
 /// A dangling reference is an [`ErrorKind::InvalidReference`] error for every
 /// modeled entity type. `Contract` is the sole remaining stub (data-complete but

@@ -37,10 +37,6 @@ fn build_two_row_template() -> StageTemplate {
         row_lower: vec![5.0, -3.0],
         row_upper: vec![5.0, f64::INFINITY],
         n_state: 0,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -64,10 +60,6 @@ fn build_three_row_template() -> StageTemplate {
         row_lower: vec![5.0, -3.0, -1000.0],
         row_upper: vec![5.0, f64::INFINITY, f64::INFINITY],
         n_state: 0,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }

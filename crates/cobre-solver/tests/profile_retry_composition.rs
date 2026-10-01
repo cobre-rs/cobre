@@ -47,10 +47,6 @@ mod tests {
             row_lower: vec![],
             row_upper: vec![],
             n_state: 0,
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: vec![],
             row_scale: vec![],
         }
@@ -60,6 +56,16 @@ mod tests {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         solver.load_model(&make_minimal_template());
         solver
+    }
+
+    fn read_tolerances(solver: &HighsSolver) -> (f64, f64) {
+        let primal = solver
+            .get_double_option(c"primal_feasibility_tolerance")
+            .expect("primal_feasibility_tolerance must be readable");
+        let dual = solver
+            .get_double_option(c"dual_feasibility_tolerance")
+            .expect("dual_feasibility_tolerance must be readable");
+        (primal, dual)
     }
 
     // ── Iteration-cap composition ─────────────────────────────────────────────
@@ -177,12 +183,7 @@ mod tests {
         let mut solver = make_loose_profile_solver();
         solver.apply_retry_level_options_for_test(3);
 
-        let primal = solver
-            .get_double_option(c"primal_feasibility_tolerance")
-            .expect("primal_feasibility_tolerance must be readable");
-        let dual = solver
-            .get_double_option(c"dual_feasibility_tolerance")
-            .expect("dual_feasibility_tolerance must be readable");
+        let (primal, dual) = read_tolerances(&solver);
 
         assert!(
             (primal - 1e-5).abs() < 1e-20,
@@ -199,12 +200,7 @@ mod tests {
         let mut solver = make_loose_profile_solver();
         solver.apply_extended_retry_options_for_test(7);
 
-        let primal = solver
-            .get_double_option(c"primal_feasibility_tolerance")
-            .expect("primal_feasibility_tolerance must be readable");
-        let dual = solver
-            .get_double_option(c"dual_feasibility_tolerance")
-            .expect("dual_feasibility_tolerance must be readable");
+        let (primal, dual) = read_tolerances(&solver);
 
         assert!(
             (primal - 1e-5).abs() < 1e-20,
@@ -221,12 +217,7 @@ mod tests {
         let mut solver = make_loose_profile_solver();
         solver.apply_extended_retry_options_for_test(10);
 
-        let primal = solver
-            .get_double_option(c"primal_feasibility_tolerance")
-            .expect("primal_feasibility_tolerance must be readable");
-        let dual = solver
-            .get_double_option(c"dual_feasibility_tolerance")
-            .expect("dual_feasibility_tolerance must be readable");
+        let (primal, dual) = read_tolerances(&solver);
 
         assert!(
             (primal - 1e-5).abs() < 1e-20,
@@ -243,12 +234,7 @@ mod tests {
         let mut solver = make_loose_profile_solver();
         solver.apply_extended_retry_options_for_test(11);
 
-        let primal = solver
-            .get_double_option(c"primal_feasibility_tolerance")
-            .expect("primal_feasibility_tolerance must be readable");
-        let dual = solver
-            .get_double_option(c"dual_feasibility_tolerance")
-            .expect("dual_feasibility_tolerance must be readable");
+        let (primal, dual) = read_tolerances(&solver);
 
         assert!(
             (primal - 1e-5).abs() < 1e-20,
@@ -281,12 +267,7 @@ mod tests {
         let mut solver = make_strict_profile_solver();
         solver.apply_retry_level_options_for_test(3);
 
-        let primal = solver
-            .get_double_option(c"primal_feasibility_tolerance")
-            .expect("primal_feasibility_tolerance must be readable");
-        let dual = solver
-            .get_double_option(c"dual_feasibility_tolerance")
-            .expect("dual_feasibility_tolerance must be readable");
+        let (primal, dual) = read_tolerances(&solver);
 
         assert!(
             (primal - 1e-8).abs() < 1e-20,
@@ -303,12 +284,7 @@ mod tests {
         let mut solver = make_strict_profile_solver();
         solver.apply_extended_retry_options_for_test(7);
 
-        let primal = solver
-            .get_double_option(c"primal_feasibility_tolerance")
-            .expect("primal_feasibility_tolerance must be readable");
-        let dual = solver
-            .get_double_option(c"dual_feasibility_tolerance")
-            .expect("dual_feasibility_tolerance must be readable");
+        let (primal, dual) = read_tolerances(&solver);
 
         assert!(
             (primal - 1e-8).abs() < 1e-20,
@@ -325,12 +301,7 @@ mod tests {
         let mut solver = make_strict_profile_solver();
         solver.apply_extended_retry_options_for_test(10);
 
-        let primal = solver
-            .get_double_option(c"primal_feasibility_tolerance")
-            .expect("primal_feasibility_tolerance must be readable");
-        let dual = solver
-            .get_double_option(c"dual_feasibility_tolerance")
-            .expect("dual_feasibility_tolerance must be readable");
+        let (primal, dual) = read_tolerances(&solver);
 
         assert!(
             (primal - 1e-7).abs() < 1e-20,
@@ -347,12 +318,7 @@ mod tests {
         let mut solver = make_strict_profile_solver();
         solver.apply_extended_retry_options_for_test(11);
 
-        let primal = solver
-            .get_double_option(c"primal_feasibility_tolerance")
-            .expect("primal_feasibility_tolerance must be readable");
-        let dual = solver
-            .get_double_option(c"dual_feasibility_tolerance")
-            .expect("dual_feasibility_tolerance must be readable");
+        let (primal, dual) = read_tolerances(&solver);
 
         assert!(
             (primal - 1e-7).abs() < 1e-20,

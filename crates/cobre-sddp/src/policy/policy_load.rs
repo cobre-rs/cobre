@@ -2,7 +2,8 @@
 //!
 //! [`validate_policy_load`] is the single entry point for compatibility
 //! validation; every load path (full-FCF warm-start/resume/simulation-only and
-//! boundary-cut injection) routes through it and returns a [`PolicyLoadProof`]
+//! boundary-cut injection) routes through it, which first refuses a policy
+//! written by another Cobre version, and returns a [`PolicyLoadProof`]
 //! kind-typed to [`FullFcf`] or [`BoundaryInjection`] — the only way to obtain
 //! one, so [`FutureCostFunction::new_with_warm_start`],
 //! [`FutureCostFunction::from_deserialized`], and [`inject_boundary_cuts`]
@@ -48,6 +49,10 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::path::Path;
+
+/// The version this build stamps into every checkpoint it writes, and the
+/// only one [`validate_policy_load`] accepts.
+pub const POLICY_COBRE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The constant every unmarked policy checkpoint (no `cost_scale_factor`
 /// provenance) was unconditionally scaled at. A pool or checkpoint whose
@@ -235,22 +240,33 @@ pub struct PolicyLoadProof<K: PolicyLoadKind> {
     _kind: PhantomData<K>,
 }
 
-/// Validate that `source`'s state layout is compatible with `current`'s, per
-/// `K`'s check matrix ([`FullFcf`], [`BoundaryInjection`]). `col_scale`/scaling
-/// is never a compatibility dimension: a state variable's identity and physical
-/// unit are independent of how the LP happens to scale its column. This is the
-/// single entry point for policy-load validation — its success is the only way
-/// to construct a [`PolicyLoadProof<K>`], so every load path routes through it.
+/// Validate that `source` was written by this build's [`POLICY_COBRE_VERSION`]
+/// — checked first, for every `K` — and that `source`'s state layout is
+/// compatible with `current`'s, per `K`'s check matrix ([`FullFcf`],
+/// [`BoundaryInjection`]). `col_scale`/scaling is never a compatibility
+/// dimension: a state variable's identity and physical unit are independent of
+/// how the LP happens to scale its column. This is the single entry point for
+/// policy-load validation — its success is the only way to construct a
+/// [`PolicyLoadProof<K>`], so every load path routes through it.
 ///
 /// # Errors
 ///
-/// Returns [`SddpError::Validation`] under [`FullFcf`] on a
-/// `state_dimension` mismatch, a `num_stages` mismatch, or a per-slot
-/// identity mismatch (see [`compare_manifest_slot_identity`]).
+/// Returns [`SddpError::PolicyVersionMismatch`] if `source_cobre_version` does
+/// not exactly match [`POLICY_COBRE_VERSION`]. Otherwise returns
+/// [`SddpError::Validation`] under [`FullFcf`] on a `state_dimension`
+/// mismatch, a `num_stages` mismatch, or a per-slot identity mismatch (see
+/// [`compare_manifest_slot_identity`]).
 pub fn validate_policy_load<K: PolicyLoadKind>(
+    source_cobre_version: &str,
     source: &PolicyStageManifest<'_>,
     current: &PolicyStageManifest<'_>,
 ) -> Result<PolicyLoadProof<K>, SddpError> {
+    if source_cobre_version != POLICY_COBRE_VERSION {
+        return Err(SddpError::PolicyVersionMismatch {
+            policy_version: source_cobre_version.to_string(),
+        });
+    }
+
     if K::CHECK_STATE_DIMENSION && source.state_dimension != current.state_dimension {
         return Err(SddpError::Validation(format!(
             "policy state_dimension mismatch: policy has {}, current system has {} (a lag-state \
@@ -358,6 +374,40 @@ pub fn compare_graph_manifest_identity(
 /// Build a basis cache from deserialized checkpoint basis records: one entry
 /// per canonical node position, `None` where no record matches.
 ///
+/// `node_dims[pos]` — built once per load from `setup`'s current LP
+/// templates — is `(template columns, template rows)` for node `pos`;
+/// [`build_basis_cache_for_nodes`] refuses a record whose column count
+/// differs, or whose row count falls outside `[template rows, template rows +
+/// its own recorded cut rows]`, before decoding it.
+///
+/// # Errors
+///
+/// Returns [`SddpError::StoredBasisDimensionMismatch`] when a stored record's
+/// column or row count does not fit its node's current LP dimensions.
+pub fn build_basis_cache_from_checkpoint(
+    stage_bases: &[OwnedPolicyBasisRecord],
+    stage_cuts: &[StageCutsReadResult],
+    setup: &StudySetup,
+) -> Result<Vec<Option<CapturedBasis>>, SddpError> {
+    let node_dims: Vec<(usize, usize)> = setup
+        .inputs
+        .node_graph
+        .nodes
+        .iter()
+        .map(|n| {
+            let t = &setup.inputs.stage_data.stage_templates.templates[n.stage.0];
+            (t.num_cols, t.num_rows)
+        })
+        .collect();
+    build_basis_cache_for_nodes(
+        stage_bases,
+        stage_cuts,
+        &setup.inputs.node_graph.node_ids,
+        &setup.inputs.node_graph.node_pool_ids(),
+        &node_dims,
+    )
+}
+
 /// Each basis record is keyed by its own node ordinal (its `stage_id`), so
 /// leaves sharing a pool land in distinct node slots — no `>= num_stages` drop,
 /// no cross-node collision. `u8` status codes decode via
@@ -368,32 +418,46 @@ pub fn compare_graph_manifest_identity(
 ///
 /// # Cut-slot reconstruction
 ///
-/// `row_status` is `[template rows…, cut rows…]`, the trailing `num_cut_rows` in
-/// capture-time [`CutPool::active_cuts`](crate::cut::pool::CutPool::active_cuts)
-/// order (active slots, increasing). A node's cut records live in its OWN pool's
-/// [`StageCutsReadResult`] (`sc.stage_id == node_pools[node]`), never the record
-/// whose pool id happens to equal the node ordinal — the two diverge once
-/// `n_pools != n_nodes` on a branching graph. Slot identity is recovered from
-/// that pool's active records' `slot_index` in increasing order, so
-/// `reconstruct_basis` preserves stored cut-row statuses across cut-set churn.
+/// `base_row_count` is taken from `node_dims[pos]` — the STUDY's own template row
+/// count — never from the record's `row_status.len() - num_cut_rows`: the root
+/// node is captured in the last forward pass, before that iteration's backward
+/// pass appends cuts to its pool, so its recorded `num_cut_rows` (the pool's size
+/// at export) legitimately exceeds the cut rows the basis was captured with. The
+/// trailing `k = row_status.len() - base_row_count` rows are matched to pool slot
+/// identity only when a node's OWN pool's [`StageCutsReadResult`]
+/// (`sc.stage_id == node_pools[node]`, never the record whose pool id happens to
+/// equal the node ordinal) reports its active `slot_index`es as exactly the
+/// unbroken prefix `0..populated` — proof that no cut was deactivated since
+/// capture, so the basis's k oldest cut rows are exactly that pool's first k
+/// slots. `reconstruct_basis` then preserves stored cut-row statuses across
+/// cut-set churn.
 ///
 /// # Graceful fallback
 ///
-/// When the derived active-slot count ≠ `num_cut_rows` (cut selection deactivated
-/// cuts between capture and export) or no cut record matches, fall back to safe
-/// all-template behavior (empty `cut_row_slots`; every cut row reconstructs
-/// BASIC). This changes only the warm-start solve path, never the optimum.
+/// When the pool's active slots are not the unbroken `0..populated` prefix, when
+/// they are fewer than `k`, or when no cut record matches the node's pool at all,
+/// slot identity cannot be proven: `row_status` is truncated to `base_row_count`
+/// and `cut_row_slots` stays empty, so every current cut row reconstructs BASIC.
+/// This changes only the warm-start solve path, never the optimum.
 ///
 /// `node_ids` / `node_pools` are the CURRENT study's, since a resume/warm-start
 /// continues the SAME node topology — never a value recovered from the
 /// checkpoint itself, whose wire carries no node id.
-#[must_use]
-pub fn build_basis_cache_from_checkpoint(
+///
+/// # Errors
+///
+/// Returns [`SddpError::StoredBasisDimensionMismatch`] when a stored record's
+/// column count differs from `node_dims[pos].0`, or its row count falls
+/// outside `[node_dims[pos].1, node_dims[pos].1 + its own num_cut_rows]` —
+/// checked against the RECORDED `num_cut_rows`, never the derived
+/// `base_row_count` below.
+fn build_basis_cache_for_nodes(
     stage_bases: &[OwnedPolicyBasisRecord],
     stage_cuts: &[StageCutsReadResult],
     node_ids: &TypedVec<NodePos, NodeId>,
     node_pools: &TypedVec<NodePos, usize>,
-) -> Vec<Option<CapturedBasis>> {
+    node_dims: &[(usize, usize)],
+) -> Result<Vec<Option<CapturedBasis>>, SddpError> {
     let n_nodes = node_ids.len();
     let mut cache: Vec<Option<CapturedBasis>> = vec![None; n_nodes];
     for record in stage_bases {
@@ -404,40 +468,62 @@ pub fn build_basis_cache_from_checkpoint(
         if node.0 >= n_nodes {
             continue;
         }
+
+        let (expected_cols, expected_template_rows) = node_dims[node.0];
+        let found_cols = record.column_status.len();
+        let found_rows = record.row_status.len();
+        let found_cut_rows = record.num_cut_rows as usize;
+        if found_cols != expected_cols
+            || found_rows < expected_template_rows
+            || found_rows - expected_template_rows > found_cut_rows
+        {
+            return Err(SddpError::StoredBasisDimensionMismatch {
+                node_id: node_ids[node].0,
+                expected_cols,
+                found_cols,
+                expected_template_rows,
+                found_rows,
+                found_cut_rows,
+            });
+        }
+
         let col_status: Vec<BasisStatus> = record
             .column_status
             .iter()
             .map(|&c| BasisStatus::from_discriminant_code(c))
             .collect();
-        let row_status: Vec<BasisStatus> = record
+        let mut row_status: Vec<BasisStatus> = record
             .row_status
             .iter()
             .map(|&r| BasisStatus::from_discriminant_code(r))
             .collect();
 
-        let num_cut = record.num_cut_rows as usize;
         let pool = node_pools[node];
-        let active_slots: Option<Vec<u32>> = stage_cuts
+        let base_row_count = expected_template_rows;
+        let k = row_status.len() - base_row_count;
+        let cut_row_slots = stage_cuts
             .iter()
             .find(|sc| sc.stage_id as usize == pool)
-            .map(|sc| {
-                sc.cuts
+            .and_then(|sc| {
+                let populated = sc.cuts.len();
+                let active: Vec<u32> = sc
+                    .cuts
                     .iter()
                     .filter(|c| c.is_active)
                     .map(|c| c.slot_index)
-                    .collect()
+                    .collect();
+                let is_unbroken_prefix = active.len() == populated
+                    && active.iter().enumerate().all(|(i, &s)| s as usize == i);
+                (is_unbroken_prefix && k <= active.len()).then(|| active[..k].to_vec())
             });
-
-        let (base_row_count, cut_row_slots) = match active_slots {
-            Some(slots) if slots.len() == num_cut && num_cut <= row_status.len() => {
-                (row_status.len() - num_cut, slots)
-            }
-            _ => (row_status.len(), Vec::new()),
-        };
+        let cut_row_slots = cut_row_slots.unwrap_or_else(|| {
+            row_status.truncate(base_row_count);
+            Vec::new()
+        });
         debug_assert_eq!(
             cut_row_slots.len(),
             row_status.len() - base_row_count,
-            "build_basis_cache_from_checkpoint: cut_row_slots length must equal the trailing \
+            "build_basis_cache_for_nodes: cut_row_slots length must equal the trailing \
              cut-row count for the CapturedBasis invariant",
         );
 
@@ -452,7 +538,7 @@ pub fn build_basis_cache_from_checkpoint(
             node_id: node_ids[node],
         });
     }
-    cache
+    Ok(cache)
 }
 
 /// Positional identity of one state-vector slot; `was_active` is excluded —
@@ -869,7 +955,7 @@ fn check_season_compatibility(
 /// a deck missing a plant is usually missing its lag block too. A source
 /// slot with no `current` counterpart is a superset drop, not examined here.
 ///
-/// `identity_index` is [`reconcile::build_identity_index`]'s output over the
+/// `identity_index` is [`super::reconcile::build_identity_index`]'s output over the
 /// source manifest, built once by the caller and shared with
 /// [`build_rebind`] so the source is hashed once, not per consumer; only
 /// probed, never iterated. The missing lists come from a positional walk of
@@ -981,7 +1067,9 @@ fn check_topology_subset(
 ///
 /// # Errors
 ///
-/// Returns [`SddpError::Validation`] if:
+/// Returns [`SddpError::PolicyVersionMismatch`] if the resolved checkpoint's
+/// recorded `cobre_version` does not exactly match [`POLICY_COBRE_VERSION`].
+/// Otherwise returns [`SddpError::Validation`] if:
 /// - The checkpoint cannot be read
 /// - Every pool in the checkpoint carries
 ///   [`STAGE_CUTS_PRICED_STATE_DATE_SENTINEL`] (a pre-dated checkpoint);
@@ -1111,7 +1199,11 @@ pub fn load_boundary_cuts(
         slots: current_manifest,
         graph: &empty_graph,
     };
-    let proof = validate_policy_load::<BoundaryInjection>(&source, &current)?;
+    let proof = validate_policy_load::<BoundaryInjection>(
+        &checkpoint.metadata.cobre_version,
+        &source,
+        &current,
+    )?;
     debug_assert!(
         proof.warnings.is_empty(),
         "BoundaryInjection sets every CHECK_* flag false, so validate_policy_load never \
@@ -1250,12 +1342,17 @@ impl Deref for ValidatedBoundaryCuts {
 /// `boundary_cuts.len()` slots — a leaf never receives a new cut, so no
 /// growable training capacity is reserved. The resulting nonzero
 /// `warm_start_count` is what makes the forward pass treat the terminal
-/// stage as boundary-loaded (`terminal_has_boundary_cuts`) and skip theta zeroing.
+/// stage as boundary-loaded ([`CutPool::has_warm_start_cuts`]) and skip
+/// theta zeroing.
 ///
 /// `boundary_cuts` must come from [`load_boundary_cuts`] or
 /// [`ValidatedBoundaryCuts::from_broadcast_records`] — its private fields
 /// mean a bare `Vec<OwnedPolicyCutRecord>`/slice cannot substitute, so an
 /// unvalidated boundary load cannot compile.
+///
+/// # Errors
+///
+/// Returns [`SddpError::Validation`] if the study has no terminal pool.
 ///
 /// ```compile_fail
 /// use cobre_sddp::{StudySetup, inject_boundary_cuts};
@@ -1267,13 +1364,26 @@ impl Deref for ValidatedBoundaryCuts {
 ///     inject_boundary_cuts(setup, records); // bare records, not ValidatedBoundaryCuts
 /// }
 /// ```
-pub fn inject_boundary_cuts(setup: &mut StudySetup, boundary_cuts: &ValidatedBoundaryCuts) {
+pub fn inject_boundary_cuts(
+    setup: &mut StudySetup,
+    boundary_cuts: &ValidatedBoundaryCuts,
+) -> Result<(), SddpError> {
+    let terminal_idx = setup
+        .inputs
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .ok_or_else(|| {
+            SddpError::Validation(
+                "boundary cuts need a terminal pool, but the study has no terminal stage"
+                    .to_string(),
+            )
+        })?;
     let fcf = &mut setup.fcf;
-    let terminal_idx = fcf.pools.len() - 1;
     let state_dimension = fcf.state_dimension;
     let forward_passes = fcf.forward_passes;
     fcf.pools[terminal_idx] =
         CutPool::new_with_warm_start(state_dimension, forward_passes, 0, boundary_cuts);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1289,8 +1399,8 @@ mod tests {
 
     use super::{
         BoundaryInjection, BoundaryLoadRequest, BoundaryReconciliationReport,
-        BoundaryStateRequirements, CutPool, FullFcf, NodeId, NodePos, PolicyStageManifest,
-        TypedVec, ValidatedBoundaryCuts, boundary_policy_required_lag_depth,
+        BoundaryStateRequirements, CutPool, FullFcf, NodeId, NodePos, POLICY_COBRE_VERSION,
+        PolicyStageManifest, TypedVec, ValidatedBoundaryCuts, boundary_policy_required_lag_depth,
         check_season_compatibility, compare_manifest_slot_identity, inject_boundary_cuts,
         load_boundary_cuts, validate_policy_load,
     };
@@ -3101,6 +3211,112 @@ mod tests {
 
     // ── validate_policy_load tests ────────────────────────────────────────────
 
+    /// `POLICY_COBRE_VERSION` as the source version passes the version gate
+    /// under both `FullFcf` and `BoundaryInjection`.
+    #[test]
+    fn policy_version_accepted_for_every_kind() {
+        let slots = storage_manifest(1, 2);
+        let source = psm(2, 12, &slots);
+        let current = psm(2, 12, &slots);
+
+        assert!(validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current).is_ok());
+        assert!(
+            validate_policy_load::<BoundaryInjection>(POLICY_COBRE_VERSION, &source, &current)
+                .is_ok()
+        );
+    }
+
+    /// A source version other than `POLICY_COBRE_VERSION` is refused under
+    /// both kinds, naming the recorded version.
+    #[test]
+    fn policy_version_refused_for_every_kind() {
+        assert_ne!(POLICY_COBRE_VERSION, "0.0.1");
+        let slots = storage_manifest(1, 2);
+        let source = psm(2, 12, &slots);
+        let current = psm(2, 12, &slots);
+
+        let full_fcf_result = validate_policy_load::<FullFcf>("0.0.1", &source, &current);
+        assert!(
+            matches!(
+                full_fcf_result,
+                Err(SddpError::PolicyVersionMismatch { ref policy_version }) if policy_version == "0.0.1"
+            ),
+            "a different-version source must be refused under FullFcf: {full_fcf_result:?}"
+        );
+
+        let boundary_result = validate_policy_load::<BoundaryInjection>("0.0.1", &source, &current);
+        assert!(
+            matches!(
+                boundary_result,
+                Err(SddpError::PolicyVersionMismatch { ref policy_version }) if policy_version == "0.0.1"
+            ),
+            "a different-version source must be refused under BoundaryInjection: {boundary_result:?}"
+        );
+    }
+
+    /// A version differing only by a suffix, or an empty string, is refused —
+    /// the check is plain string equality, never a prefix or semver match.
+    #[test]
+    fn policy_version_refused_when_only_a_suffix_differs() {
+        let slots = storage_manifest(1, 2);
+        let source = psm(2, 12, &slots);
+        let current = psm(2, 12, &slots);
+        let suffixed = format!("{POLICY_COBRE_VERSION}-rc.1");
+
+        for version in [suffixed.as_str(), ""] {
+            let result = validate_policy_load::<FullFcf>(version, &source, &current);
+            assert!(
+                matches!(result, Err(SddpError::PolicyVersionMismatch { .. })),
+                "{version:?} must be refused: {result:?}"
+            );
+        }
+    }
+
+    /// The version gate runs before the `state_dimension`/`num_stages`/slot
+    /// check matrix: a mismatched version AND a mismatched `state_dimension`
+    /// returns the version variant, not `Validation`.
+    #[test]
+    fn policy_version_checked_before_the_layout() {
+        let slots = storage_manifest(1, 2);
+        let source = psm(10, 12, &slots);
+        let current = psm(8, 12, &slots);
+
+        let result = validate_policy_load::<FullFcf>("0.0.1", &source, &current);
+
+        assert!(
+            matches!(result, Err(SddpError::PolicyVersionMismatch { .. })),
+            "the version gate must win over the state_dimension gate: {result:?}"
+        );
+    }
+
+    /// A boundary source recording a different version is refused by
+    /// `load_boundary_cuts`, before per-slot reconciliation runs.
+    #[test]
+    fn policy_version_refused_at_boundary_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let metadata = cobre_io::CheckpointManifest {
+            cobre_version: "0.0.1".to_string(),
+            ..test_support::checkpoint_metadata(1, chain_graph_manifest(1), producer_block())
+        };
+        write_checkpoint_with_manifest_metadata(tmp.path(), 1, 2, &[10.0, 20.0], &[], &metadata);
+
+        let result = load_boundary_cuts(&BoundaryLoadRequest::new(
+            tmp.path(),
+            fixture_priced_date(0),
+            2,
+            &[],
+            NEUTRAL_LOADING_FACTOR,
+        ));
+
+        assert!(
+            matches!(
+                result,
+                Err(SddpError::PolicyVersionMismatch { ref policy_version }) if policy_version == "0.0.1"
+            ),
+            "a different-version boundary source must be refused before reconciliation: {result:?}"
+        );
+    }
+
     /// Identical `state_dimension`, `num_stages`, and slot-for-slot matching
     /// manifests pass `FullFcf` with no warnings.
     #[test]
@@ -3109,7 +3325,8 @@ mod tests {
         let source = psm(2, 12, &slots);
         let current = psm(2, 12, &slots);
 
-        let report = validate_policy_load::<FullFcf>(&source, &current).unwrap();
+        let report =
+            validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current).unwrap();
 
         assert!(
             report.warnings.is_empty(),
@@ -3127,7 +3344,7 @@ mod tests {
         let source = psm(10, 12, &slots);
         let current = psm(8, 12, &slots);
 
-        let result = validate_policy_load::<FullFcf>(&source, &current);
+        let result = validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current);
 
         assert!(result.is_err(), "state_dimension mismatch must reject");
         let msg = result.unwrap_err().to_string();
@@ -3149,7 +3366,8 @@ mod tests {
         let source = psm(14, 12, &slots);
         let current = psm(17, 12, &slots);
 
-        let result = validate_policy_load::<BoundaryInjection>(&source, &current);
+        let result =
+            validate_policy_load::<BoundaryInjection>(POLICY_COBRE_VERSION, &source, &current);
 
         assert!(
             result.is_ok(),
@@ -3165,7 +3383,7 @@ mod tests {
         let source = psm(14, 12, &slots);
         let current = psm(17, 12, &slots);
 
-        let result = validate_policy_load::<FullFcf>(&source, &current);
+        let result = validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current);
 
         assert!(
             result.is_err(),
@@ -3186,7 +3404,8 @@ mod tests {
         let source = psm(10, 12, &slots);
         let current = psm(10, 24, &slots);
 
-        let full_fcf_result = validate_policy_load::<FullFcf>(&source, &current);
+        let full_fcf_result =
+            validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current);
         assert!(
             full_fcf_result.is_err(),
             "num_stages mismatch must reject FullFcf"
@@ -3196,7 +3415,8 @@ mod tests {
         assert!(msg.contains("12"), "should include source value: {msg}");
         assert!(msg.contains("24"), "should include current value: {msg}");
 
-        let boundary_result = validate_policy_load::<BoundaryInjection>(&source, &current);
+        let boundary_result =
+            validate_policy_load::<BoundaryInjection>(POLICY_COBRE_VERSION, &source, &current);
         assert!(
             boundary_result.is_ok(),
             "num_stages is unchecked under BoundaryInjection: {boundary_result:?}"
@@ -3212,7 +3432,7 @@ mod tests {
         let source = psm(10, 12, &slots);
         let current = psm(8, 24, &slots);
 
-        let result = validate_policy_load::<FullFcf>(&source, &current);
+        let result = validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current);
 
         assert!(result.is_err(), "both-dimension mismatch must reject");
         let msg = result.unwrap_err().to_string();
@@ -3231,7 +3451,7 @@ mod tests {
         let source = psm(2, 12, &source_slots);
         let current = psm(2, 12, &current_slots);
 
-        let result = validate_policy_load::<FullFcf>(&source, &current);
+        let result = validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current);
 
         assert!(result.is_err(), "slot identity mismatch must reject");
         let msg = result.unwrap_err().to_string();
@@ -3259,7 +3479,8 @@ mod tests {
         let source = psm(2, 12, &source_slots);
         let current = psm(2, 6, &current_slots);
 
-        let result = validate_policy_load::<BoundaryInjection>(&source, &current);
+        let result =
+            validate_policy_load::<BoundaryInjection>(POLICY_COBRE_VERSION, &source, &current);
 
         assert!(
             result.is_ok(),
@@ -3292,6 +3513,7 @@ mod tests {
 
         let current_narrow = vec![storage_slot(1), anticipated_slot_at(9, 0, first_month)];
         let full_fcf = validate_policy_load::<FullFcf>(
+            POLICY_COBRE_VERSION,
             &psm(lane_era.len() as u32, 12, &lane_era),
             &psm(current_narrow.len() as u32, 12, &current_narrow),
         );
@@ -3362,7 +3584,8 @@ mod tests {
         let source = psm(2, 12, &[]);
         let current = psm(2, 12, &current_slots);
 
-        let report = validate_policy_load::<FullFcf>(&source, &current).unwrap();
+        let report =
+            validate_policy_load::<FullFcf>(POLICY_COBRE_VERSION, &source, &current).unwrap();
 
         assert_eq!(report.warnings.len(), 1, "absence must surface one warning");
         assert!(
@@ -3406,13 +3629,13 @@ mod tests {
     /// export→disk→load path losslessly — including the CLP-only `Superbasic`
     /// and `Fixed`, which the old `to_highs_code` path folded onto `Nonbasic`/
     /// `Lower`. Encode via `convert_basis_cache`, round-trip through the codec,
-    /// decode via `build_basis_cache_from_checkpoint`.
+    /// decode via `build_basis_cache_for_nodes`.
     #[test]
     fn basis_status_round_trips_through_export_and_load_for_every_variant() {
         use cobre_io::{PolicyBasisRecord, deserialize_stage_basis, serialize_stage_basis};
         use cobre_solver::{Basis, BasisStatus};
 
-        use super::build_basis_cache_from_checkpoint;
+        use super::build_basis_cache_for_nodes;
         use crate::TrainingResult;
         use crate::policy_export::convert_basis_cache;
         use crate::workspace::CapturedBasis;
@@ -3466,12 +3689,14 @@ mod tests {
         let buf = serialize_stage_basis(&record);
         let owned = deserialize_stage_basis(&buf).expect("codec round-trip must succeed");
 
-        let cache = build_basis_cache_from_checkpoint(
+        let cache = build_basis_cache_for_nodes(
             std::slice::from_ref(&owned),
             &[],
             &vec![NodeId(0)].into(),
             &vec![0].into(),
-        );
+            &[(7, 7)],
+        )
+        .expect("a same-shape record must load");
         let recovered = cache[0].as_ref().expect("stage 0 basis must be present");
 
         assert_eq!(
@@ -3494,7 +3719,7 @@ mod tests {
         use cobre_io::{PolicyBasisRecord, deserialize_stage_basis, serialize_stage_basis};
         use cobre_solver::BasisStatus;
 
-        use super::build_basis_cache_from_checkpoint;
+        use super::build_basis_cache_for_nodes;
 
         // HiGHS codes 0..=4, exactly what the pre-canonical writer stored on disk.
         let col_bytes: [u8; 5] = [0, 1, 2, 3, 4];
@@ -3510,12 +3735,14 @@ mod tests {
         let buf = serialize_stage_basis(&record);
         let owned = deserialize_stage_basis(&buf).expect("codec round-trip must succeed");
 
-        let cache = build_basis_cache_from_checkpoint(
+        let cache = build_basis_cache_for_nodes(
             std::slice::from_ref(&owned),
             &[],
             &vec![NodeId(0)].into(),
             &vec![0].into(),
-        );
+            &[(5, 5)],
+        )
+        .expect("a same-shape record must load");
         let recovered = cache[0].as_ref().expect("stage 0 basis must be present");
 
         let expected_col: Vec<BasisStatus> = col_bytes
@@ -3592,31 +3819,43 @@ mod tests {
     /// which for leaves 4/5/6 names no pool at all.
     #[test]
     fn build_basis_cache_from_checkpoint_keys_branching_graph_by_node() {
-        use super::build_basis_cache_from_checkpoint;
+        use super::build_basis_cache_for_nodes;
 
         let node_ids: TypedVec<NodePos, NodeId> = vec![10, 11, 12, 13, 14, 15, 16]
             .into_iter()
             .map(NodeId)
             .collect();
         let node_pools: TypedVec<NodePos, usize> = vec![0, 1, 2, 3, 3, 3, 3].into();
+        let node_dims = [(2, 3); 7];
+        // Ascending per-pool active-slot counts (1/2/3/4): a node wrongly
+        // resolved to a pool with FEWER slots than its own cut-row count falls
+        // back to an empty cut_row_slots rather than coincidentally matching
+        // (a swap to a pool with equal-or-more slots shares the same [0..k)
+        // prefix and is not distinguishable by value alone).
         let stage_cuts = vec![
             pool_cuts(0, &[0]),
-            pool_cuts(1, &[1]),
-            pool_cuts(2, &[2]),
-            pool_cuts(3, &[5, 7]),
+            pool_cuts(1, &[0, 1]),
+            pool_cuts(2, &[0, 1, 2]),
+            pool_cuts(3, &[0, 1, 2, 3]),
         ];
         let stage_bases = vec![
             node_basis(0, 1),
-            node_basis(1, 1),
-            node_basis(2, 1),
-            node_basis(3, 2),
-            node_basis(4, 2),
-            node_basis(5, 2),
-            node_basis(6, 2),
+            node_basis(1, 2),
+            node_basis(2, 3),
+            node_basis(3, 4),
+            node_basis(4, 4),
+            node_basis(5, 4),
+            node_basis(6, 4),
         ];
 
-        let cache =
-            build_basis_cache_from_checkpoint(&stage_bases, &stage_cuts, &node_ids, &node_pools);
+        let cache = build_basis_cache_for_nodes(
+            &stage_bases,
+            &stage_cuts,
+            &node_ids,
+            &node_pools,
+            &node_dims,
+        )
+        .expect("every node's record fits its (2, 3) template");
 
         assert_eq!(cache.len(), 7, "cache is sized by n_nodes, not num_stages");
         for (node, slot) in cache.iter().enumerate() {
@@ -3630,14 +3869,18 @@ mod tests {
             );
         }
 
-        // Interior node 2 (pool 2) recovers pool 2's single active slot.
-        assert_eq!(cache[2].as_ref().unwrap().cut_row_slots, vec![2_u32]);
+        // Interior node 2 (pool 2) recovers pool 2's own active slots — distinct
+        // in length from pool 0's and pool 1's, so a wrong-pool lookup would fail.
+        assert_eq!(
+            cache[2].as_ref().unwrap().cut_row_slots,
+            vec![0_u32, 1_u32, 2_u32]
+        );
         // Every leaf (nodes 3..=6) recovers the SHARED pool 3's active slots,
         // keyed by node_pools[node] == 3 — a node-ordinal key would drop 4/5/6.
         for (node, slot) in cache.iter().enumerate().skip(3) {
             assert_eq!(
                 slot.as_ref().unwrap().cut_row_slots,
-                vec![5_u32, 7_u32],
+                vec![0_u32, 1_u32, 2_u32, 3_u32],
                 "leaf node {node} must recover shared pool 3's active slots"
             );
         }
@@ -3648,20 +3891,224 @@ mod tests {
     /// pre-branching per-stage behavior — one basis per stage, keyed by ordinal.
     #[test]
     fn build_basis_cache_from_checkpoint_chain_is_identity_keyed() {
-        use super::build_basis_cache_from_checkpoint;
+        use super::build_basis_cache_for_nodes;
 
         let node_ids: TypedVec<NodePos, NodeId> = vec![0, 1, 2].into_iter().map(NodeId).collect();
         let node_pools: TypedVec<NodePos, usize> = vec![0, 1, 2].into();
-        let stage_cuts = vec![pool_cuts(0, &[0]), pool_cuts(1, &[3]), pool_cuts(2, &[9])];
-        let stage_bases = vec![node_basis(0, 1), node_basis(1, 1), node_basis(2, 1)];
+        let node_dims = [(2, 3); 3];
+        // Ascending per-pool active-slot counts (1/2/3): a node wrongly resolved
+        // to a pool with FEWER slots than its own cut-row count falls back to an
+        // empty cut_row_slots rather than coincidentally matching (a swap to a
+        // pool with equal-or-more slots shares the same [0..k) prefix and is not
+        // distinguishable by value alone).
+        let stage_cuts = vec![
+            pool_cuts(0, &[0]),
+            pool_cuts(1, &[0, 1]),
+            pool_cuts(2, &[0, 1, 2]),
+        ];
+        let stage_bases = vec![node_basis(0, 1), node_basis(1, 2), node_basis(2, 3)];
 
-        let cache =
-            build_basis_cache_from_checkpoint(&stage_bases, &stage_cuts, &node_ids, &node_pools);
+        let cache = build_basis_cache_for_nodes(
+            &stage_bases,
+            &stage_cuts,
+            &node_ids,
+            &node_pools,
+            &node_dims,
+        )
+        .expect("every node's record fits its (2, 3) template");
 
         assert_eq!(cache.len(), 3);
         assert_eq!(cache[0].as_ref().unwrap().cut_row_slots, vec![0_u32]);
-        assert_eq!(cache[1].as_ref().unwrap().cut_row_slots, vec![3_u32]);
-        assert_eq!(cache[2].as_ref().unwrap().cut_row_slots, vec![9_u32]);
+        assert_eq!(cache[1].as_ref().unwrap().cut_row_slots, vec![0_u32, 1_u32]);
+        assert_eq!(
+            cache[2].as_ref().unwrap().cut_row_slots,
+            vec![0_u32, 1_u32, 2_u32]
+        );
+    }
+
+    // ── stored-basis dimension check ──────────────────────────────────────────
+
+    /// A node-0 basis record with `cols` columns, `rows` total row entries, and
+    /// `num_cut` recorded cut rows.
+    fn dim_basis_record(cols: usize, rows: usize, num_cut: usize) -> OwnedPolicyBasisRecord {
+        OwnedPolicyBasisRecord {
+            stage_id: 0,
+            iteration: 0,
+            column_status: vec![1_u8; cols],
+            row_status: vec![1_u8; rows],
+            num_cut_rows: num_cut as u32,
+        }
+    }
+
+    /// A single node, keyed by its own id and pool 0.
+    fn single_node_ids_and_pools() -> (TypedVec<NodePos, NodeId>, TypedVec<NodePos, usize>) {
+        (vec![NodeId(0)].into(), vec![0].into())
+    }
+
+    #[test]
+    fn stored_basis_with_extra_column_is_refused() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(5, 3, 0)];
+
+        let err = build_basis_cache_for_nodes(&stage_bases, &[], &node_ids, &node_pools, &[(4, 3)])
+            .expect_err("a wider column count must be refused");
+
+        assert!(
+            matches!(
+                err,
+                SddpError::StoredBasisDimensionMismatch {
+                    expected_cols: 4,
+                    found_cols: 5,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn stored_basis_with_fewer_rows_than_the_template_is_refused() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(4, 2, 0)];
+
+        let err = build_basis_cache_for_nodes(&stage_bases, &[], &node_ids, &node_pools, &[(4, 3)])
+            .expect_err("fewer rows than the template must be refused");
+
+        assert!(
+            matches!(
+                err,
+                SddpError::StoredBasisDimensionMismatch {
+                    expected_template_rows: 3,
+                    found_rows: 2,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn stored_basis_with_more_rows_than_recorded_cuts_allow_is_refused() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(4, 6, 2)];
+
+        let err = build_basis_cache_for_nodes(&stage_bases, &[], &node_ids, &node_pools, &[(4, 3)])
+            .expect_err("more rows than the recorded cut count allows must be refused");
+
+        assert!(
+            matches!(
+                err,
+                SddpError::StoredBasisDimensionMismatch {
+                    expected_template_rows: 3,
+                    found_rows: 6,
+                    found_cut_rows: 2,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// The root-record shape: captured before the last backward pass appends
+    /// its cuts, so `row_status` carries fewer trailing rows than the
+    /// `num_cut_rows` recorded at export time — a shape the dimension check admits.
+    #[test]
+    fn stored_basis_captured_before_the_last_cuts_loads() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(4, 4, 3)];
+
+        let cache =
+            build_basis_cache_for_nodes(&stage_bases, &[], &node_ids, &node_pools, &[(4, 3)])
+                .expect("a record within the bound must load");
+
+        assert!(cache[0].is_some(), "the node's basis must be present");
+    }
+
+    #[test]
+    fn stored_basis_with_every_recorded_cut_row_loads() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(4, 5, 2)];
+
+        let cache =
+            build_basis_cache_for_nodes(&stage_bases, &[], &node_ids, &node_pools, &[(4, 3)])
+                .expect("a record within the bound must load");
+
+        assert!(cache[0].is_some(), "the node's basis must be present");
+    }
+
+    /// The root-record shape (consult 1): captured before the last backward pass
+    /// appends its cuts, so the pool's active slots outrun the basis's own cut
+    /// rows. `base_row_count` must come from the template (`node_dims`), not
+    /// `row_status.len() - num_cut_rows`, and the unbroken `0..populated` prefix
+    /// still lets the single captured cut row resolve to slot 0.
+    #[test]
+    fn stored_basis_captured_before_the_last_cuts_keeps_the_template_rows() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(4, 4, 3)];
+        let stage_cuts = vec![pool_cuts(0, &[0, 1, 2])];
+
+        let cache = build_basis_cache_for_nodes(
+            &stage_bases,
+            &stage_cuts,
+            &node_ids,
+            &node_pools,
+            &[(4, 3)],
+        )
+        .expect("a record within the bound must load");
+
+        let cb = cache[0].as_ref().expect("the node's basis must be present");
+        assert_eq!(
+            cb.base_row_count, 3,
+            "base_row_count must come from the template, not row_status.len() - num_cut_rows"
+        );
+        assert_eq!(cb.cut_row_slots, vec![0_u32]);
+    }
+
+    /// When a cut between the captured row and the pool's populated tail was
+    /// deactivated, the active slots are no longer the unbroken `0..populated`
+    /// prefix, so slot identity cannot be proven: `row_status` is truncated to
+    /// the template rows and `cut_row_slots` stays empty.
+    #[test]
+    fn stored_basis_after_cut_deactivation_drops_cut_statuses() {
+        use super::build_basis_cache_for_nodes;
+
+        let (node_ids, node_pools) = single_node_ids_and_pools();
+        let stage_bases = vec![dim_basis_record(4, 4, 3)];
+        let mut pool = pool_cuts(0, &[0, 1, 2]);
+        pool.cuts[1].is_active = false;
+        let stage_cuts = vec![pool];
+
+        let cache = build_basis_cache_for_nodes(
+            &stage_bases,
+            &stage_cuts,
+            &node_ids,
+            &node_pools,
+            &[(4, 3)],
+        )
+        .expect("a record within the bound must load");
+
+        let cb = cache[0].as_ref().expect("the node's basis must be present");
+        assert_eq!(
+            cb.basis.row_status.len(),
+            3,
+            "row_status must be truncated to the template row count once a cut was deactivated"
+        );
+        assert!(
+            cb.cut_row_slots.is_empty(),
+            "cut_row_slots must be empty when slot identity cannot be proven"
+        );
     }
 
     // ── inject_boundary_cuts tests ──────────────────────────────────────────────
@@ -3669,7 +4116,11 @@ mod tests {
     #[test]
     fn inject_boundary_cuts_produces_fixed_capacity_terminal_pool() {
         let mut setup = test_support::oracle_chain_setup(10);
-        let terminal_idx = setup.fcf.pools.len() - 1;
+        let terminal_idx = setup
+            .inputs
+            .node_graph
+            .terminal_pool(setup.num_stages())
+            .unwrap();
         let state_dimension = setup.fcf.state_dimension;
         let records = vec![
             owned_cut(5.0, vec![1.0; state_dimension]),
@@ -3680,7 +4131,7 @@ mod tests {
             report: BoundaryReconciliationReport::default(),
         };
 
-        inject_boundary_cuts(&mut setup, &boundary_cuts);
+        inject_boundary_cuts(&mut setup, &boundary_cuts).unwrap();
 
         let pool = &setup.fcf.pools[terminal_idx];
         assert_eq!(pool.warm_start_count as usize, records.len());
@@ -3698,7 +4149,11 @@ mod tests {
     #[test]
     fn inject_boundary_cuts_active_cuts_matches_growable_construction() {
         let mut setup = test_support::oracle_chain_setup(10);
-        let terminal_idx = setup.fcf.pools.len() - 1;
+        let terminal_idx = setup
+            .inputs
+            .node_graph
+            .terminal_pool(setup.num_stages())
+            .unwrap();
         let state_dimension = setup.fcf.state_dimension;
         let forward_passes = setup.fcf.forward_passes;
         let records = vec![
@@ -3711,7 +4166,7 @@ mod tests {
             report: BoundaryReconciliationReport::default(),
         };
 
-        inject_boundary_cuts(&mut setup, &boundary_cuts);
+        inject_boundary_cuts(&mut setup, &boundary_cuts).unwrap();
 
         let fixed_active: Vec<(usize, f64, Vec<f64>)> = setup.fcf.pools[terminal_idx]
             .active_cuts()
@@ -3759,10 +4214,14 @@ mod tests {
 
         let mut setup_direct = test_support::oracle_chain_setup(10);
         let mut setup_bcast = test_support::oracle_chain_setup(10);
-        inject_boundary_cuts(&mut setup_direct, &direct);
-        inject_boundary_cuts(&mut setup_bcast, &broadcast);
+        inject_boundary_cuts(&mut setup_direct, &direct).unwrap();
+        inject_boundary_cuts(&mut setup_bcast, &broadcast).unwrap();
 
-        let terminal_idx = setup_direct.fcf.pools.len() - 1;
+        let terminal_idx = setup_direct
+            .inputs
+            .node_graph
+            .terminal_pool(setup_direct.num_stages())
+            .unwrap();
         let pool_direct = &setup_direct.fcf.pools[terminal_idx];
         let pool_bcast = &setup_bcast.fcf.pools[terminal_idx];
 

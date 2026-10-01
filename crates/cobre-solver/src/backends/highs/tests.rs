@@ -19,10 +19,6 @@ fn make_fixture_stage_template() -> StageTemplate {
         row_lower: vec![6.0, 14.0],
         row_upper: vec![6.0, 14.0],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -576,7 +572,6 @@ fn test_highs_solve_rejects_undersized_row_basis() {
 /// Self-extracted basis is accepted by non-alien path; `basis_consistency_failures` stays zero.
 #[test]
 fn test_solve_warm_start_non_alien_success() {
-    // Arrange
     let template = make_fixture_stage_template();
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
     solver.load_model(&template);
@@ -588,12 +583,10 @@ fn test_solve_warm_start_non_alien_success() {
     solver.load_model(&template);
     let before = solver.statistics();
 
-    // Act
     let _ = solver
         .solve(Some(&basis))
         .expect("warm-start solve must succeed with self-extracted basis");
 
-    // Assert
     let after = solver.statistics();
     assert_eq!(
         after.basis_consistency_failures - before.basis_consistency_failures,
@@ -642,7 +635,6 @@ fn test_solve_warm_start_rejects_inconsistent_basis() {
         "basis_consistency_failures must increment by 1 for an overcounted basis"
     );
 
-    // Assert the returned error.
     match err_variant {
         Err(SolverError::BasisInconsistent {
             num_row,
@@ -1131,10 +1123,6 @@ mod research_tests {
             row_lower: vec![1.0],
             row_upper: vec![f64::INFINITY],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         };
@@ -1161,10 +1149,6 @@ mod research_tests {
             row_lower: vec![99.0],
             row_upper: vec![99.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         };
@@ -1200,10 +1184,6 @@ mod research_tests {
             row_lower: vec![99.0],
             row_upper: vec![99.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         };

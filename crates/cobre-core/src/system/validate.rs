@@ -1,4 +1,4 @@
-//! Construction-time validation helpers for [`SystemBuilder::build()`].
+//! Construction-time validation helpers for [`SystemBuilder::build()`](crate::SystemBuilder::build).
 
 use std::collections::HashMap;
 

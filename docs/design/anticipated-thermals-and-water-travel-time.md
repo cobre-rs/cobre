@@ -35,9 +35,9 @@ per stage:
 The in-flight amount lives in a **ring of state slots**. Each stage, the ring
 advances one slot; the slot that matures this stage is consumed; a fresh slot is
 deposited. That ring is one shared code primitive — `DeliveryRing`
-(`crates/cobre-sddp/src/lp/builder/delivery_ring.rs`) — and both subsystems occupy
-one contiguous region of the SDDP state vector. They differ only in four
-call-site-local ways, spelled out in §4.
+(`crates/cobre-sddp/src/lp/builder/delivery_ring.rs`) — and each subsystem
+occupies its own region of the SDDP state vector (`Buckets` and
+`CommitmentHold`). They differ in the call-site-local ways §4 tabulates.
 
 ---
 
@@ -147,7 +147,8 @@ Travel time is an **arc attribute declared on the upstream hydro, in hours** —
 discretization in the input**: the user supplies one scalar per plant, and cobre
 derives everything. An arc exists iff `travel_time_hours == Some(t) && t > 0.0 &&
 downstream_id.is_some()` — `0.0` means _undeclared_, not "instant-with-a-bucket"
-(`declared_arcs`, `crates/cobre-sddp/src/setup/bucket_topology.rs`).
+(`TransitBucketTopology::arcs`, resolved once in
+`crates/cobre-sddp/src/bucket_topology.rs`).
 
 The companion input is the **pre-study release history** that seeds the buckets:
 `HydroPastDefluence { hydro_id, start_date, end_date, value_m3s }`
@@ -210,8 +211,8 @@ column_order = [(j, 1), (j, 2), …, (j, L_j)] for each plant j in canonical ord
 ```
 
 `extended` is the study calendar followed by any declared post-study calendar
-(`delivery_stage_durations`), padded with copies of its trailing duration only
-past what that base calendar already covers (`extend_for_resolution`,
+(`DeliveryCalendar::total_hours`), padded with copies of its trailing duration
+only past what that base calendar already covers (`extend_for_resolution`,
 `bucket_topology.rs`). With no declared post-study calendar the base is the
 study-only vector and the formula above is unchanged.
 
@@ -248,13 +249,15 @@ optimal cost.
 
 ### 2.4 LP entry
 
-The topology tables are built once and threaded onto the stage templates (never
-re-derived). Per stage, `build_transit_bucket_row_pos` turns the mask into compact
+The topology tables are resolved once and borrowed by the template build
+(`lp/builder/template.rs`); they are never stored on the templates and never
+re-derived. Per stage, `build_transit_bucket_row_pos` turns the mask into compact
 row positions (`None` = masked). Then:
 
 - **One `DeliveryRing` per downstream plant**, `n_lanes = 1`, over that plant's
-  contiguous sub-range (`transit_bucket_ring`, `crates/cobre-sddp/src/lp/builder/entries.rs`).
-  Ring slot `k` ↔ lag `k+1`.
+  contiguous sub-range (`DeliveryRing::transit_buckets`,
+  `crates/cobre-sddp/src/lp/builder/delivery_ring.rs`). Ring slot `k` ↔ lag
+  `k+1`.
 - **The shift** (`fill_transit_bucket_definition_entries` → `emit_shift_rows`):
   `b_d^out = b_{d+1}^in + (deposits)` — each stage the mass advances one slot
   toward maturity. Emitted mode-independently, outside the block-mode match.
@@ -273,7 +276,7 @@ row positions (`None` = masked). Then:
   the state variable, and the bucket state is already a volume (hm³), so no `τ`
   scaling. Under chronological blocks the maturing mass instead spreads across the
   arrival stage's block rows by a fixed, `block_mode`-independent arrival density
-  `ρ` looked up from a setup-precomputed table (`resolve_chrono_arrival_density`).
+  `ρ` looked up from a setup-precomputed table (`resolve_bucket_arrival_density`).
 
 ### 2.5 Seed and rolling output
 
@@ -317,7 +320,7 @@ on two separate surfaces:
   segment plus a per-`(thermal, post-study stage)` `cost_per_mwh`/`min_mw`/`max_mw`
   an in-study decision delivering past the horizon is priced and bounded against.
   It extends the delivery axis to `n_delivery = n_stages + n_post` — the runtime
-  axis is built by `delivery_stage_durations` in `resolve_anticipated_commitments_core`
+  axis is `DeliveryCalendar::total_hours`, read by `resolve_anticipated_commitments_core`
   (`build_extended_delivery_axis` is the separate cobre-io _validation_ axis used
   for the reach check below); with it absent the axis is study-only and no lead can
   reach a post-study stage. `min_mw == max_mw` pins a fixed post-study profile (a
@@ -390,8 +393,9 @@ uniform-calendar lead (`occupancy[t] = depth[t] + max(0, n_none − 1 − t)`,
 (the pre-delivery-anchor sizing anchor). `k_max` is a pure function of the
 per-plant leads and the delivery calendar — independent of `n_blks`,
 `block_mode`, or the number of decisions. It is computed in
-`AnticipatedResolution::resolve` and the final widen lives in
-`resolve_state_layout` (`crates/cobre-sddp/src/setup/mod.rs`).
+`AnticipatedResolution::resolve`, and the final widen is
+`AnticipatedResolution::ring_size`, called by `resolve_state_layout`
+(`crates/cobre-sddp/src/setup/mod.rs`).
 
 The state region is `S = A·k_max` (see §3.3). The **modular slot key** is keyed
 on the **ring axis**, not the raw delivery axis: the delivery axis with each
@@ -434,21 +438,24 @@ The anticipated ring occupies the whole merged **commitment-hold** region
 slot-major/plant-minor, keyed by delivery-target residue. There is no separate
 appended block: a slot whose delivery target lands past the horizon (`m >=
 n_stages`, reachable only when `post_study_stages.json` extends the delivery axis)
-is one of the ring's own slots, not a trailing lane. Slots beyond a plant's own
-lead `K_i` are structural padding, frozen `[0,0]`.
+is one of the ring's own slots, not a trailing lane. A plant's commitment for
+delivery `m` occupies slot `ring_index(m) mod k_max`, so every plant cycles
+through all `k_max` slots over the horizon; only a slot the LP never latches
+is structurally zero.
 
 `n_anticipated` is the count of thermals with `anticipated_config.is_some()` in
 canonical `System::thermals()` order. The stage-0 seed writes
 `past_anticipated_commitments` into the outgoing block at `slot·n_ant + local_idx`,
-`.take(K_i)` (using the plant's own lead, not `k_max`, so padding stays zero), with
+`.take(K_i)` (seeds exactly the plant's own pre-study deliveries), with
 ids resolved through a position map (never `binary_search`, which breaks under
 staggered commissioning).
 
 ### 3.4 LP entry
 
 The commitment transition is realized entirely by three `[0,0]`-equality row
-families over the one dense `anticipated_ring` (`n_lanes = n_anticipated`, `depth =
-k_max`); `commit_in` is pinned to the previous stage's `commit_out` by column
+families over the one dense ring `DeliveryRing::anticipated` builds
+(`n_lanes = n_anticipated`, `depth = k_max`); `commit_in` is pinned to the
+previous stage's `commit_out` by column
 bounds, so there is no Rust-side shift step. Every `mod k_max` slot key below is
 a **ring-axis** residue (§3.2) — `ring_index(m) mod k_max`, the identity whenever
 the plant declares no fixed post-horizon commitment:
@@ -532,9 +539,10 @@ the commitment valued against a real future.
 
 ## 4. Side by side
 
-Both rings share the `DeliveryRing` skeleton, one contiguous state region, the
-out-by-identity / in-pinned column resolution, the two-sided masking discipline,
-and the dual sign convention. They differ in exactly four call-site-local ways:
+Both rings share the `DeliveryRing` skeleton, the out-by-identity / in-pinned
+column resolution, the two-sided masking discipline, and the dual sign
+convention; each occupies its own state region (`Buckets`, `CommitmentHold`).
+They differ in the call-site-local ways the table lists:
 
 | Aspect                   | Water travel time                                                                 | Anticipated thermal                                                             |
 | ------------------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |

@@ -100,6 +100,15 @@ const DEFAULT_LINES_JSON: &str = r#"{ "lines": [] }"#;
 const DEFAULT_HYDROS_JSON: &str = r#"{ "hydros": [] }"#;
 const DEFAULT_THERMALS_JSON: &str = r#"{ "thermals": [] }"#;
 
+/// Rewrites the cobre version recorded in `policy_dir/manifest.bin`.
+pub fn restamp_policy_version(policy_dir: &Path, version: &str) {
+    let path = policy_dir.join("manifest.bin");
+    let mut manifest =
+        cobre_io::deserialize_checkpoint_manifest(&fs::read(&path).unwrap()).unwrap();
+    manifest.cobre_version = version.to_string();
+    fs::write(&path, cobre_io::serialize_checkpoint_manifest(&manifest)).unwrap();
+}
+
 /// Writes a minimal valid case fixture under `dir`. Each `Some` override
 /// replaces the matching default; buses/lines/hydros use fixed defaults.
 pub fn make_valid_case(

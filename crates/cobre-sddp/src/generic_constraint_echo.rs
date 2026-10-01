@@ -23,10 +23,11 @@ pub fn build_generic_constraint_echo_rows(
 ) -> Vec<GenericConstraintEchoRow> {
     build_echo_rows_from_parts(
         &setup
+            .inputs
             .stage_data
             .stage_templates
             .generic_constraint_row_entries,
-        &setup.study_stage_ids,
+        &setup.inputs.study_stage_ids,
         &setup.resolved_parameters,
         system.generic_constraints(),
     )

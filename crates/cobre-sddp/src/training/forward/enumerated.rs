@@ -39,9 +39,7 @@ use crate::{
     },
     training::{
         backward::extract_state_duals_only,
-        stage_solve_prep::{
-            InflowNoise, LoadNoise, StageSolvePrep, StageSolvePrepParams, StateSource,
-        },
+        stage_solve_prep::{InflowNoise, StageSolvePrep, StageSolvePrepParams, StateSource},
     },
     trajectory::TrajectoryRecord,
     workspace::{BasisStore, CapturedBasis, SolverWorkspace},
@@ -182,16 +180,10 @@ impl EnumeratedForwardScratch {
 
 /// Read-only per-run captures the enumerated claim loop shares across workers.
 pub(crate) struct EnumeratedParams<'a> {
-    pub num_stages: usize,
     pub iteration: u64,
     pub fwd_offset: usize,
     pub local_forward_passes: usize,
     pub total_forward_passes: usize,
-    pub terminal_has_boundary_cuts: bool,
-    pub noise_dim: usize,
-    pub initial_state: &'a [f64],
-    pub lag_accum_seed: &'a [f64],
-    pub lag_weight_seed: &'a [f64],
     pub ctx: &'a StageContext<'a>,
     pub frozen: &'a [StageTemplate],
     pub fcf: &'a FutureCostFunction,
@@ -290,7 +282,7 @@ fn solve_forward_node<S: SolverInterface + Send>(
     // loads (mirrors the `params.dcs.is_none()` basis-capture gate below). A
     // parentless leaf captures nothing → direct backward solve.
     let fusion_cut_state = (params.dcs.is_none()
-        && node_graph.is_external_terminal_leaf(node, params.num_stages))
+        && node_graph.is_external_terminal_leaf(node, horizon.num_stages()))
     .then_some(parent)
     .flatten()
     .map(|p| &training_ctx.cut_state_layouts[node_graph.nodes[p].pool_id]);
@@ -308,7 +300,6 @@ fn solve_forward_node<S: SolverInterface + Send>(
 
     let prep_params = StageSolvePrepParams {
         state_source: StateSource(&ws.current_state),
-        load_noise: LoadNoise::Present,
         inflow_noise: InflowNoise::Transform,
         raw_noise,
     };
@@ -321,7 +312,7 @@ fn solve_forward_node<S: SolverInterface + Send>(
         t,
         &prep_params,
     );
-    if is_terminal && !params.terminal_has_boundary_cuts {
+    if is_terminal && !pool.has_warm_start_cuts() {
         ws.solver.set_col_bounds(&[state.theta], &[0.0], &[0.0]);
     }
 
@@ -356,10 +347,9 @@ fn solve_forward_node<S: SolverInterface + Send>(
             dcs_ctx,
         )?;
         let view = ws.backward_accum.dcs_solve.result_view();
-        let objective = view.objective;
         fill_unscaled(&mut unscaled_primal, view.primal, col_scale);
         capture_fused_terminal_slice(&view, col_scale, fusion_cut_state, fused_out);
-        objective
+        view.objective
     } else {
         let inputs = StageInputs {
             stage_context: ctx,
@@ -375,36 +365,28 @@ fn solve_forward_node<S: SolverInterface + Send>(
         } else {
             run_stage_solve(ws, &inputs)?
         };
-        let objective = view.objective;
         fill_unscaled(&mut unscaled_primal, view.primal, col_scale);
         capture_fused_terminal_slice(&view, col_scale, fusion_cut_state, fused_out);
-        objective
+        view.objective
     };
 
     let d_t = ctx.discount_factor(t);
     // Terminal boundary θ prices the post-horizon value-to-go: KEEP it in the cost
     // (subtracting it, the interior form, drops it from the UB only — understating
     // it below the LB). sddp.md "Terminal boundary FCF in the reported total cost".
-    let stage_cost = if is_terminal && params.terminal_has_boundary_cuts {
+    let stage_cost = if is_terminal && pool.has_warm_start_cuts() {
         view_objective * ctx.cost_scale_factor
     } else {
         (view_objective - d_t * unscaled_primal[state.theta]) * ctx.cost_scale_factor
     };
 
-    let lag_start = state.inflow_lags.start;
-    let lag_len = state.hydro_count * state.max_par_order;
     ws.scratch.lag_matrix_buf.clear();
     ws.scratch
         .lag_matrix_buf
-        .extend_from_slice(&ws.current_state[lag_start..lag_start + lag_len]);
+        .extend_from_slice(&ws.current_state[state.inflow_lags.clone()]);
 
     let stage_lag = ctx.stage_lag(t);
-    let downstream_par_order = ws
-        .scratch
-        .downstream_completed_lags
-        .len()
-        .checked_div(ws.scratch.lag_accumulator.len())
-        .unwrap_or(0);
+    let downstream_par_order = training_ctx.study_dims.downstream_par_order;
     assemble_outgoing_state(
         &mut ws.current_state,
         &unscaled_primal,
@@ -483,7 +465,7 @@ where
     S: SolverInterface + Send,
 {
     let node_graph = params.training_ctx.node_graph;
-    let num_stages = params.num_stages;
+    let num_stages = params.training_ctx.horizon.num_stages();
     let n_state = params.training_ctx.state.n_state;
     let n_workers = workspaces.len().max(1);
     let path_range = params.fwd_offset..params.fwd_offset + params.local_forward_passes;
@@ -731,10 +713,11 @@ fn enumerated_stage_worker<S: SolverInterface + Send>(
     let state_space = params.training_ctx.state;
     let n_state = state_space.n_state;
 
+    let noise_dim = params.training_ctx.stochastic.dim();
     let mut raw_noise_buf = std::mem::take(&mut ws.scratch.raw_noise_buf);
-    raw_noise_buf.resize(params.noise_dim, 0.0_f64);
+    raw_noise_buf.resize(noise_dim, 0.0_f64);
     let mut corr_scratch = std::mem::take(&mut ws.scratch.corr_scratch);
-    corr_scratch.resize(2 * params.noise_dim, 0.0_f64);
+    corr_scratch.resize(2 * noise_dim, 0.0_f64);
 
     #[allow(clippy::cast_possible_truncation)]
     let total_scenarios_u32 = params.total_forward_passes as u32;
@@ -744,17 +727,19 @@ fn enumerated_stage_worker<S: SolverInterface + Send>(
         let node = stage_units[u];
         let local_m = m_rep[node];
         let global_scenario = params.fwd_offset + local_m;
+        let parent_node = parent[node];
 
         // Install the incoming state: the parent visit's outgoing state (already
         // scattered in the previous stage's sequential pass), or the initial
         // state at a root.
         ws.current_state.clear();
-        if let Some(p) = parent[node] {
+        if let Some(p) = parent_node {
             debug_assert!(solved[p], "parent visit must be solved before its child");
             ws.current_state.extend_from_slice(&arena[p].out_state);
             arena[p].accum.restore_into(&mut ws.scratch);
         } else {
-            ws.current_state.extend_from_slice(params.initial_state);
+            ws.current_state
+                .extend_from_slice(params.training_ctx.initial_state);
             seed_root_accumulators(ws, params);
         }
 
@@ -763,7 +748,7 @@ fn enumerated_stage_worker<S: SolverInterface + Send>(
         let (node_opening_offset, node_opening_len) = node_graph.node_opening_range(node);
         let pinned_scenario = node_graph.node_pinned_scenario(node);
 
-        if parent[node].is_none() {
+        if parent_node.is_none() {
             let class_req = ClassSampleRequest {
                 iteration: i32_it,
                 scenario: s32,
@@ -814,7 +799,7 @@ fn enumerated_stage_worker<S: SolverInterface + Send>(
             ws,
             params,
             node,
-            parent[node],
+            parent_node,
             t,
             local_m,
             raw_noise,
@@ -847,14 +832,14 @@ fn seed_root_accumulators<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     params: &EnumeratedParams<'_>,
 ) {
-    if params.lag_accum_seed.is_empty() {
+    if params.training_ctx.lag_accum_seed.is_empty() {
         ws.scratch.lag_accumulator.fill(0.0);
         ws.scratch.lag_weight_accum.fill(0.0);
     } else {
-        ws.scratch.lag_accumulator[..params.lag_accum_seed.len()]
-            .copy_from_slice(params.lag_accum_seed);
-        ws.scratch.lag_weight_accum[..params.lag_weight_seed.len()]
-            .copy_from_slice(params.lag_weight_seed);
+        ws.scratch.lag_accumulator[..params.training_ctx.lag_accum_seed.len()]
+            .copy_from_slice(params.training_ctx.lag_accum_seed);
+        ws.scratch.lag_weight_accum[..params.training_ctx.lag_weight_seed.len()]
+            .copy_from_slice(params.training_ctx.lag_weight_seed);
     }
     ws.scratch.downstream_accumulator.fill(0.0);
     ws.scratch.downstream_weight_accum = 0.0;
@@ -887,6 +872,7 @@ mod tests {
 
     use crate::{
         indexer::StateSpace,
+        lead_time::AnticipatedResolution,
         setup::{StudySetup, node_graph::Traversal},
         test_support,
         training::forward::build_sampler_from_ctx,
@@ -899,7 +885,14 @@ mod tests {
     /// construction rather than by re-deriving the `rc`/`col_scale` math a second time.
     #[test]
     fn capture_fused_terminal_slice_matches_extract_state_duals_only() {
-        let state = StateSpace::new(2, 1, 0, Vec::new(), 0, 0, vec![], &[1, 1]);
+        let state = StateSpace::new(
+            2,
+            1,
+            Vec::new(),
+            vec![],
+            AnticipatedResolution::default(),
+            &[1, 1],
+        );
         let cut_state = CutStateProjection::new(
             &state,
             StageStateConfig {
@@ -968,7 +961,7 @@ mod tests {
         BasisStore,
         Vec<TrajectoryRecord>,
     ) {
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let total_forward_passes =
             usize::try_from(test_support::node_scenario_count(node_graph).expect("scenario count"))
                 .expect("fits usize");
@@ -1003,7 +996,7 @@ mod tests {
         iteration: u64,
         event_sender: Option<&Sender<TrainingEvent>>,
     ) -> EnumeratedForwardResult {
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let stage_ctx = setup.stage_ctx();
         let training_ctx = setup.training_ctx();
         let sampler = build_sampler_from_ctx(&training_ctx).expect("forward sampler");
@@ -1029,16 +1022,10 @@ mod tests {
             .expect("test fixture never exceeds the Sobol dimension cap");
 
         let params = EnumeratedParams {
-            num_stages: setup.num_stages(),
             iteration,
             fwd_offset: 0,
             local_forward_passes: total_forward_passes,
             total_forward_passes,
-            terminal_has_boundary_cuts: false,
-            noise_dim: training_ctx.stochastic.dim(),
-            initial_state: training_ctx.initial_state,
-            lag_accum_seed: training_ctx.lag_accum_seed,
-            lag_weight_seed: training_ctx.lag_weight_seed,
             ctx: &stage_ctx,
             frozen: &frozen,
             fcf: &setup.fcf,
@@ -1059,7 +1046,7 @@ mod tests {
     #[test]
     fn enumerated_forward_captures_fused_slice_only_for_eligible_external_terminal_leaves() {
         let setup = test_support::external_distinct_fan_setup(2, 1);
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let num_stages = setup.num_stages();
 
         let eligible: Vec<NodePos> = (0..node_graph.nodes.len())
@@ -1108,7 +1095,7 @@ mod tests {
             let pool_id = node_graph.nodes[node].pool_id;
             assert_eq!(
                 duals.len(),
-                setup.stage_data.cut_state_layouts[pool_id].n_slots(),
+                setup.inputs.cut_state_layouts[pool_id].n_slots(),
                 "captured duals must span the leaf's own cut-state projection"
             );
             let local_m = scratch.m_rep[node];
@@ -1152,7 +1139,7 @@ mod tests {
     #[test]
     fn enumerated_forward_fused_slice_projects_with_parent_pool_not_leaf_pool() {
         let setup = test_support::external_distinct_fan_setup_heterogeneous_cut_state(2, 1);
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let num_stages = setup.num_stages();
 
         let eligible: Vec<NodePos> = (0..node_graph.nodes.len())
@@ -1172,8 +1159,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("eligible leaf {node:?} must have a parent"));
             let parent_pool = node_graph.nodes[parent].pool_id;
             assert_ne!(
-                setup.stage_data.cut_state_layouts[leaf_pool].n_slots(),
-                setup.stage_data.cut_state_layouts[parent_pool].n_slots(),
+                setup.inputs.cut_state_layouts[leaf_pool].n_slots(),
+                setup.inputs.cut_state_layouts[parent_pool].n_slots(),
                 "fixture power check: leaf pool {leaf_pool} and parent pool {parent_pool} must \
                  project DIFFERENT dimensions, or this test cannot distinguish the fix from the bug"
             );
@@ -1200,13 +1187,13 @@ mod tests {
             let parent_pool = node_graph.nodes[parent].pool_id;
             assert_eq!(
                 duals.len(),
-                setup.stage_data.cut_state_layouts[parent_pool].n_slots(),
+                setup.inputs.cut_state_layouts[parent_pool].n_slots(),
                 "captured duals must span the CUT-GENERATING PARENT's cut-state projection \
                  (the backward's own `SuccessorSpec::cut_state`), not the leaf's own pool"
             );
             assert_ne!(
                 duals.len(),
-                setup.stage_data.cut_state_layouts[leaf_pool].n_slots(),
+                setup.inputs.cut_state_layouts[leaf_pool].n_slots(),
                 "power check: the leaf's own pool dimension must differ from the parent's, or \
                  this assertion cannot distinguish the fix from the wrong-projection bug"
             );
@@ -1218,7 +1205,7 @@ mod tests {
     #[test]
     fn enumerated_forward_generated_terminal_leaf_stays_uncaptured() {
         let setup = test_support::terminal_generated_fan_setup(2, 1);
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let num_stages = setup.num_stages();
 
         assert!(

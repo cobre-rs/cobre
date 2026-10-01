@@ -1,4 +1,4 @@
-//! Warm-start retry-escalation ladder for [`HighsSolver`](super::HighsSolver).
+//! Warm-start retry-escalation ladder for [`HighsSolver`].
 //!
 //! Governs the spurious-INFEASIBLE / spurious-UNBOUNDED recovery path and is
 //! determinism-sensitive.

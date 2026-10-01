@@ -43,7 +43,13 @@
 //!
 //! - `anticipated_gate` — the anticipated-decision temporal-gating free
 //!   functions (`is_anticipated_decision_active_for_delivery`,
-//!   `anticipated_resolution_for`).
+//!   `anticipated_resolution_for`), plus the anticipated ring's
+//!   delivery-axis → ring-slot sweep (`for_each_ring_residue`) and its
+//!   readiness-filtered form (`for_each_live_commitment_slot`).
+//! - `anticipated_plants` — the [`AnticipatedPlants`] typed owner of the
+//!   anticipated-plant set.
+//! - `entity_positions` — the [`EntityPositions`] typed owner: canonical
+//!   `EntityId -> slot` for every position-addressed entity family.
 //! - `layout` — the per-stage geometry satellite type [`EvaporationIndices`]
 //!   (locating one hydro's evaporation columns/row within a stage LP).
 //! - `index` — the base typed vocabulary: [`StateDim`], [`InCol`]/[`OutCol`]
@@ -52,6 +58,9 @@
 //! - `block_grid` — the [`BlockGrid`] typed block-stride address primitive and
 //!   its three shape methods ([`BlockGrid::flat`], [`BlockGrid::fpha_plane`],
 //!   [`BlockGrid::deficit`]).
+//! - `block_row_family` — the [`BlockRowFamily`] typed block-major row-family
+//!   address primitive, the single owner of the one-row-per-entity vs.
+//!   per-block collapse.
 //! - `range_cursor` — the `RangeCursor` running column/row offset allocator
 //!   shared by [`StageLayout`](crate::lp::builder)'s per-stage equipment chains
 //!   and [`StateSpace`]'s stage-invariant state-vector chain.
@@ -73,9 +82,9 @@
 //!   stage's `StageStateConfig` enables (anticipated state always included),
 //!   delegating each column to [`StateSpace::state_to_lp_incoming_column`].
 //! - `entity_index` — entity system/local index vocabulary
-//!   ([`HydroSys`]/[`ThermalSys`]/[`LineSys`], [`FphaLocal`]/[`EvapLocal`]/
-//!   [`FillingTargetLocal`]/[`FloorLocal`]/[`AnticipatedLocal`],
-//!   [`HydroCell`]/[`FphaCellLocal`]).
+//!   ([`HydroSys`]/[`ThermalSys`]/[`LineSys`]/[`BusSys`]/[`NcsSys`]/
+//!   [`PumpingSys`], [`FphaLocal`]/[`EvapLocal`]/[`FillingTargetLocal`]/
+//!   [`FloorLocal`]/[`AnticipatedLocal`], [`HydroCell`]/[`FphaCellLocal`]).
 //! - `hydro_cell` — the [`HydroCellIndex`] partition and [`HydroCell`] type.
 //!
 //! Every public symbol is re-exported here so the `cobre_sddp::indexer::Symbol`
@@ -83,9 +92,12 @@
 //! of which submodule owns it.
 
 mod anticipated_gate;
+mod anticipated_plants;
 mod block_grid;
+mod block_row_family;
 mod cut_state_projection;
 mod entity_index;
+mod entity_positions;
 mod hydro_cell;
 mod index;
 mod layout;
@@ -95,14 +107,18 @@ mod storage_boundary_grid;
 mod study_dimensions;
 
 pub(crate) use anticipated_gate::{
-    anticipated_resolution_for, is_anticipated_decision_active_for_delivery,
+    anticipated_resolution_for, for_each_live_commitment_slot, for_each_ring_residue,
+    is_anticipated_decision_active_for_delivery,
 };
+pub use anticipated_plants::AnticipatedPlants;
 pub use block_grid::BlockGrid;
+pub use block_row_family::BlockRowFamily;
 pub use cut_state_projection::CutStateProjection;
 pub use entity_index::{
-    AnticipatedLocal, EvapLocal, FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal,
-    HydroCell, HydroSys, LineSys, ThermalSys,
+    AnticipatedLocal, BusSys, EvapLocal, FillingTargetLocal, FloorLocal, FphaCellLocal, FphaLocal,
+    HydroCell, HydroSys, LineSys, NcsSys, PumpingSys, ThermalSys,
 };
+pub(crate) use entity_positions::EntityPositions;
 pub use hydro_cell::HydroCellIndex;
 pub use index::{BlockIdx, Boundary, CutSlot, InCol, OutCol, StateDim};
 pub use layout::EvaporationIndices;

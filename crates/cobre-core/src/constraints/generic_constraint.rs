@@ -18,8 +18,9 @@
 //! collapsed stage-level row for a block-independent expression, one row per
 //! block otherwise; stage-level stocks ([`VariableRef::HydroStorage`] and the
 //! storage-boundary variants at their stage endpoints S⁰/Sᴷ) resolve to a single
-//! fixed column; [`VariableRef::HydroEvaporation`] with `None` resolves to block 0
-//! (the stage evaporation in parallel mode). No variant sums over blocks.
+//! fixed column; [`VariableRef::HydroEvaporation`] resolves `None` to block 0, and
+//! on a parallel stage every named block resolves to that same single
+//! stage-level slot. No variant sums over blocks.
 //!
 //! [`VariableRef::HydroTurbined`] and [`VariableRef::HydroGeneration`] additionally
 //! carry `bus_id: Option<EntityId>`, selecting one cell of a plant split across
@@ -128,15 +129,18 @@ pub enum VariableRef {
     },
     /// Signed evaporation flow from a hydro reservoir (m³/s). Positive values
     /// represent net evaporative outflow; negative values represent net rainfall
-    /// input absorbed by the reservoir. `Some(k)` selects block `k`; `None` selects
-    /// block 0, which in parallel mode is the stage evaporation (every block shares
-    /// the same stage endpoints). In chronological mode with `K > 1` the blocks
-    /// differ, so a `None` reference is rejected by generic-constraint validation —
-    /// a block must be named.
+    /// input absorbed by the reservoir. `Some(k)` selects block `k`; `None`
+    /// selects block 0. On a parallel stage every block shares one stage-level
+    /// evaporation slot on the stage endpoints, so `None`/`Some(0)` resolve to
+    /// that slot; generic-constraint validation rejects `Some(k)` for `k >= 1`
+    /// there. In chronological mode with `K > 1` each block has its own slot, so
+    /// a `None` reference is rejected by generic-constraint validation — a block
+    /// must be named.
     HydroEvaporation {
         /// Hydro plant identifier.
         hydro_id: EntityId,
-        /// Block selector; `None` = block 0 (the stage evaporation in parallel mode).
+        /// Block selector; `None` = block 0 (the stage-level slot on a parallel
+        /// stage).
         block_id: Option<usize>,
     },
     /// Water withdrawal from a hydro reservoir (m³/s). Stage-level, not block-specific.
@@ -252,11 +256,18 @@ pub enum VariableRef {
     ///
     /// Local natural inflow PLUS the immediately-upstream cascade releases
     /// (turbined + spilled + diverted) routed down — the inflow side of the water
-    /// balance, not the `z_inflow` column alone. Coefficients are unit `+1.0` on
-    /// every rate column (rate identity in m³/s, NOT the `−τ` volume weighting of
-    /// the storage-balance row). Block-dependent (upstream releases are per-block
-    /// LP columns), so `None` always expands to one row per block, never a
-    /// collapsed stage-level row.
+    /// balance, not the `z_inflow` column alone. For an operating reservoir, an
+    /// upstream release enters with the share of it that the water balance credits
+    /// to this block. That is the whole release when the arc has no water travel
+    /// time. The upstream transit water that matures into this block also enters,
+    /// as a rate. While an upstream plant is not yet built or is retired, its
+    /// local inflow, the releases of the plants above it and the flows diverted
+    /// into it pass straight through to the first operating plant below, and
+    /// enter that plant's term whole, in the block they occur. Pumping into the
+    /// plant is not part of the term. This is a rate
+    /// identity in m³/s, NOT the `−τ` volume weighting of the storage-balance row.
+    /// Block-dependent (upstream releases are per-block LP columns), so `None`
+    /// always expands to one row per block, never a collapsed stage-level row.
     ///
     /// Appended at the END of the enum to preserve every existing variant's
     /// postcard discriminant.
@@ -394,15 +405,9 @@ fn canonical_variable_key(v: &VariableRef) -> (u8, i32, i64, i64) {
             block_sentinel(block_id),
             bus_sentinel(bus_id),
         ),
-        VariableRef::HydroSpillage { hydro_id, block_id } => {
-            (2, hydro_id.0, block_sentinel(block_id), -1)
-        }
-        VariableRef::HydroDiversion { hydro_id, block_id } => {
-            (3, hydro_id.0, block_sentinel(block_id), -1)
-        }
-        VariableRef::HydroOutflow { hydro_id, block_id } => {
-            (4, hydro_id.0, block_sentinel(block_id), -1)
-        }
+        VariableRef::HydroSpillage { hydro_id, block_id } => block_key(2, hydro_id, block_id),
+        VariableRef::HydroDiversion { hydro_id, block_id } => block_key(3, hydro_id, block_id),
+        VariableRef::HydroOutflow { hydro_id, block_id } => block_key(4, hydro_id, block_id),
         VariableRef::HydroGeneration {
             hydro_id,
             block_id,
@@ -413,68 +418,58 @@ fn canonical_variable_key(v: &VariableRef) -> (u8, i32, i64, i64) {
             block_sentinel(block_id),
             bus_sentinel(bus_id),
         ),
-        VariableRef::HydroEvaporation { hydro_id, block_id } => {
-            (6, hydro_id.0, block_sentinel(block_id), -1)
-        }
+        VariableRef::HydroEvaporation { hydro_id, block_id } => block_key(6, hydro_id, block_id),
         VariableRef::HydroWithdrawal { hydro_id } => (7, hydro_id.0, -1, -1),
         VariableRef::ThermalGeneration {
             thermal_id,
             block_id,
-        } => (8, thermal_id.0, block_sentinel(block_id), -1),
-        VariableRef::LineDirect { line_id, block_id } => {
-            (9, line_id.0, block_sentinel(block_id), -1)
-        }
-        VariableRef::LineReverse { line_id, block_id } => {
-            (10, line_id.0, block_sentinel(block_id), -1)
-        }
-        VariableRef::LineExchange { line_id, block_id } => {
-            (11, line_id.0, block_sentinel(block_id), -1)
-        }
-        VariableRef::BusDeficit { bus_id, block_id } => {
-            (12, bus_id.0, block_sentinel(block_id), -1)
-        }
-        VariableRef::BusExcess { bus_id, block_id } => (13, bus_id.0, block_sentinel(block_id), -1),
+        } => block_key(8, thermal_id, block_id),
+        VariableRef::LineDirect { line_id, block_id } => block_key(9, line_id, block_id),
+        VariableRef::LineReverse { line_id, block_id } => block_key(10, line_id, block_id),
+        VariableRef::LineExchange { line_id, block_id } => block_key(11, line_id, block_id),
+        VariableRef::BusDeficit { bus_id, block_id } => block_key(12, bus_id, block_id),
+        VariableRef::BusExcess { bus_id, block_id } => block_key(13, bus_id, block_id),
         VariableRef::PumpingFlow {
             station_id,
             block_id,
-        } => (14, station_id.0, block_sentinel(block_id), -1),
+        } => block_key(14, station_id, block_id),
         VariableRef::PumpingPower {
             station_id,
             block_id,
-        } => (15, station_id.0, block_sentinel(block_id), -1),
+        } => block_key(15, station_id, block_id),
         VariableRef::ContractImport {
             contract_id,
             block_id,
-        } => (16, contract_id.0, block_sentinel(block_id), -1),
+        } => block_key(16, contract_id, block_id),
         VariableRef::ContractExport {
             contract_id,
             block_id,
-        } => (17, contract_id.0, block_sentinel(block_id), -1),
+        } => block_key(17, contract_id, block_id),
         VariableRef::NonControllableGeneration {
             source_id,
             block_id,
-        } => (18, source_id.0, block_sentinel(block_id), -1),
+        } => block_key(18, source_id, block_id),
         VariableRef::NonControllableCurtailment {
             source_id,
             block_id,
-        } => (19, source_id.0, block_sentinel(block_id), -1),
+        } => block_key(19, source_id, block_id),
         VariableRef::AnticipatedDecision { thermal_id } => (20, thermal_id.0, -1, -1),
-        VariableRef::HydroInflow { hydro_id, block_id } => {
-            (21, hydro_id.0, block_sentinel(block_id), -1)
-        }
+        VariableRef::HydroInflow { hydro_id, block_id } => block_key(21, hydro_id, block_id),
         VariableRef::HydroStorageInitial { hydro_id, block_id } => {
-            (22, hydro_id.0, block_sentinel(block_id), -1)
+            block_key(22, hydro_id, block_id)
         }
-        VariableRef::HydroStorageFinal { hydro_id, block_id } => {
-            (23, hydro_id.0, block_sentinel(block_id), -1)
-        }
+        VariableRef::HydroStorageFinal { hydro_id, block_id } => block_key(23, hydro_id, block_id),
         VariableRef::HydroUsefulVolumeInitial { hydro_id, block_id } => {
-            (24, hydro_id.0, block_sentinel(block_id), -1)
+            block_key(24, hydro_id, block_id)
         }
         VariableRef::HydroUsefulVolumeFinal { hydro_id, block_id } => {
-            (25, hydro_id.0, block_sentinel(block_id), -1)
+            block_key(25, hydro_id, block_id)
         }
     }
+}
+
+fn block_key(tag: u8, id: EntityId, block_id: Option<usize>) -> (u8, i32, i64, i64) {
+    (tag, id.0, block_sentinel(block_id), -1)
 }
 
 /// `None` maps to `-1` (a block-independent reference orders before block 0).

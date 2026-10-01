@@ -2,6 +2,28 @@
 
 use super::*;
 
+use super::common::build_setup_in_code_with_models;
+use super::common::in_code_studies::parallel_multiblock_evaporation_study;
+
+fn load_template_with_no_cuts(
+    template: &cobre_solver::StageTemplate,
+) -> cobre_solver::ActiveSolver {
+    use cobre_solver::SolverInterface;
+
+    let mut solver = cobre_solver::ActiveSolver::new().expect("ActiveSolver::new must succeed");
+    solver.load_model(template);
+    let empty_cuts = cobre_solver::RowBatch {
+        num_rows: 0,
+        row_starts: vec![0_i32],
+        col_indices: vec![],
+        values: vec![],
+        row_lower: vec![],
+        row_upper: vec![],
+    };
+    solver.add_rows(&empty_cuts);
+    solver
+}
+
 #[test]
 fn evap_zero_hydros_layout_unchanged() {
     let system = one_hydro_system(1, 0);
@@ -100,9 +122,10 @@ fn evap_row_bounds_equality_at_intercept() {
     .expect("evaporation system ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
 
     // Evaporation row: followed by 4*N operational violation rows.
-    let evap_row = t.num_rows - 1 - 4 * t.n_hydro;
+    let evap_row = t.num_rows - 1 - 4 * n_h;
     assert_eq!(
         t.row_lower[evap_row], intercept_m3s,
         "evaporation row_lower must equal intercept_m3s = {intercept_m3s}, got {}",
@@ -132,12 +155,13 @@ fn evap_col_bounds_and_objective() {
     .expect("evaporation system ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
 
     // The 3 evaporation columns are followed by 1 withdrawal slack + 4 operational
     // violation slack columns (5*N=5 total for N=1).
-    let col_evaporation_flow = t.num_cols - 4 - 5 * t.n_hydro;
-    let col_f_plus = t.num_cols - 3 - 5 * t.n_hydro;
-    let col_f_minus = t.num_cols - 2 - 5 * t.n_hydro;
+    let col_evaporation_flow = t.num_cols - 4 - 5 * n_h;
+    let col_f_plus = t.num_cols - 3 - 5 * n_h;
+    let col_f_minus = t.num_cols - 2 - 5 * n_h;
 
     // The evaporation-outflow column is free-signed: [-q_max, +q_max] where
     // q_max = |intercept_m3s + volume_slope_m3s_per_hm3 * v_max| * margin.
@@ -201,6 +225,7 @@ fn evap_csc_entries_one_hydro_correct_coefficients() {
     .expect("evaporation system ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
 
     // Column layout for 1-hydro system (N=1, L=0, T=0, B=1, K=1):
     //   col 0 = v (storage_out)  col 1 = z_inflow  col 2 = v_in  col 3 = theta
@@ -213,10 +238,10 @@ fn evap_csc_entries_one_hydro_correct_coefficients() {
     //   row 3: evaporation constraint
     //   rows 4-7: operational violation rows
     // Evaporation columns come before withdrawal slack + 4*N operational slacks.
-    let col_evaporation_flow = t.num_cols - 4 - 5 * t.n_hydro;
-    let col_f_plus = t.num_cols - 3 - 5 * t.n_hydro;
-    let col_f_minus = t.num_cols - 2 - 5 * t.n_hydro;
-    let evap_row = t.num_rows - 1 - 4 * t.n_hydro;
+    let col_evaporation_flow = t.num_cols - 4 - 5 * n_h;
+    let col_f_plus = t.num_cols - 3 - 5 * n_h;
+    let col_f_minus = t.num_cols - 2 - 5 * n_h;
+    let evap_row = t.num_rows - 1 - 4 * n_h;
     let water_balance_row = 1_usize; // row_water_balance_start = N = 1
 
     // Entries are sorted by row ascending: [0] = water balance, [1] = evap constraint.
@@ -321,7 +346,8 @@ fn evap_csc_entries_coefficient_scaling() {
     .expect("evaporation system ok");
 
     let t = &result.templates[0];
-    let evap_row = t.num_rows - 1 - 4 * t.n_hydro;
+    let n_h = system.hydros().len();
+    let evap_row = t.num_rows - 1 - 4 * n_h;
     let expected_coeff = -volume_slope_m3s_per_hm3 / 2.0; // -0.02
 
     let entry_v = entries_for_col(t, 0)
@@ -423,9 +449,10 @@ fn evap_csc_entries_two_hydros_independent_rows() {
     .expect("2-evap-hydro system ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
     // 2 evap hydros: evap rows are followed by 4*N operational violation rows.
-    let evap_row_0 = t.num_rows - 2 - 4 * t.n_hydro;
-    let evap_row_1 = t.num_rows - 1 - 4 * t.n_hydro;
+    let evap_row_0 = t.num_rows - 2 - 4 * n_h;
+    let evap_row_1 = t.num_rows - 1 - 4 * n_h;
 
     // Hydro 0 (volume_slope_m3s_per_hm3=0.02): v coefficient = -0.01.
     let entry_v_h0 = entries_for_col(t, 0)
@@ -471,7 +498,8 @@ fn evap_csc_entries_zero_volume_slope_produces_zero_volume_coefficients() {
     .expect("evaporation system ok");
 
     let t = &result.templates[0];
-    let evap_row = t.num_rows - 1 - 4 * t.n_hydro;
+    let n_h = system.hydros().len();
+    let evap_row = t.num_rows - 1 - 4 * n_h;
 
     let entry_v = entries_for_col(t, 0)
         .into_iter()
@@ -514,11 +542,12 @@ fn evap_water_balance_one_hydro_coefficient_is_zeta() {
     .expect("evaporation system ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
 
     let water_balance_row = 1_usize; // row_water_balance_start = N = 1
 
     // evap outflow is the first of 3 evaporation columns; before withdrawal + 4*N op slacks.
-    let col_evaporation_flow = t.num_cols - 4 - 5 * t.n_hydro;
+    let col_evaporation_flow = t.num_cols - 4 - 5 * n_h;
 
     let entries = entries_for_col(t, col_evaporation_flow);
     let entry = entries
@@ -754,6 +783,7 @@ fn evap_water_balance_only_second_hydro_has_evap() {
     .expect("2-hydro evap system ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
 
     // row_water_balance_start = N = 2 (z_inflow rows [0,2)); hydro 0 row 2, hydro 1 row 3.
     let water_balance_row_h0 = 2_usize;
@@ -761,7 +791,7 @@ fn evap_water_balance_only_second_hydro_has_evap() {
 
     // evaporation outflow for hydro 1 (local_idx=0, since only hydro 1 is evap): col_evap_start + 0*3.
     // N=2 withdrawal + 4*N operational slack columns follow evap.
-    let col_evaporation_flow_h1 = t.num_cols - 5 - 5 * t.n_hydro;
+    let col_evaporation_flow_h1 = t.num_cols - 5 - 5 * n_h;
 
     let entries_h1 = entries_for_col(t, col_evaporation_flow_h1);
     let found_h1 = entries_h1
@@ -836,12 +866,13 @@ fn evap_violation_cost_applied_to_slack_columns() {
     .expect("evap violation cost system builds ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
 
     // Evaporation columns (evaporation outflow, f_plus, f_minus) are followed by
     // 1 withdrawal slack + 4*N operational slacks.
-    let col_evaporation_flow = t.num_cols - 4 - 5 * t.n_hydro;
-    let col_f_plus = t.num_cols - 3 - 5 * t.n_hydro;
-    let col_f_minus = t.num_cols - 2 - 5 * t.n_hydro;
+    let col_evaporation_flow = t.num_cols - 4 - 5 * n_h;
+    let col_f_plus = t.num_cols - 3 - 5 * n_h;
+    let col_f_minus = t.num_cols - 2 - 5 * n_h;
 
     let expected_base = 500.0 * 730.0 / COST_SCALE_FACTOR;
 
@@ -880,8 +911,9 @@ fn evap_outflow_objective_is_zero() {
     .expect("evap system with zero k_evap builds ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
     // N=1 withdrawal + 4*N operational slacks follow the 3 evap columns.
-    let col_evaporation_flow = t.num_cols - 4 - 5 * t.n_hydro;
+    let col_evaporation_flow = t.num_cols - 4 - 5 * n_h;
 
     assert!(
         t.objective[col_evaporation_flow].abs() < 1e-12,
@@ -892,7 +924,7 @@ fn evap_outflow_objective_is_zero() {
 
 #[test]
 fn evap_lp_solvable_and_outflow_positive_coefficients() {
-    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
+    use cobre_solver::SolverInterface;
 
     let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
     let evap = evap_set_with_volume_slope(&system, &[0], 1.0, 0.02);
@@ -909,18 +941,8 @@ fn evap_lp_solvable_and_outflow_positive_coefficients() {
     .expect("evap system template build must succeed");
 
     let template = &result.templates[0];
-    let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
-    solver.load_model(template);
-
-    let empty_cuts = RowBatch {
-        num_rows: 0,
-        row_starts: vec![0_i32],
-        col_indices: vec![],
-        values: vec![],
-        row_lower: vec![],
-        row_upper: vec![],
-    };
-    solver.add_rows(&empty_cuts);
+    let n_h = system.hydros().len();
+    let mut solver = load_template_with_no_cuts(template);
 
     // Fix v_in = 1000 hm3 via column bounds on storage_in.
     let col_storage_in = 2_usize; // col 0 = storage_out, col 1 = z_inflow, col 2 = storage_in
@@ -932,7 +954,7 @@ fn evap_lp_solvable_and_outflow_positive_coefficients() {
         .expect("evaporation LP must be feasible and optimal");
 
     // evaporation outflow is the first evaporation column (before withdrawal + 4*N operational slacks).
-    let col_evaporation_flow = template.num_cols - 4 - 5 * template.n_hydro;
+    let col_evaporation_flow = template.num_cols - 4 - 5 * n_h;
     let evaporation_flow = view.primal[col_evaporation_flow];
 
     // Tight lower bound: evaporation outflow >= intercept_m3s + (volume_slope_m3s_per_hm3 / 2) · v_min + (volume_slope_m3s_per_hm3 / 2) · v_in
@@ -947,7 +969,7 @@ fn evap_lp_solvable_and_outflow_positive_coefficients() {
 
 #[test]
 fn evap_violation_slacks_near_zero_feasible_constraint() {
-    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
+    use cobre_solver::SolverInterface;
 
     let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
     let evap = evap_set_with_volume_slope(&system, &[0], 1.0, 0.02);
@@ -964,18 +986,8 @@ fn evap_violation_slacks_near_zero_feasible_constraint() {
     .expect("evap system template build must succeed");
 
     let template = &result.templates[0];
-    let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
-    solver.load_model(template);
-
-    let empty_cuts = RowBatch {
-        num_rows: 0,
-        row_starts: vec![0_i32],
-        col_indices: vec![],
-        values: vec![],
-        row_lower: vec![],
-        row_upper: vec![],
-    };
-    solver.add_rows(&empty_cuts);
+    let n_h = system.hydros().len();
+    let mut solver = load_template_with_no_cuts(template);
 
     let v_in = 1_000.0_f64;
     solver.set_row_bounds(&[0], &[v_in], &[v_in]);
@@ -985,8 +997,8 @@ fn evap_violation_slacks_near_zero_feasible_constraint() {
         .expect("evaporation LP must be feasible and optimal");
 
     // Evaporation violation slack columns are before withdrawal + 4*N operational slacks.
-    let col_f_plus = template.num_cols - 3 - 5 * template.n_hydro;
-    let col_f_minus = template.num_cols - 2 - 5 * template.n_hydro;
+    let col_f_plus = template.num_cols - 3 - 5 * n_h;
+    let col_f_minus = template.num_cols - 2 - 5 * n_h;
     let f_plus = view.primal[col_f_plus];
     let f_minus = view.primal[col_f_minus];
 
@@ -1001,8 +1013,8 @@ fn evap_violation_slacks_near_zero_feasible_constraint() {
 }
 
 #[test]
-fn evap_storage_fixing_dual_differs_from_no_evaporation() {
-    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
+fn evap_incoming_storage_reduced_cost_differs_from_no_evaporation() {
+    use cobre_solver::SolverInterface;
 
     // System with evaporation violation cost (so slacks are penalised).
     let system_evap = evap_hydro_system_with_violation_cost(730.0, 500.0);
@@ -1032,47 +1044,32 @@ fn evap_storage_fixing_dual_differs_from_no_evaporation() {
     )
     .expect("baseline system template build must succeed");
 
-    let solve_and_get_storage_dual = |template: &cobre_solver::StageTemplate| -> f64 {
-        let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
-        solver.load_model(template);
-        let empty_cuts = RowBatch {
-            num_rows: 0,
-            row_starts: vec![0_i32],
-            col_indices: vec![],
-            values: vec![],
-            row_lower: vec![],
-            row_upper: vec![],
-        };
-        solver.add_rows(&empty_cuts);
+    // Storage is pinned via column bounds: col 0 = storage_out, 1 = z_inflow, 2 = storage_in.
+    let col_storage_in = 2_usize;
+    let solve_and_get_storage_reduced_cost = |template: &cobre_solver::StageTemplate| -> f64 {
+        let mut solver = load_template_with_no_cuts(template);
         let v_in = 1_000.0_f64;
-        solver.set_row_bounds(&[0], &[v_in], &[v_in]);
+        solver.set_col_bounds(&[col_storage_in], &[v_in], &[v_in]);
         let view = solver.solve(None).expect("LP must solve to optimal");
-        view.dual[0]
+        view.reduced_costs[col_storage_in]
     };
 
-    let evap_dual = solve_and_get_storage_dual(&evap_result.templates[0]);
-    let base_dual = solve_and_get_storage_dual(&base_result.templates[0]);
+    let evap_rc = solve_and_get_storage_reduced_cost(&evap_result.templates[0]);
+    let base_rc = solve_and_get_storage_reduced_cost(&base_result.templates[0]);
 
     // The evaporation constraint couples evaporation outflow to v and v_in via volume_slope_m3s_per_hm3,
     // so the marginal value of initial storage differs from the no-evaporation case.
-    // Note: with unused bidirectional withdrawal slack columns (pinned to zero),
-    // the solver may produce degenerate duals where both are -0.0 or 0.0.
-    // We compare the raw f64 values to account for this edge case.
-    let evap_rounded = (evap_dual * 1e6).round();
-    let base_rounded = (base_dual * 1e6).round();
-    // When both are zero (degenerate), the test is inconclusive but not a failure.
-    if evap_rounded != 0.0 || base_rounded != 0.0 {
-        assert_ne!(
-            evap_rounded, base_rounded,
-            "storage-fixing dual must differ between evaporation ({evap_dual}) and \
-             no-evaporation ({base_dual}) configurations"
-        );
-    }
+    assert_ne!(
+        (evap_rc * 1e6).round(),
+        (base_rc * 1e6).round(),
+        "incoming-storage reduced cost must differ between evaporation ({evap_rc}) and \
+         no-evaporation ({base_rc}) configurations"
+    );
 }
 
 #[test]
 fn evap_bound_prevents_dump_valve() {
-    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
+    use cobre_solver::SolverInterface;
 
     let system = evap_hydro_system_with_violation_cost(730.0, 500.0);
     let evap = evap_set_with_volume_slope(&system, &[0], 2.0, 0.0001);
@@ -1089,18 +1086,8 @@ fn evap_bound_prevents_dump_valve() {
     .expect("evap dump valve test: template build must succeed");
 
     let template = &result.templates[0];
-    let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
-    solver.load_model(template);
-
-    let empty_cuts = RowBatch {
-        num_rows: 0,
-        row_starts: vec![0_i32],
-        col_indices: vec![],
-        values: vec![],
-        row_lower: vec![],
-        row_upper: vec![],
-    };
-    solver.add_rows(&empty_cuts);
+    let n_h = system.hydros().len();
+    let mut solver = load_template_with_no_cuts(template);
 
     // col 0 = storage_out, col 1 = z_inflow, col 2 = storage_in (N=1, L=0).
     let col_storage_in = 2_usize;
@@ -1129,8 +1116,8 @@ fn evap_bound_prevents_dump_valve() {
     // col 7: deficit, col 8: excess.
     // Evaporation columns: evaporation outflow, f_plus, f_minus, then withdrawal + 4*N operational slacks.
     let col_spillage = 5;
-    let col_evaporation_flow = template.num_cols - 4 - 5 * template.n_hydro;
-    let col_f_minus = template.num_cols - 2 - 5 * template.n_hydro;
+    let col_evaporation_flow = template.num_cols - 4 - 5 * n_h;
+    let col_f_minus = template.num_cols - 2 - 5 * n_h;
 
     let evaporation_flow = view.primal[col_evaporation_flow];
     let f_minus = view.primal[col_f_minus];
@@ -1153,5 +1140,106 @@ fn evap_bound_prevents_dump_valve() {
     assert!(
         spillage > 1e-6,
         "spillage must be positive when excess water needs dumping, got {spillage}"
+    );
+}
+
+/// On every stage of a parallel multi-block study, the StudySetup-built LP
+/// reserves exactly one evaporation slot per evaporating hydro, coupled with
+/// the stage's `ζ` on the water row, its violation slacks priced at the
+/// violation cost times the stage's total hours (744 h = 200 + 244 + 300), and
+/// its evaporation row's storage entries confined to the incoming/outgoing
+/// storage columns.
+#[test]
+fn parallel_multiblock_evaporation_study_has_one_priced_stage_slot() {
+    const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0;
+    use cobre_sddp::indexer::Boundary;
+    use cobre_sddp::indexer::HydroSys;
+
+    let (system, config, hydro_models) = parallel_multiblock_evaporation_study();
+    let setup = build_setup_in_code_with_models(system, &config, hydro_models);
+    let state = cobre_sddp::test_support::state_space(&setup);
+    let templates = &setup.inputs.stage_data.stage_templates;
+    let total_stage_hours = 744.0_f64;
+
+    let unscale = |t: &StageTemplate, r: usize, c: usize, v: f64| -> f64 {
+        let rs = t.row_scale.get(r).copied().unwrap_or(1.0);
+        let cs = t.col_scale.get(c).copied().unwrap_or(1.0);
+        v / (rs * cs)
+    };
+    let unscale_objective = |t: &StageTemplate, c: usize| -> f64 {
+        let cs = t.col_scale.get(c).copied().unwrap_or(1.0);
+        t.objective[c] * templates.cost_scale_factor / cs
+    };
+
+    for (s, t) in templates.templates.iter().enumerate() {
+        let g = &templates.geometry_per_stage[s];
+        assert_eq!(
+            g.evap_indices.len(),
+            1,
+            "stage {s}: a parallel stage must reserve exactly one evaporation slot"
+        );
+        let ei = g.evap_indices[0];
+        let zeta = templates.block_hours_per_stage[s].iter().sum::<f64>() * M3S_TO_HM3;
+
+        let water_value = csc_entry(t, ei.evaporation_flow_col, g.water_balance.start())
+            .expect("evaporation flow column must have an entry on the water row");
+        let unscaled_water = unscale(
+            t,
+            g.water_balance.start(),
+            ei.evaporation_flow_col,
+            water_value,
+        );
+        assert!(
+            (unscaled_water - zeta).abs() < 1e-12 * zeta.abs(),
+            "stage {s}: unscaled water-row coefficient must equal zeta = {zeta}, got {unscaled_water}"
+        );
+
+        let unscaled_f_plus = unscale_objective(t, ei.f_evap_plus_col);
+        let expected_f_plus = 7.0 * total_stage_hours;
+        assert!(
+            (unscaled_f_plus - expected_f_plus).abs() < 1e-12 * expected_f_plus,
+            "stage {s}: unscaled f_evap_plus objective must equal {expected_f_plus}, got {unscaled_f_plus}"
+        );
+
+        let unscaled_f_minus = unscale_objective(t, ei.f_evap_minus_col);
+        let expected_f_minus = 11.0 * total_stage_hours;
+        assert!(
+            (unscaled_f_minus - expected_f_minus).abs() < 1e-12 * expected_f_minus,
+            "stage {s}: unscaled f_evap_minus objective must equal {expected_f_minus}, got {unscaled_f_minus}"
+        );
+
+        let cols_at_evap_row: Vec<usize> = (0..t.num_cols)
+            .filter(|&c| csc_entry(t, c, ei.evap_row).is_some())
+            .collect();
+        let mut expected_cols = vec![
+            g.storage_boundary_grid()
+                .col(state, HydroSys::new(0), Boundary::Incoming),
+            g.storage_boundary_grid()
+                .col(state, HydroSys::new(0), Boundary::Outgoing),
+            ei.evaporation_flow_col,
+            ei.f_evap_plus_col,
+            ei.f_evap_minus_col,
+        ];
+        expected_cols.sort_unstable();
+        assert_eq!(
+            cols_at_evap_row, expected_cols,
+            "stage {s}: evaporation row's storage entries must be confined to the incoming/outgoing storage columns"
+        );
+    }
+}
+
+/// The parallel-multiblock-evaporation fixture's stage 0 is a 3-block
+/// parallel stage with active evaporation.
+#[test]
+fn parallel_evaporation_fixture_evaporates_on_a_multiblock_parallel_stage() {
+    let (system, config, hydro_models) = parallel_multiblock_evaporation_study();
+    let setup = build_setup_in_code_with_models(system, &config, hydro_models);
+
+    let geometry = &setup.inputs.stage_data.stage_templates.geometry_per_stage[0];
+    assert_eq!(geometry.block_mode, cobre_core::BlockMode::Parallel);
+    assert_eq!(geometry.n_blks, 3);
+    assert!(
+        !geometry.evap_hydro_indices.is_empty(),
+        "stage 0 must have an active evaporation slot"
     );
 }

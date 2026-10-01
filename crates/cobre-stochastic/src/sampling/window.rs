@@ -1,12 +1,15 @@
 //! Historical window discovery algorithm.
 //!
 //! A "window" is a starting year `y` such that every hydro in the study has a
-//! contiguous sequence of historical observations covering `max_par_order +
-//! n_study_stages` seasons beginning in year `y`. Observations align to study
-//! stages by `season_id` matching, not by raw calendar arithmetic.
+//! historical observation for every study season and every pre-study lag
+//! season the season-map walk resolves. Observations align to study stages by
+//! `season_id` matching, not by raw calendar arithmetic.
 //!
 //! `build_observation_sequence` owns the `(year_offset, season_id)` layout the
-//! window year is resolved against.
+//! window year is resolved against; its lag entries come from
+//! [`StageCalendar::season_occurrences`](crate::season_cast::StageCalendar::season_occurrences),
+//! never from arithmetic on declared season ids. `y` is the first study
+//! observation's year.
 
 use std::collections::HashSet;
 
@@ -125,14 +128,8 @@ pub fn discover_historical_windows(
         })
         .collect();
 
-    let n_seasons = stages
-        .iter()
-        .filter_map(|s| s.season_id)
-        .max()
-        .map_or(1, |m| m + 1);
-
     let required_sequence: Vec<(i32, usize)> =
-        super::build_observation_sequence(stages, max_par_order, n_seasons);
+        super::build_observation_sequence(stages, max_par_order, season_map);
 
     let mut candidate_years: Vec<i32> = match user_pool {
         Some(pool) => pool.to_years(),
@@ -198,17 +195,18 @@ fn is_window_complete(
     clippy::float_cmp
 )]
 mod tests {
-    use chrono::NaiveDate;
+    use chrono::{Datelike, NaiveDate};
     use cobre_core::{
         EntityId,
         scenario::{HistoricalYears, InflowHistoryRow},
         temporal::{
-            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-            StageStateConfig,
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, SeasonCycleType, SeasonDefinition,
+            SeasonMap, Stage, StageRiskConfig, StageStateConfig,
         },
     };
 
     use super::discover_historical_windows;
+    use crate::season_cast::{nth_previous_occurrence, season_period_window};
     use crate::test_support::{MonthlyLabels, monthly_season_map, quarterly_season_map};
 
     fn monthly_history(hydro_id: EntityId, from_year: i32, to_year: i32) -> Vec<InflowHistoryRow> {
@@ -555,6 +553,179 @@ mod tests {
         assert_eq!(
             windows_none, expected,
             "monthly study must discover windows 1991–2010"
+        );
+    }
+
+    fn three_monthly_stages(year: i32) -> Vec<Stage> {
+        [(0_usize, 0_i32, 1_u32), (1, 1, 2), (2, 2, 3)]
+            .into_iter()
+            .map(|(index, id, month)| Stage {
+                index,
+                id,
+                start_date: NaiveDate::from_ymd_opt(year, month, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(year, month, 28).unwrap(),
+                season_id: Some(index),
+                blocks: vec![Block {
+                    index: 0,
+                    name: "SINGLE".to_string(),
+                    duration_hours: 720.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 5,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect()
+    }
+
+    fn history_row(hydro_id: EntityId, year: i32, month: u32, value: f64) -> InflowHistoryRow {
+        let start_date = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+        InflowHistoryRow {
+            hydro_id,
+            start_date,
+            end_date: start_date
+                .checked_add_months(chrono::Months::new(1))
+                .unwrap(),
+            value_m3s: value,
+        }
+    }
+
+    /// A sparse `Custom` map: `[0 Jan, 1 Feb, 2 Mar, 12 Apr-Jun, 13 Jul-Sep]`,
+    /// the same shape as `stochastic_pipeline.rs`'s `ring_season_map`.
+    fn sparse_ring_season_map() -> SeasonMap {
+        let def = |id: usize, month_start: u32, month_end: Option<u32>| SeasonDefinition {
+            id,
+            label: format!("S{id}"),
+            month_start,
+            day_start: None,
+            month_end,
+            day_end: None,
+        };
+        SeasonMap {
+            cycle_type: SeasonCycleType::Custom,
+            seasons: vec![
+                def(0, 1, None),
+                def(1, 2, None),
+                def(2, 3, None),
+                def(12, 4, Some(6)),
+                def(13, 7, Some(9)),
+            ],
+        }
+    }
+
+    #[test]
+    fn discover_walks_the_calendar_predecessor_on_a_partial_year_study() {
+        let hydro = EntityId(1);
+        let stages = three_monthly_stages(2024);
+        let sm = monthly_season_map(MonthlyLabels::ZeroBased);
+
+        let mut history: Vec<InflowHistoryRow> = Vec::new();
+        for &year in &[1991, 1992] {
+            for month in 1..=3u32 {
+                history.push(history_row(hydro, year, month, 100.0));
+            }
+        }
+        history.push(history_row(hydro, 1990, 12, 50.0));
+        history.push(history_row(hydro, 1991, 12, 50.0));
+
+        let windows =
+            discover_historical_windows(&history, &[hydro], &stages, 1, None, Some(&sm), 10)
+                .unwrap();
+
+        assert_eq!(windows, vec![1991, 1992]);
+    }
+
+    #[test]
+    fn discover_covers_lags_beyond_the_declared_span() {
+        let hydro = EntityId(1);
+        let stages = three_monthly_stages(2024);
+        let sm = monthly_season_map(MonthlyLabels::ZeroBased);
+        let history = monthly_history(hydro, 1990, 1992);
+
+        let windows =
+            discover_historical_windows(&history, &[hydro], &stages, 6, None, Some(&sm), 10)
+                .unwrap();
+
+        assert_eq!(windows, vec![1991, 1992]);
+    }
+
+    #[test]
+    fn discover_requires_the_ring_predecessor_on_a_sparse_id_map() {
+        let hydro = EntityId(1);
+        let stages = three_monthly_stages(2026);
+        let sm = sparse_ring_season_map();
+
+        let mut history: Vec<InflowHistoryRow> = Vec::new();
+        for &year in &[2024, 2025] {
+            for month in 1..=3u32 {
+                history.push(history_row(hydro, year, month, 100.0));
+            }
+        }
+        history.push(history_row(hydro, 2023, 8, 999.0));
+        history.push(history_row(hydro, 2024, 8, 999.0));
+
+        let windows =
+            discover_historical_windows(&history, &[hydro], &stages, 1, None, Some(&sm), 10)
+                .unwrap();
+
+        assert_eq!(windows, vec![2024, 2025]);
+    }
+
+    #[test]
+    fn discover_lag_entries_follow_nth_previous_occurrence() {
+        let hydro = EntityId(1);
+        let stages = three_monthly_stages(2024);
+        let sm = monthly_season_map(MonthlyLabels::ZeroBased);
+        let jan = sm.seasons.iter().find(|d| d.id == 0).unwrap();
+        let anchor = season_period_window(&sm, jan, &stages[0]);
+        let history = monthly_history(hydro, 1990, 1993);
+
+        for k in 1..=3 {
+            let occ = nth_previous_occurrence(&sm, jan, &anchor, k).unwrap();
+            let target_year = 1992 + (occ.start.year() - stages[0].start_date.year());
+            let target_month = occ.start.month();
+
+            let probe_history: Vec<InflowHistoryRow> = history
+                .iter()
+                .filter(|r| {
+                    !(r.start_date.year() == target_year && r.start_date.month() == target_month)
+                })
+                .cloned()
+                .collect();
+
+            let windows = discover_historical_windows(
+                &probe_history,
+                &[hydro],
+                &stages,
+                3,
+                None,
+                Some(&sm),
+                10,
+            )
+            .unwrap();
+            assert!(
+                !windows.contains(&1992),
+                "removing the walk's k={k} lag row must exclude window 1992"
+            );
+        }
+
+        let probe_history: Vec<InflowHistoryRow> = history
+            .iter()
+            .filter(|r| !(r.start_date.year() == 1991 && r.start_date.month() == 3))
+            .cloned()
+            .collect();
+        let windows =
+            discover_historical_windows(&probe_history, &[hydro], &stages, 3, None, Some(&sm), 10)
+                .unwrap();
+        assert!(
+            windows.contains(&1992),
+            "removing Mar 1991, a row the walk does not name, must not exclude window 1992"
         );
     }
 }

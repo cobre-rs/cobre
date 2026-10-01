@@ -18,6 +18,7 @@ use super::types::{
     LinearizedEvaporation,
 };
 use crate::SddpError;
+use crate::block_clock::BlockClock;
 // ── Evaporation model resolution ──────────────────────────────────────────────
 
 /// Resolve per-hydro linearized evaporation models from a pre-parsed
@@ -47,7 +48,7 @@ use crate::SddpError;
 /// stage would cancel and deposit a whole month of evaporation on any stage,
 /// whereas dividing by the month makes it a monthly-average rate, so a stage
 /// deposits only its `stage_hours / month_hours` share.
-/// `month` is the 0-based calendar month [`month_of`](cobre_core::month_of)
+/// `month` is the 0-based calendar month [`month_of`]
 /// derives from `stage.start_date` — not `stage.season_id`, whose meaning is
 /// cycle-dependent (`Monthly`, `Weekly`, `Custom`) and only equals the calendar
 /// month under the `Monthly` convention.
@@ -104,10 +105,8 @@ pub fn resolve_evaporation_models_from_artifacts(
         ));
     }
 
-    let geometry_rows: &[HydroGeometryRow] = &artifacts.hydro_geometry;
-
     let mut geometry_map: HashMap<EntityId, Vec<&HydroGeometryRow>> = HashMap::new();
-    for row in geometry_rows {
+    for row in &artifacts.hydro_geometry {
         geometry_map.entry(row.hydro_id).or_default().push(row);
     }
     // Interpolation below assumes ascending volume order.
@@ -121,7 +120,7 @@ pub fn resolve_evaporation_models_from_artifacts(
 }
 
 /// Hours in `date`'s calendar month, leap-aware. The evaporation-rate divisor
-/// (see [`resolve_evaporation_models`]): a stage deposits its
+/// (see [`resolve_evaporation_models_from_artifacts`]): a stage deposits its
 /// `stage_hours / month_hours` share of the month's evaporation.
 fn hours_in_calendar_month(date: NaiveDate) -> f64 {
     let days = match date.month() {
@@ -140,11 +139,11 @@ fn is_leap_year(year: i32) -> bool {
 }
 
 /// Core evaporation linearization over pre-loaded data, split from
-/// [`resolve_evaporation_models`] so unit tests can run without disk I/O.
+/// [`resolve_evaporation_models_from_artifacts`] so unit tests can run without disk I/O.
 ///
 /// # Errors
 ///
-/// Same error conditions as [`resolve_evaporation_models`].
+/// Same error conditions as [`resolve_evaporation_models_from_artifacts`].
 // Rationale: a type alias would hide the three concrete output types; splitting
 // the per-stage loop would thread several computed intermediates across helper
 // boundaries.
@@ -246,7 +245,7 @@ fn resolve_evaporation_core(
                     (midpoint_v, midpoint_area, midpoint_slope)
                 };
 
-            let stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+            let stage_hours = BlockClock::new(stage).total_hours();
 
             // A zero-duration stage no longer surfaces as a non-finite coefficient
             // below (the divisor is now the calendar month, never zero), so reject

@@ -28,7 +28,7 @@ use crate::{
         state::{SimulationInputs, SimulationState},
     },
     solve::solver_phase::Phase,
-    test_support::{self, permissive_state_boxes},
+    test_support::{self, StageContextFixture, permissive_state_boxes},
     workspace::{BackwardAccumulators, CapturedBasis, ScratchBuffers, SolverWorkspace},
 };
 
@@ -261,57 +261,6 @@ impl SolverInterface for MockSolver {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Minimal valid stage template for N=1 hydro, L=0 PAR order.
-///
-/// Column layout (N=1, L=0):
-/// - col 0: `storage_out` (no NZ in structural rows)
-/// - col 1: `z_inflow` (no NZ — `z_inflow` row at row 1)
-/// - col 2: `storage_in` (1 NZ: row 0, storage-fixing row)
-/// - col 3: `theta` (no NZ)
-///
-/// Row layout:
-/// - row 0: storage-fixing (`storage_out` fixed to incoming state)
-/// - row 1: `z_inflow` definition row
-fn minimal_template_1_0() -> StageTemplate {
-    StageTemplate {
-        num_cols: 4,
-        num_rows: 2,
-        num_nz: 1,
-        col_starts: vec![0_i32, 0, 0, 1, 1],
-        row_indices: vec![0_i32],
-        values: vec![1.0],
-        col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY; 4],
-        objective: vec![0.0, 0.0, 0.0, 1.0],
-        row_lower: vec![0.0, 0.0],
-        row_upper: vec![0.0, 0.0],
-        n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
-        col_scale: Vec::new(),
-        row_scale: Vec::new(),
-    }
-}
-
-/// Build a fixed `LpSolution` for the minimal N=1 L=0 template.
-///
-/// N=1 L=0 column layout: `storage`(0), `z_inflow`(1), `storage_in`(2), `theta`(3).
-fn fixed_solution(objective: f64, theta_val: f64) -> LpSolution {
-    let num_cols = 4;
-    let mut primal = vec![0.0_f64; num_cols];
-    primal[3] = theta_val;
-    LpSolution {
-        objective,
-        primal,
-        dual: vec![0.0_f64; 2],
-        reduced_costs: vec![0.0_f64; num_cols],
-        iterations: 0,
-        solve_time_seconds: 0.0,
-    }
-}
-
 /// Build a minimal `EntityCounts` for 1 hydro, no other entities.
 fn entity_counts_1_hydro() -> EntityCounts {
     EntityCounts {
@@ -497,7 +446,7 @@ fn zero_energy_conversion(n_hydros: usize, n_stages: usize) -> EnergyConversionS
     EnergyConversionSet::new(
         vec![vec![zero_ec; n_stages]; n_hydros],
         vec![vec![0.0_f64; n_stages]; n_hydros],
-        n_hydros,
+        &crate::test_support::minimal_hydros(n_hydros),
         n_stages,
     )
 }
@@ -508,14 +457,19 @@ fn single_workspace_with_load_buses(
     solver: MockSolver,
     n_load_buses: usize,
 ) -> Vec<SolverWorkspace<MockSolver>> {
+    let load_bus_indices: Vec<usize> = (0..n_load_buses).collect();
+    let geometry = test_support::equipment_free_geometry(&[1]);
     vec![SolverWorkspace {
         rank: 0,
         worker_id: 0,
         solver: ProfiledSolver::new(solver),
-        patch_buf: PatchBuffer::new(1, 0, n_load_buses, 1, 0, 0, 0),
+        patch_buf: PatchBuffer::new(
+            &test_support::state_layout(1, 0),
+            &load_bus_indices,
+            &geometry,
+        ),
         current_state: Vec::with_capacity(1),
         scratch: ScratchBuffers {
-            noise_buf: Vec::new(),
             inflow_m3s_buf: Vec::new(),
             lag_matrix_buf: Vec::new(),
             par_inflow_buf: Vec::new(),
@@ -561,10 +515,9 @@ fn single_workspace(solver: MockSolver) -> Vec<SolverWorkspace<MockSolver>> {
         rank: 0,
         worker_id: 0,
         solver: ProfiledSolver::new(solver),
-        patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0), // N=1, L=0
+        patch_buf: PatchBuffer::new(&test_support::state_layout(1, 0), &[], &[]), // N=1, L=0
         current_state: Vec::with_capacity(1),
         scratch: ScratchBuffers {
-            noise_buf: Vec::new(),
             inflow_m3s_buf: Vec::new(),
             lag_matrix_buf: Vec::new(),
             par_inflow_buf: Vec::new(),
@@ -760,28 +713,7 @@ fn make_stochastic_context_1_hydro_1_load_bus_sim(mean_mw: f64, std_mw: f64) -> 
 #[test]
 fn simulation_load_patches_applied() {
     let n_stages = 1;
-    let template = StageTemplate {
-        num_cols: 3,
-        num_rows: 3,
-        num_nz: 1,
-        col_starts: vec![0_i32, 0, 1, 1],
-        row_indices: vec![0_i32],
-        values: vec![1.0],
-        col_lower: vec![0.0, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-        objective: vec![0.0, 0.0, 1.0],
-        row_lower: vec![0.0, 100.0, 300.0], // row 2 = load balance with mean=300
-        row_upper: vec![0.0, 100.0, 300.0],
-        n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 3,
-        n_hydro: 1,
-        max_par_order: 0,
-        col_scale: Vec::new(),
-        row_scale: Vec::new(),
-    };
-    let templates = vec![template];
-    let base_rows = vec![1usize]; // water-balance rows start at row 1
+    let templates = vec![test_support::hydro_only_bus_template()];
 
     let n_load_buses = 1usize;
     let stochastic = make_stochastic_context_1_hydro_1_load_bus_sim(300.0, 30.0);
@@ -797,7 +729,7 @@ fn simulation_load_patches_applied() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = test_support::hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -807,42 +739,17 @@ fn simulation_load_patches_applied() {
     let mut workspaces = single_workspace_with_load_buses(solver, n_load_buses);
 
     // load_bus_indices=[0] (bus position 0 in the block layout).
-    let load_balance_row_starts = vec![2usize];
     let load_bus_indices = vec![0usize];
-    let block_counts_per_stage = vec![1usize];
-    let noise_scale = vec![1.0_f64]; // 1 hydro, 1 stage
+    let geometry_per_stage = vec![test_support::hydro_only_bus_geometry()];
 
     let hprod = hydro_productivities_1hydro(n_stages);
     let ec = zero_energy_conversion(1, n_stages);
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses,
-            load_balance_row_starts: &load_balance_row_starts,
-            load_bus_indices: &load_bus_indices,
-            block_counts_per_stage: &block_counts_per_stage,
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
+            .load_bus_indices(&load_bus_indices)
+            .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -868,20 +775,13 @@ fn simulation_load_patches_applied() {
         &config,
         SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &[],
+            block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
-            generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            pumping_col_starts: &[],
-            n_pumping: 0,
-            geometry_per_stage: &[],
+            generic_constraint_row_entries: &[Vec::new()],
             pumping_consumption_mw_per_m3s: &[],
-            contract_prices_per_stage: &[],
-            contract_is_import: &[],
-            ncs_entity_ids_per_stage: &[],
+            contract_prices_per_stage: &[Vec::new()],
+            contract_slots: &[],
             diversion_upstream: &HashMap::new(),
             hydro_productivities_per_stage: &hprod,
             energy_conversion: &ec,
@@ -928,7 +828,7 @@ fn simulation_load_patches_applied() {
         "formula consistency: d={d_observed}, eta_back={eta_back}, recomputed={recomputed}"
     );
 
-    let load_start = 1; // n_hydros = 1
+    let load_start = 0; // load patches start at slot 0
     assert_eq!(
         workspaces[0].patch_buf.lower[load_start], workspaces[0].scratch.load_rhs_buf[0],
         "patch_buf lower at load slot must equal load_rhs_buf[0]"
@@ -955,14 +855,15 @@ fn simulation_load_patches_applied() {
 }
 
 /// when `n_load_buses == 0`,
-/// `load_rhs_buf` remains empty and `forward_patch_count` equals `N`.
+/// `load_rhs_buf` remains empty and `forward_patch_count` equals the number of
+/// z-inflow patches filled.
 ///
-/// With N=1, L=0: `forward_patch_count = 1`.
+/// With one hydro, `fill_z_inflow_patches` fills exactly one z-inflow patch, so
+/// `forward_patch_count` equals `state.hydro_count`.
 #[test]
 fn simulation_no_load_buses_unchanged() {
     let n_stages = 1;
-    let templates = vec![minimal_template_1_0()];
-    let base_rows = vec![0usize];
+    let templates = vec![test_support::hydro_only_bus_template()];
 
     let stochastic = make_stochastic_context(n_stages);
     let state = test_support::state_layout(1, 0);
@@ -977,7 +878,7 @@ fn simulation_no_load_buses_unchanged() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = test_support::hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -991,32 +892,12 @@ fn simulation_no_load_buses_unchanged() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &StageContextFixture::new(
+            &templates,
+            &state_boxes,
+            &[test_support::hydro_only_bus_geometry()],
+        )
+        .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1042,20 +923,13 @@ fn simulation_no_load_buses_unchanged() {
         &config,
         SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &[],
+            block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
-            generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            pumping_col_starts: &[],
-            n_pumping: 0,
-            geometry_per_stage: &[],
+            generic_constraint_row_entries: &[Vec::new()],
             pumping_consumption_mw_per_m3s: &[],
-            contract_prices_per_stage: &[],
-            contract_is_import: &[],
-            ncs_entity_ids_per_stage: &[],
+            contract_prices_per_stage: &[Vec::new()],
+            contract_slots: &[],
             diversion_upstream: &HashMap::new(),
             hydro_productivities_per_stage: &hprod,
             energy_conversion: &ec,
@@ -1079,8 +953,8 @@ fn simulation_no_load_buses_unchanged() {
     );
     assert_eq!(
         workspaces[0].patch_buf.forward_patch_count(),
-        1,
-        "forward_patch_count must be N=1 when n_load_buses=0, got {}",
+        state.hydro_count,
+        "forward_patch_count must equal the z-inflow patches filled, got {}",
         workspaces[0].patch_buf.forward_patch_count()
     );
 }
@@ -1090,8 +964,7 @@ fn simulation_no_load_buses_unchanged() {
 #[test]
 fn simulation_state_set_profile_reaches_current_profile_after_run() {
     let n_stages = 1;
-    let templates = vec![minimal_template_1_0()];
-    let base_rows = vec![0usize];
+    let templates = vec![test_support::hydro_only_bus_template()];
 
     let stochastic = make_stochastic_context(n_stages);
     let state = test_support::state_layout(1, 0);
@@ -1106,7 +979,7 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = test_support::hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1136,32 +1009,12 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate_with_profile(
         &mut workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &StageContextFixture::new(
+            &templates,
+            &state_boxes,
+            &[test_support::hydro_only_bus_geometry()],
+        )
+        .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1187,20 +1040,13 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
         &config,
         SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &[],
+            block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
-            generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            pumping_col_starts: &[],
-            n_pumping: 0,
-            geometry_per_stage: &[],
+            generic_constraint_row_entries: &[Vec::new()],
             pumping_consumption_mw_per_m3s: &[],
-            contract_prices_per_stage: &[],
-            contract_is_import: &[],
-            ncs_entity_ids_per_stage: &[],
+            contract_prices_per_stage: &[Vec::new()],
+            contract_slots: &[],
             diversion_upstream: &HashMap::new(),
             hydro_productivities_per_stage: &hprod,
             energy_conversion: &ec,
@@ -1228,37 +1074,17 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
 }
 
 /// When load noise is present,
-/// `noise_buf` still contains only inflow values (not contaminated by load noise).
+/// `z_inflow_rhs_buf` still contains only inflow values (not contaminated by
+/// load noise).
 ///
-/// `noise_buf` contains inflow realizations for the `n_hydros` hydros.
-/// After simulate runs with `n_hydros=1` and `n_load_buses=1`, `noise_buf`
-/// must have exactly 1 entry (inflow), while `load_rhs_buf` has 1 entry
-/// (load).  The two buffers must not overlap.
+/// `z_inflow_rhs_buf` contains inflow realizations for the `n_hydros` hydros.
+/// After simulate runs with `n_hydros=1` and `n_load_buses=1`,
+/// `z_inflow_rhs_buf` must have exactly 1 entry (inflow), while
+/// `load_rhs_buf` has 1 entry (load).  The two buffers must not overlap.
 #[test]
 fn simulation_inflow_extraction_unaffected() {
     let n_stages = 1;
-    let template = StageTemplate {
-        num_cols: 3,
-        num_rows: 3,
-        num_nz: 1,
-        col_starts: vec![0_i32, 0, 1, 1],
-        row_indices: vec![0_i32],
-        values: vec![1.0],
-        col_lower: vec![0.0, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-        objective: vec![0.0, 0.0, 1.0],
-        row_lower: vec![0.0, 100.0, 300.0],
-        row_upper: vec![0.0, 100.0, 300.0],
-        n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 3,
-        n_hydro: 1,
-        max_par_order: 0,
-        col_scale: Vec::new(),
-        row_scale: Vec::new(),
-    };
-    let templates = vec![template];
-    let base_rows = vec![1usize];
+    let templates = vec![test_support::hydro_only_bus_template()];
 
     let n_load_buses = 1usize;
     let stochastic = make_stochastic_context_1_hydro_1_load_bus_sim(300.0, 30.0);
@@ -1274,7 +1100,7 @@ fn simulation_inflow_extraction_unaffected() {
     };
     let initial_state = vec![50.0_f64];
 
-    let solution = fixed_solution(100.0, 30.0);
+    let solution = test_support::hydro_only_bus_solution(100.0, 30.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1283,42 +1109,17 @@ fn simulation_inflow_extraction_unaffected() {
 
     let mut workspaces = single_workspace_with_load_buses(solver, n_load_buses);
 
-    let load_balance_row_starts = vec![2usize];
     let load_bus_indices = vec![0usize];
-    let block_counts_per_stage = vec![1usize];
-    let noise_scale = vec![1.0_f64];
+    let geometry_per_stage = vec![test_support::hydro_only_bus_geometry()];
 
     let hprod = hydro_productivities_1hydro(n_stages);
     let ec = zero_energy_conversion(1, n_stages);
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses,
-            load_balance_row_starts: &load_balance_row_starts,
-            load_bus_indices: &load_bus_indices,
-            block_counts_per_stage: &block_counts_per_stage,
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
+            .load_bus_indices(&load_bus_indices)
+            .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1344,20 +1145,13 @@ fn simulation_inflow_extraction_unaffected() {
         &config,
         SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &[],
+            block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
-            generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            pumping_col_starts: &[],
-            n_pumping: 0,
-            geometry_per_stage: &[],
+            generic_constraint_row_entries: &[Vec::new()],
             pumping_consumption_mw_per_m3s: &[],
-            contract_prices_per_stage: &[],
-            contract_is_import: &[],
-            ncs_entity_ids_per_stage: &[],
+            contract_prices_per_stage: &[Vec::new()],
+            contract_slots: &[],
             diversion_upstream: &HashMap::new(),
             hydro_productivities_per_stage: &hprod,
             energy_conversion: &ec,
@@ -1376,24 +1170,23 @@ fn simulation_inflow_extraction_unaffected() {
     .unwrap();
 
     assert_eq!(
-        workspaces[0].scratch.noise_buf.len(),
+        workspaces[0].scratch.z_inflow_rhs_buf.len(),
         1,
-        "noise_buf must have 1 entry (1 hydro), not contaminated by load noise: len={}",
-        workspaces[0].scratch.noise_buf.len()
+        "z_inflow_rhs_buf must have 1 entry (1 hydro), not contaminated by load noise: len={}",
+        workspaces[0].scratch.z_inflow_rhs_buf.len()
     );
-    // The inflow noise must be a reasonable value near mean_rhs=100.
-    // With noise_scale=1.0 and mean_rhs=100 (from row_lower[base_rows[0]+0]=100):
-    //   noise_buf[0] = 100.0 + 1.0 * eta_inflow
-    // For any |eta_inflow| <= 5 this remains in [75, 125] for practical draws.
+    // The inflow noise must be a reasonable value near the model's mean_m3s=100.0,
+    // sigma=20.0: z_inflow_rhs_buf[0] = 100.0 + 20.0 * eta_inflow.
     assert!(
-        workspaces[0].scratch.noise_buf[0] > 50.0 && workspaces[0].scratch.noise_buf[0] < 200.0,
-        "noise_buf[0] must be a reasonable inflow value near 100.0, got {}",
-        workspaces[0].scratch.noise_buf[0]
+        workspaces[0].scratch.z_inflow_rhs_buf[0] > 0.0
+            && workspaces[0].scratch.z_inflow_rhs_buf[0] < 200.0,
+        "z_inflow_rhs_buf[0] must be a reasonable inflow value near 100.0, got {}",
+        workspaces[0].scratch.z_inflow_rhs_buf[0]
     );
     assert_eq!(
         workspaces[0].scratch.load_rhs_buf.len(),
         n_load_buses,
-        "load_rhs_buf must have 1 entry alongside noise_buf"
+        "load_rhs_buf must have 1 entry alongside z_inflow_rhs_buf"
     );
 }
 
@@ -1546,32 +1339,6 @@ fn make_stochastic_1h_1s(mean_m3s: f64, std_m3s: f64) -> StochasticContext {
     .unwrap()
 }
 
-/// Build a stage template for N=1 hydro, L=0 PAR, with `row_lower[0] = base_rhs`.
-///
-/// Used by truncation tests so that the water-balance base RHS is configurable.
-fn minimal_template_1_0_with_base(base_rhs: f64) -> StageTemplate {
-    StageTemplate {
-        num_cols: 3,
-        num_rows: 1,
-        num_nz: 1,
-        col_starts: vec![0_i32, 0, 1, 1],
-        row_indices: vec![0_i32],
-        values: vec![1.0],
-        col_lower: vec![0.0, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-        objective: vec![0.0, 0.0, 1.0],
-        row_lower: vec![base_rhs],
-        row_upper: vec![base_rhs],
-        n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
-        col_scale: Vec::new(),
-        row_scale: Vec::new(),
-    }
-}
-
 /// Build a workspace with `zero_targets_buf` pre-populated to `hydro_count` zeros.
 ///
 /// The standard `single_workspace` helper leaves `zero_targets_buf` empty because
@@ -1586,10 +1353,9 @@ fn single_workspace_with_hydros(
         rank: 0,
         worker_id: 0,
         solver: ProfiledSolver::new(solver),
-        patch_buf: PatchBuffer::new(hydro_count, 0, 0, 0, 0, 0, 0),
+        patch_buf: PatchBuffer::new(&test_support::state_layout(hydro_count, 0), &[], &[]),
         current_state: Vec::with_capacity(hydro_count),
         scratch: ScratchBuffers {
-            noise_buf: Vec::new(),
             inflow_m3s_buf: Vec::new(),
             lag_matrix_buf: Vec::new(),
             par_inflow_buf: Vec::new(),
@@ -1633,25 +1399,19 @@ fn single_workspace_with_hydros(
 ///
 /// With `InflowNonNegativityMethod::Truncation` active, the simulation pipeline
 /// must clamp `eta` to the floor that produces zero inflow.  As a result,
-/// `noise_buf[0] = base_rhs + noise_scale * eta_clamped >= 0.0` for all
+/// `z_inflow_rhs_buf[0] = mean + sigma * eta_clamped >= 0.0` for all
 /// scenarios processed.
 ///
-/// Concretely (zeta=1): `base_rhs = -1000`, `noise_scale = 1`.
-/// `eta_floor` = (0 - mean) / sigma = 1000. So `noise_buf`\[0\] = -1000 + 1\*1000 = 0.
+/// `eta_floor` = (0 - mean) / sigma = 1000. So `z_inflow_rhs_buf`\[0\] =
+/// -1000 + 1\*1000 = 0.
 #[test]
 fn simulation_truncation_clamps_negative_inflow_noise() {
     let mean_m3s = -1000.0_f64;
     let sigma = 1.0_f64;
-    let zeta = 1.0_f64; // simplified: treat zeta=1
-    let base_rhs = zeta * mean_m3s;
-    let noise_scale_val = zeta * sigma;
 
     let n_stages = 1;
     let stochastic = make_stochastic_1h_1s(mean_m3s, sigma);
-    let template = minimal_template_1_0_with_base(base_rhs);
-    let templates = vec![template];
-    let base_rows = vec![0_usize];
-    let noise_scale = vec![noise_scale_val];
+    let templates = vec![test_support::hydro_only_bus_template()];
 
     let state = test_support::state_layout(1, 0);
     let fcf = FutureCostFunction::new(n_stages, state.n_state, 1, 10, &vec![0; n_stages]);
@@ -1665,7 +1425,7 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
     };
     let initial_state = vec![0.0_f64];
 
-    let solution = fixed_solution(0.0, 0.0);
+    let solution = test_support::hydro_only_bus_solution(0.0, 0.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1678,32 +1438,12 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[n_stages],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &StageContextFixture::new(
+            &templates,
+            &state_boxes,
+            &[test_support::hydro_only_bus_geometry()],
+        )
+        .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1729,20 +1469,13 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
         &config,
         SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &[],
+            block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
-            generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            pumping_col_starts: &[],
-            n_pumping: 0,
-            geometry_per_stage: &[],
+            generic_constraint_row_entries: &[Vec::new()],
             pumping_consumption_mw_per_m3s: &[],
-            contract_prices_per_stage: &[],
-            contract_is_import: &[],
-            ncs_entity_ids_per_stage: &[],
+            contract_prices_per_stage: &[Vec::new()],
+            contract_slots: &[],
             diversion_upstream: &HashMap::new(),
             hydro_productivities_per_stage: &hprod,
             energy_conversion: &ec,
@@ -1760,16 +1493,17 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
     )
     .unwrap();
 
-    // noise_buf holds the last scenario-stage's value; truncation clamps it >= 0.
+    // z_inflow_rhs_buf holds the last scenario-stage's value; truncation clamps
+    // it >= 0.
     assert_eq!(
-        workspaces[0].scratch.noise_buf.len(),
+        workspaces[0].scratch.z_inflow_rhs_buf.len(),
         1,
-        "noise_buf must have exactly 1 entry for 1 hydro"
+        "z_inflow_rhs_buf must have exactly 1 entry for 1 hydro"
     );
     assert!(
-        workspaces[0].scratch.noise_buf[0] >= 0.0,
-        "after truncation, noise_buf[0] must be >= 0 (inflow cannot be negative), got {}",
-        workspaces[0].scratch.noise_buf[0]
+        workspaces[0].scratch.z_inflow_rhs_buf[0] >= 0.0,
+        "after truncation, z_inflow_rhs_buf[0] must be >= 0 (inflow cannot be negative), got {}",
+        workspaces[0].scratch.z_inflow_rhs_buf[0]
     );
 }
 
@@ -1777,22 +1511,16 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
 /// raw (potentially negative) noise values.
 ///
 /// With `mean_m3s = -1000.0` and `std_m3s = 1.0`, the PAR inflow is always
-/// deeply negative.  The `None` path must NOT clamp eta, so the noise buffer
-/// value must be negative (`base_rhs` + `noise_scale` \* `raw_eta` << 0).
+/// deeply negative.  The `None` path must NOT clamp eta, so the z-inflow
+/// buffer value must be negative (`mean` + `sigma` \* `raw_eta` << 0).
 #[test]
 fn simulation_none_method_produces_raw_negative_noise() {
     let mean_m3s = -1000.0_f64;
     let sigma = 1.0_f64;
-    let zeta = 1.0_f64;
-    let base_rhs = zeta * mean_m3s;
-    let noise_scale_val = zeta * sigma;
 
     let n_stages = 1;
     let stochastic = make_stochastic_1h_1s(mean_m3s, sigma);
-    let template = minimal_template_1_0_with_base(base_rhs);
-    let templates = vec![template];
-    let base_rows = vec![0_usize];
-    let noise_scale = vec![noise_scale_val];
+    let templates = vec![test_support::hydro_only_bus_template()];
 
     let state = test_support::state_layout(1, 0);
     let fcf = FutureCostFunction::new(n_stages, state.n_state, 1, 10, &vec![0; n_stages]);
@@ -1806,7 +1534,7 @@ fn simulation_none_method_produces_raw_negative_noise() {
     };
     let initial_state = vec![0.0_f64];
 
-    let solution = fixed_solution(0.0, 0.0);
+    let solution = test_support::hydro_only_bus_solution(0.0, 0.0);
     let solver = MockSolver::always_ok(solution);
     let comm = StubComm { rank: 0, size: 1 };
     let entity_counts = entity_counts_1_hydro();
@@ -1819,32 +1547,12 @@ fn simulation_none_method_produces_raw_negative_noise() {
     let state_boxes = permissive_state_boxes(state.n_state, templates.len());
     run_simulate(
         &mut workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[n_stages],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &StageContextFixture::new(
+            &templates,
+            &state_boxes,
+            &[test_support::hydro_only_bus_geometry()],
+        )
+        .ctx(),
         &fcf,
         &TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1870,20 +1578,13 @@ fn simulation_none_method_produces_raw_negative_noise() {
         &config,
         SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &[],
+            block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
-            generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            pumping_col_starts: &[],
-            n_pumping: 0,
-            geometry_per_stage: &[],
+            generic_constraint_row_entries: &[Vec::new()],
             pumping_consumption_mw_per_m3s: &[],
-            contract_prices_per_stage: &[],
-            contract_is_import: &[],
-            ncs_entity_ids_per_stage: &[],
+            contract_prices_per_stage: &[Vec::new()],
+            contract_slots: &[],
             diversion_upstream: &HashMap::new(),
             hydro_productivities_per_stage: &hprod,
             energy_conversion: &ec,
@@ -1902,16 +1603,16 @@ fn simulation_none_method_produces_raw_negative_noise() {
     .unwrap();
 
     assert_eq!(
-        workspaces[0].scratch.noise_buf.len(),
+        workspaces[0].scratch.z_inflow_rhs_buf.len(),
         1,
-        "noise_buf must have exactly 1 entry for 1 hydro"
+        "z_inflow_rhs_buf must have exactly 1 entry for 1 hydro"
     );
-    // With None, no clamping occurs.  base_rhs=-1000 and noise_scale=1, so
-    // noise_buf[0] = -1000 + 1 * eta.  For |eta| < 5 this remains << 0.
+    // With None, no clamping occurs.  mean=-1000 and sigma=1, so
+    // z_inflow_rhs_buf[0] = -1000 + 1 * eta.  For |eta| < 5 this remains << 0.
     assert!(
-        workspaces[0].scratch.noise_buf[0] < 0.0,
-        "with None method, noise_buf[0] must be negative (raw eta applied), got {}",
-        workspaces[0].scratch.noise_buf[0]
+        workspaces[0].scratch.z_inflow_rhs_buf[0] < 0.0,
+        "with None method, z_inflow_rhs_buf[0] must be negative (raw eta applied), got {}",
+        workspaces[0].scratch.z_inflow_rhs_buf[0]
     );
 }
 
@@ -1937,73 +1638,105 @@ mod dcs_simulation {
     use super::super::{
         SimLookups, SimStageIds, SimStageLoadSpec, SimulationOutputSpec, solve_simulation_stage,
     };
-    use crate::context::{StageContext, TrainingContext};
+    use crate::context::TrainingContext;
     use crate::cut::FutureCostFunction;
     use crate::cut_selection::CutMetadata;
     use crate::dcs::DcsParams;
     use crate::energy_conversion::{EnergyConversion, EnergyConversionSet};
     use crate::horizon_mode::HorizonMode;
     use crate::setup::NodePos;
+    use crate::test_support::StageContextFixture;
 
     use crate::inflow_method::InflowNonNegativityMethod;
     use crate::lp::builder::{PatchBuffer, StageGeometry, StateBox};
+    use crate::lp::indexer::BlockRowFamily;
     use crate::setup::NodeId;
     use crate::setup::node_graph::StageIdx;
     use crate::simulation::types::{SimulationCostResult, SimulationStageResult};
     use crate::test_support;
-    use crate::workspace::{SolverWorkspace, WorkspaceSizing};
+    use crate::workspace::{NoisePreallocation, SolverWorkspace, WorkspaceSizing};
 
     const X_HAT: f64 = 2.0;
 
     /// Cut-free base: cols `[storage_out=0, z_inflow=1, storage_in=2,
-    /// theta=3]`, row 0 the coupling row `storage_out - storage_in = 0`, row 1
-    /// the z-inflow definition `z_inflow = rhs` (mirrors production's
-    /// `fill_z_inflow_patches` row, keeping `z_inflow` a defined column rather
-    /// than a free one), minimise `theta`. `storage_in` is pinned to `x_hat`;
-    /// cuts constrain `theta` against `storage_out` (col 0).
+    /// theta=3]`, row 0 the z-inflow definition `z_inflow = rhs` (mirrors
+    /// production's `fill_z_inflow_patches` row, keeping `z_inflow` a defined
+    /// column rather than a free one, and matching every built template's own
+    /// invariant that the z-inflow rows lead the row space), row 1 the
+    /// coupling row `storage_out - storage_in = 0`, doubling as the water-balance
+    /// row `run_one_sim_stage`'s geometry addresses, minimise `theta`.
+    /// `storage_in` is pinned to `x_hat`; cuts constrain `theta` against
+    /// `storage_out` (col 0). Cols 4-11 (turbine, spillage, withdrawal-slack,
+    /// and the four operational-violation slack families) are decoupled
+    /// padding — zero cost, zero NZ — so per-block hydro extraction addresses
+    /// real columns without perturbing the solved LP.
     fn sim_core_template() -> StageTemplate {
         StageTemplate {
-            num_cols: 4,
+            num_cols: 12,
             num_rows: 2,
             num_nz: 3,
-            col_starts: vec![0_i32, 1, 2, 3, 3],
-            row_indices: vec![0_i32, 1, 0],
+            col_starts: vec![0_i32, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+            row_indices: vec![1_i32, 0, 1],
             values: vec![1.0, 1.0, -1.0],
-            col_lower: vec![0.0, 0.0, 0.0, -1.0e6],
-            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, 1.0e6],
-            objective: vec![0.0, 0.0, 0.0, 1.0],
+            col_lower: vec![
+                0.0, 0.0, 0.0, -1.0e6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
+            col_upper: vec![
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                1.0e6,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+            ],
+            objective: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             row_lower: vec![0.0, 0.0],
             row_upper: vec![0.0, 0.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
     }
 
     /// All-cuts frozen template: cut-free base + the three pool cuts frozen as
-    /// structural rows 2..5 (slot order). `num_rows = 5`.
+    /// structural rows 2..5 (slot order), with the z-inflow definition row
+    /// shifted to row 0 like every other fixture here. `num_rows = 5`. Cols
+    /// 4-11 are the same decoupled padding as `sim_core_template`.
     fn sim_all_cuts_frozen() -> StageTemplate {
         StageTemplate {
-            num_cols: 4,
+            num_cols: 12,
             num_rows: 5,
             num_nz: 7,
-            col_starts: vec![0_i32, 2, 3, 4, 7],
-            row_indices: vec![0_i32, 2, 4, 0, 1, 2, 3],
+            col_starts: vec![0_i32, 2, 3, 4, 7, 7, 7, 7, 7, 7, 7, 7, 7],
+            row_indices: vec![1_i32, 3, 0, 1, 2, 3, 4],
             values: vec![1.0, -2.0, 1.0, -1.0, 1.0, 1.0, 1.0],
-            col_lower: vec![0.0, 0.0, 0.0, -1.0e6],
-            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, 1.0e6],
-            objective: vec![0.0, 0.0, 0.0, 1.0],
-            row_lower: vec![0.0, 1.0, 0.0, 3.0, 0.0],
-            row_upper: vec![0.0, f64::INFINITY, f64::INFINITY, f64::INFINITY, 0.0],
+            col_lower: vec![
+                0.0, 0.0, 0.0, -1.0e6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
+            col_upper: vec![
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                1.0e6,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+            ],
+            objective: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            row_lower: vec![0.0, 0.0, 1.0, 0.0, 3.0],
+            row_upper: vec![0.0, 0.0, f64::INFINITY, f64::INFINITY, f64::INFINITY],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -2011,25 +1744,37 @@ mod dcs_simulation {
 
     /// Frozen template carrying a single DOMINATING spurious cut
     /// (`-5*col0 + theta >= 0`, floor 10 at `x_hat = 2`, NOT in the pool), plus
-    /// the same trailing z-inflow definition row as the other fixtures.
+    /// the same leading z-inflow definition row as the other fixtures. Cols
+    /// 4-11 are the same decoupled padding as `sim_core_template`.
     fn sim_frozen_dominating_cut() -> StageTemplate {
         StageTemplate {
-            num_cols: 4,
+            num_cols: 12,
             num_rows: 3,
             num_nz: 5,
-            col_starts: vec![0_i32, 2, 3, 4, 5],
-            row_indices: vec![0_i32, 1, 2, 0, 1],
+            col_starts: vec![0_i32, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+            row_indices: vec![1_i32, 2, 0, 1, 2],
             values: vec![1.0, -5.0, 1.0, -1.0, 1.0],
-            col_lower: vec![0.0, 0.0, 0.0, -1.0e6],
-            col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY, 1.0e6],
-            objective: vec![0.0, 0.0, 0.0, 1.0],
+            col_lower: vec![
+                0.0, 0.0, 0.0, -1.0e6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
+            col_upper: vec![
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                1.0e6,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::INFINITY,
+            ],
+            objective: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             row_lower: vec![0.0, 0.0, 0.0],
-            row_upper: vec![0.0, f64::INFINITY, 0.0],
+            row_upper: vec![0.0, 0.0, f64::INFINITY],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -2057,27 +1802,48 @@ mod dcs_simulation {
 
     fn sim_active_workspace() -> SolverWorkspace<ActiveSolver> {
         let sizing = WorkspaceSizing {
-            hydro_count: 1,
-            max_par_order: 0,
-            n_load_buses: 0,
-            max_blocks: 0,
-            n_buckets: 0,
-            downstream_par_order: 0,
             max_openings: 1,
             initial_pool_capacity: 16,
-            n_state: 1,
             max_local_fwd: 1,
-            noise_dim: 1,
-            n_anticipated: 0,
-            k_max: 0,
+            noise: NoisePreallocation::StochasticDim,
         };
         let solver = ActiveSolver::new().expect("ActiveSolver::new()");
+        let state = test_support::state_layout(1, 0);
+        let stochastic = test_support::hydro_free_stochastic_context(1, 1);
+        let node_graph = crate::test_support::chain_node_graph(&stochastic);
+        let study_dims = test_support::study_dims();
+        let horizon = HorizonMode::Finite { num_stages: 1 };
+        let cut_state_layouts = test_support::all_enabled_cut_state_layouts(&state, 1);
+        let initial_state: Vec<f64> = Vec::new();
+        let training_ctx = TrainingContext {
+            node_graph: &node_graph,
+            horizon: &horizon,
+            state: &state,
+            cut_state_layouts: &cut_state_layouts,
+            study_dims: &study_dims,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &stochastic,
+            initial_state: &initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            stages: &[],
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            lag_accum_seed: &[],
+            lag_weight_seed: &[],
+            dcs: None,
+        };
+        let stage_ctx_fixture = StageContextFixture::new(&[], &[], &[]);
         SolverWorkspace::new(
             0,
             0,
             solver,
-            PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
-            1,
+            PatchBuffer::new(&state, &[], &[]),
+            &training_ctx,
+            &stage_ctx_fixture.ctx(),
             sizing,
         )
     }
@@ -2097,26 +1863,29 @@ mod dcs_simulation {
     /// template, returning `(immediate_cost, SimulationStageResult)`.
     // Builds the full two-branch (DCS vs frozen) stage-solve fixture inline;
     // extracting pieces would scatter the setup the branch comparison reads.
-    #[allow(clippy::too_many_lines)]
     fn run_one_sim_stage(
         dcs: Option<DcsParams>,
         frozen: &StageTemplate,
     ) -> (f64, SimulationStageResult) {
         let state = test_support::state_layout(1, 0);
         let core = sim_core_template();
-        // The DCS branch always loads `core`; the frozen branch loads `frozen` —
-        // each carries its own trailing z-inflow definition row as its last row.
-        let z_inflow_row_start = if dcs.is_some() {
-            core.num_rows - 1
-        } else {
-            frozen.num_rows - 1
-        };
-        let geometry_per_stage = [StageGeometry {
-            z_inflow_row_start,
-            ..StageGeometry::default()
+        // turbine/spillage/withdrawal-slack/the four operational-violation
+        // families address the decoupled padding cols the templates above
+        // append; water_balance reuses the coupling row every fixture already
+        // carries at row 1 (see `sim_core_template`).
+        let geometry_per_stage = vec![StageGeometry {
+            turbine: 4..5,
+            spillage: 5..6,
+            withdrawal_slack_neg: 6..7,
+            withdrawal_slack_pos: 7..8,
+            outflow_below_slack: 8..9,
+            outflow_above_slack: 9..10,
+            turbine_below_slack: 10..11,
+            generation_below_slack: 11..12,
+            water_balance: BlockRowFamily::one_per_entity(1..2),
+            ..test_support::equipment_free_geometry(&[1])[0].clone()
         }];
         let templates = vec![core];
-        let base_rows = vec![0_usize];
         let stochastic = super::make_stochastic_context(1);
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let fcf = sim_pool();
@@ -2127,12 +1896,16 @@ mod dcs_simulation {
             reference_volume_hm3: 0.0,
             reference_outflow_m3s: 0.0,
         };
-        let ec = EnergyConversionSet::new(vec![vec![zero_ec; 1]], vec![vec![0.0_f64; 1]], 1, 1);
+        let ec = EnergyConversionSet::new(
+            vec![vec![zero_ec; 1]],
+            vec![vec![0.0_f64; 1]],
+            &test_support::minimal_hydros(1),
+            1,
+        );
 
         let mut ws = sim_active_workspace();
         ws.current_state.clear();
         ws.current_state.push(X_HAT);
-        ws.scratch.noise_buf.clear();
         ws.scratch.load_rhs_buf.clear();
         ws.scratch.z_inflow_rhs_buf.clear();
         ws.scratch.ncs_col_upper_buf.clear();
@@ -2143,32 +1916,8 @@ mod dcs_simulation {
             lower: vec![f64::NEG_INFINITY; state.n_state],
             upper: vec![f64::INFINITY; state.n_state],
         }];
-        let ctx = StageContext {
-            geometry_per_stage: &geometry_per_stage,
-            templates: &templates,
-            state_boxes: &state_boxes,
-            base_rows: &base_rows,
-            noise_scale: &[1.0],
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1usize],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage);
+        let ctx = fixture.ctx();
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -2196,20 +1945,13 @@ mod dcs_simulation {
         let diversion: HashMap<cobre_core::EntityId, Vec<usize>> = HashMap::new();
         let output = SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[1.0],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &[vec![1.0]],
             entity_counts: &entity_counts,
-            generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            pumping_col_starts: &[],
-            n_pumping: 0,
-            geometry_per_stage: &geometry_per_stage,
+            generic_constraint_row_entries: &[Vec::new()],
             pumping_consumption_mw_per_m3s: &[],
-            contract_prices_per_stage: &[],
-            contract_is_import: &[],
-            ncs_entity_ids_per_stage: &[],
+            contract_prices_per_stage: &[Vec::new()],
+            contract_slots: &[],
             diversion_upstream: &diversion,
             hydro_productivities_per_stage: &hprod,
             energy_conversion: &ec,
@@ -2233,9 +1975,8 @@ mod dcs_simulation {
         };
         let lookups = SimLookups::build(
             &study_dims,
-            &[],
+            ctx.geometry_per_stage,
             &test_support::identity_hydro_cell_index(256),
-            0,
             1,
         );
 
@@ -2388,9 +2129,10 @@ mod anticipated_ring_matches_forward_propagation {
     use crate::setup::node_graph::StageIdx;
     use crate::simulation::extraction::EntityCounts;
     use crate::test_support;
+    use crate::test_support::{StageContextFixture, equipment_free_geometry};
     use crate::training::forward::{StageKey, run_forward_stage};
     use crate::trajectory::TrajectoryRecord;
-    use crate::workspace::{BasisStore, SolverWorkspace, WorkspaceSizing};
+    use crate::workspace::{BasisStore, NoisePreallocation, SolverWorkspace, WorkspaceSizing};
 
     const N_STAGES: usize = 3;
 
@@ -2504,30 +2246,17 @@ mod anticipated_ring_matches_forward_propagation {
             row_lower: Vec::new(),
             row_upper: Vec::new(),
             n_state,
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
     }
 
-    fn ring_sizing(n_state: usize) -> WorkspaceSizing {
+    fn ring_sizing() -> WorkspaceSizing {
         WorkspaceSizing {
-            hydro_count: 0,
-            max_par_order: 0,
-            n_load_buses: 0,
-            max_blocks: 0,
-            n_buckets: 0,
-            downstream_par_order: 0,
             max_openings: 1,
             initial_pool_capacity: 16,
-            n_state,
             max_local_fwd: 1,
-            noise_dim: 0,
-            n_anticipated: 1,
-            k_max: 2,
+            noise: NoisePreallocation::OnDemand,
         }
     }
 
@@ -2545,9 +2274,10 @@ mod anticipated_ring_matches_forward_propagation {
             0,
             0,
             SequencedSolver::new(ring_sequence(num_cols)),
-            PatchBuffer::new(0, 0, 0, 0, 0, 1, 2),
-            state.n_state,
-            ring_sizing(state.n_state),
+            PatchBuffer::new(state, &[], &[]),
+            training_ctx,
+            ctx,
+            ring_sizing(),
         );
         ws.current_state.clear();
         ws.current_state.extend_from_slice(&[10.0, 20.0]);
@@ -2571,11 +2301,9 @@ mod anticipated_ring_matches_forward_propagation {
                 t: StageIdx(t),
                 m: 0,
                 local_m: 0,
-                num_stages: N_STAGES,
                 iteration: 1,
                 raw_noise: &[],
                 basis_row_capacity: template.num_rows,
-                terminal_has_boundary_cuts: false,
                 pool: &fcf.pools[t],
                 dcs: None,
                 node: NodePos(t),
@@ -2608,13 +2336,13 @@ mod anticipated_ring_matches_forward_propagation {
             0,
             0,
             SequencedSolver::new(ring_sequence(num_cols)),
-            PatchBuffer::new(0, 0, 0, 0, 0, 1, 2),
-            state.n_state,
-            ring_sizing(state.n_state),
+            PatchBuffer::new(state, &[], &[]),
+            training_ctx,
+            ctx,
+            ring_sizing(),
         );
         ws.current_state.clear();
         ws.current_state.extend_from_slice(&[10.0, 20.0]);
-        ws.scratch.noise_buf.clear();
         ws.scratch.load_rhs_buf.clear();
         ws.scratch.z_inflow_rhs_buf.clear();
         ws.scratch.ncs_col_upper_buf.clear();
@@ -2631,25 +2359,18 @@ mod anticipated_ring_matches_forward_propagation {
             non_controllable_ids: Vec::new(),
         };
         let hprod: Vec<Vec<f64>> = vec![Vec::new(); N_STAGES];
-        let ec = EnergyConversionSet::new(Vec::new(), Vec::new(), 0, N_STAGES);
+        let ec = EnergyConversionSet::new(Vec::new(), Vec::new(), &[], N_STAGES);
         let diversion: HashMap<cobre_core::EntityId, Vec<usize>> = HashMap::new();
         let (tx, _rx) = mpsc::sync_channel(N_STAGES.max(1));
         let output = SimulationOutputSpec {
             result_tx: &tx,
-            zeta_per_stage: &[1.0, 1.0, 1.0],
             hydro_cell_index: &test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &[vec![1.0], vec![1.0], vec![1.0]],
             entity_counts: &entity_counts,
-            generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            pumping_col_starts: &[],
-            n_pumping: 0,
-            geometry_per_stage: &[],
+            generic_constraint_row_entries: &[Vec::new(), Vec::new(), Vec::new()],
             pumping_consumption_mw_per_m3s: &[],
-            contract_prices_per_stage: &[],
-            contract_is_import: &[],
-            ncs_entity_ids_per_stage: &[],
+            contract_prices_per_stage: &[Vec::new(), Vec::new(), Vec::new()],
+            contract_slots: &[],
             diversion_upstream: &diversion,
             hydro_productivities_per_stage: &hprod,
             energy_conversion: &ec,
@@ -2662,9 +2383,8 @@ mod anticipated_ring_matches_forward_propagation {
         };
         let lookups = SimLookups::build(
             training_ctx.study_dims,
-            &[],
+            ctx.geometry_per_stage,
             &test_support::identity_hydro_cell_index(256),
-            0,
             0,
         );
 
@@ -2704,12 +2424,20 @@ mod anticipated_ring_matches_forward_propagation {
     /// copy-outgoing convention, not a residual shift.
     #[test]
     fn simulation_ring_matches_forward_pass_for_identical_solves() {
-        let state = test_support::state_layout_full(0, 0, 1, 2, vec![2]);
+        // Matches this fixture's own N_STAGES, not state_layout_full's wider
+        // internal margin.
+        let resolution = test_support::constant_lead_resolution(&[2], N_STAGES);
+        let state = test_support::state_layout_with_transit_buckets_and_resolution(
+            0,
+            0,
+            Vec::new(),
+            vec![2],
+            resolution,
+        );
         let num_cols = state.theta + 1;
         let template = ring_template(num_cols, state.n_state);
         let templates = vec![template.clone(), template.clone(), template];
-        let base_rows = vec![0_usize; N_STAGES];
-        let stochastic = super::make_stochastic_context(N_STAGES);
+        let stochastic = test_support::hydro_free_stochastic_context(N_STAGES, 1);
         let horizon = HorizonMode::Finite {
             num_stages: N_STAGES,
         };
@@ -2724,32 +2452,9 @@ mod anticipated_ring_matches_forward_propagation {
             };
             N_STAGES
         ];
-        let ctx = StageContext {
-            geometry_per_stage: &[],
-            templates: &templates,
-            state_boxes: &state_boxes,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1, 1, 1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[1, 1, 1]);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+        let ctx = fixture.ctx();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
             horizon: &horizon,

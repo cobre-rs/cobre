@@ -34,6 +34,8 @@ use crate::{
     cut_sync::CutSyncBuffers,
     error::SddpError,
     forward::EnumeratedForwardScratch,
+    horizon_mode::HorizonMode,
+    lp::indexer::StateSpace,
     rank_reconcile::reconcile_result,
     risk_measure::RiskMeasure,
     solver_phase::Phase,
@@ -381,10 +383,10 @@ impl BackwardPassState {
     /// - `real_states_capacity`: capacity hint for `real_states_buf`
     ///   (`real_total_scenarios * n_state`).
     /// - `max_local_fwd`: maximum local forward-pass count across the run.
-    /// - `n_state`: state dimension.
-    /// - `num_stages`: number of stages in the study.
+    /// - `state`: state-vector layout owner (`n_state` dimension).
+    /// - `horizon`: horizon owner (`num_stages` dimension).
     ///
-    /// `max_local_fwd`, `n_state`, and `num_stages`, together with
+    /// `max_local_fwd`, `state.n_state`, and `horizon.num_stages()`, together with
     /// `bwd_max_openings`, size `Self::by_node_scratch` once `set_scheduler`
     /// calls `Self::resize_by_node_scratch`; `by_node_scratch` starts empty.
     #[must_use]
@@ -394,9 +396,11 @@ impl BackwardPassState {
         bwd_max_openings: usize,
         real_states_capacity: usize,
         max_local_fwd: usize,
-        n_state: usize,
-        num_stages: usize,
+        state: &StateSpace,
+        horizon: &HorizonMode,
     ) -> Self {
+        let n_state = state.n_state;
+        let num_stages = horizon.num_stages();
         let send_stride = n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE;
         Self {
             probabilities_buf: Vec::new(),
@@ -525,7 +529,6 @@ impl BackwardPassState {
     /// Panics if any of the following debug preconditions are violated:
     ///
     /// - `inputs.ctx.templates.len() != num_stages`
-    /// - `inputs.ctx.base_rows.len() != num_stages`
     /// - `inputs.risk_measures.len() != num_stages`
     /// - `inputs.frozen.len() != n_pools`
     fn run_sampled_backward<S, C: Communicator>(
@@ -539,7 +542,6 @@ impl BackwardPassState {
         let num_stages = training_ctx.horizon.num_stages();
 
         debug_assert_eq!(inputs.ctx.templates.len(), num_stages);
-        debug_assert_eq!(inputs.ctx.base_rows.len(), num_stages);
         debug_assert_eq!(inputs.risk_measures.len(), num_stages);
         debug_assert_eq!(
             inputs.frozen.len(),
@@ -548,11 +550,7 @@ impl BackwardPassState {
         );
 
         let start = Instant::now();
-        let solves_before: u64 = inputs
-            .workspaces
-            .iter()
-            .map(|ws| ws.solver.statistics().solve_count)
-            .sum();
+        let solves_before: u64 = total_solve_count(inputs.workspaces);
 
         // `set_profile` is delta-tracked: it issues solver-option calls only for
         // fields that differ from the solver's current state.
@@ -667,13 +665,8 @@ impl BackwardPassState {
             }
         }
 
-        #[allow(clippy::cast_possible_truncation)]
-        let elapsed_ms = start.elapsed().as_millis() as u64;
-        let solves_after: u64 = inputs
-            .workspaces
-            .iter()
-            .map(|ws| ws.solver.statistics().solve_count)
-            .sum();
+        let elapsed_ms = ms_elapsed(start);
+        let solves_after: u64 = total_solve_count(inputs.workspaces);
 
         Ok(BackwardResult {
             cuts_generated,
@@ -727,11 +720,7 @@ impl BackwardPassState {
         S: SolverInterface<Profile = ActiveProfile> + Send,
     {
         let start = Instant::now();
-        let solves_before: u64 = inputs
-            .workspaces
-            .iter()
-            .map(|ws| ws.solver.statistics().solve_count)
-            .sum();
+        let solves_before: u64 = total_solve_count(inputs.workspaces);
 
         let backward_profile = self.profile;
         for ws in inputs.workspaces.iter_mut() {
@@ -877,11 +866,7 @@ impl BackwardPassState {
                 timings: ws0.worker_timing_buf,
             });
         }
-        let solves_after: u64 = inputs
-            .workspaces
-            .iter()
-            .map(|ws| ws.solver.statistics().solve_count)
-            .sum();
+        let solves_after: u64 = total_solve_count(inputs.workspaces);
 
         let rank_i32 = i32::try_from(my_rank).map_err(|_| {
             SddpError::Validation(format!(
@@ -1059,20 +1044,16 @@ impl BackwardPassState {
                 .zip(&self.worker_stats_after)
                 .map(|(before, after)| SolverStatsDelta::from_snapshots(before, after)),
         );
-        let stage_setup_ms: f64 = self
-            .worker_deltas
-            .iter()
-            .map(|d| d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms)
-            .sum();
+        let stage_setup_ms: f64 = self.worker_deltas.iter().map(non_solve_setup_ms).sum();
         for (ws, delta) in workspaces.iter_mut().zip(&self.worker_deltas) {
-            ws.worker_timing_buf.bwd_setup_ms +=
-                delta.load_model_time_ms + delta.set_bounds_time_ms + delta.basis_set_time_ms;
+            ws.worker_timing_buf.bwd_setup_ms += non_solve_setup_ms(delta);
         }
         self.worker_totals.clear();
-        self.worker_totals
-            .extend(self.worker_deltas.iter().map(|d| {
-                d.solve_time_ms + d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
-            }));
+        self.worker_totals.extend(
+            self.worker_deltas
+                .iter()
+                .map(|d| d.solve_time_ms + non_solve_setup_ms(d)),
+        );
         let max_worker_ms = self.worker_totals.iter().copied().fold(0.0_f64, f64::max);
         let avg_worker_ms = if self.worker_totals.is_empty() {
             0.0_f64
@@ -1228,6 +1209,13 @@ impl BackwardPassState {
     }
 }
 
+/// Per-worker non-solve overhead for one stage: LP load + bound patch + basis-set
+/// time. Shared by `collect_stage_timing_stats`'s setup-time sum, its
+/// `bwd_setup_ms` accumulation, and (plus `solve_time_ms`) its per-worker totals.
+fn non_solve_setup_ms(d: &SolverStatsDelta) -> f64 {
+    d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
+}
+
 /// Iteration-constant values derived once from `BackwardPassInputs` at the start of `run`.
 ///
 /// Passed to `compute_one_backward_node` to avoid recomputing them on every node
@@ -1288,6 +1276,21 @@ struct NodeCompute {
     scheduling_ms: u64,
 }
 
+/// Milliseconds elapsed since `start`; every duration measured here is well
+/// under `u64::MAX` ms.
+#[allow(clippy::cast_possible_truncation)]
+fn ms_elapsed(start: Instant) -> u64 {
+    start.elapsed().as_millis() as u64
+}
+
+/// Total LP solve count across every worker's solver, for a before/after delta.
+fn total_solve_count<S: SolverInterface>(workspaces: &[SolverWorkspace<S>]) -> u64 {
+    workspaces
+        .iter()
+        .map(|ws| ws.solver.statistics().solve_count)
+        .sum()
+}
+
 /// Resolve the effective backward thread scheduler for the SAMPLED path
 /// (`compute_one_backward_node`'s only caller): an active Dynamic Cut
 /// Selection iteration always forces the by-scenario path (its cut-free lazy
@@ -1311,7 +1314,7 @@ fn resolve_backward_scheduler(
 /// "Backward opening order is warm-start-only"). Delegates to the shared
 /// [`crate::setup::node_graph::assemble_outcome_weights`] primitive — the
 /// single owner of this fill, shared with
-/// `lower_bound::assemble_outcome_weights`.
+/// `lower_bound::assemble_root_outcome_weights`.
 fn assemble_successor_outcome_weights(
     node_graph: &NodeGraph,
     node_pos: NodePos,
@@ -1521,8 +1524,7 @@ fn run_one_backward_level<S: SolverInterface + Send, C: Communicator>(
     inputs
         .exchange
         .exchange(inputs.records, level_stage, num_stages, inputs.comm)?;
-    #[allow(clippy::cast_possible_truncation)]
-    let state_exchange_ms = exch_start.elapsed().as_millis() as u64;
+    let state_exchange_ms = ms_elapsed(exch_start);
 
     // Every rank's real (non-padded) forward-pass count for this level, already
     // computed by `exchange()` above with no further collective — the total
@@ -1629,8 +1631,7 @@ fn run_one_backward_level<S: SolverInterface + Send, C: Communicator>(
     // peer's; the local count scales with rank count while the global total is
     // rank-count invariant.
     let cuts_generated = n_local_total + remote_total;
-    #[allow(clippy::cast_possible_truncation)]
-    let cut_sync_ms = sync_start.elapsed().as_millis() as u64;
+    let cut_sync_ms = ms_elapsed(sync_start);
 
     let mut stage_entries = Vec::with_capacity(nodes_out.len());
     let mut setup_ms = 0u64;
@@ -1752,8 +1753,7 @@ fn compute_one_backward_node<S: SolverInterface + Send, C: Communicator>(
         });
     }
     let pool_regions = pool_regions_start..state.level_pool_regions_scratch.len();
-    #[allow(clippy::cast_possible_truncation)]
-    let cut_batch_build_ms = batch_start.elapsed().as_millis() as u64;
+    let cut_batch_build_ms = ms_elapsed(batch_start);
 
     let outcomes = SuccessorOutcomes::new(
         &state.successor_meta_buf,
@@ -1829,8 +1829,7 @@ fn compute_one_backward_node<S: SolverInterface + Send, C: Communicator>(
             block_size,
             &state.by_node_scratch.block_order[..n_blocks],
         );
-        #[allow(clippy::cast_possible_truncation)]
-        let elapsed_ms = process_start.elapsed().as_millis() as u64;
+        let elapsed_ms = ms_elapsed(process_start);
         // Telemetry-only merge (sddp.md "by-node scheduler is
         // warm-start-only" — disjoint from the per-`(m, ω)` arena scatter and
         // ascending-m aggregation `by_node_finish` performs below); keyed by the
@@ -1880,8 +1879,7 @@ fn compute_one_backward_node<S: SolverInterface + Send, C: Communicator>(
             &outcomes,
             basis_slices,
         );
-        #[allow(clippy::cast_possible_truncation)]
-        let elapsed_ms = process_start.elapsed().as_millis() as u64;
+        let elapsed_ms = ms_elapsed(process_start);
 
         let result = by_scenario_finish(
             worker_staged,
@@ -2097,7 +2095,7 @@ mod tests {
     };
 
     use crate::{
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         cut::FutureCostFunction,
         cut_sync::CutSyncBuffers,
         horizon_mode::HorizonMode,
@@ -2108,7 +2106,8 @@ mod tests {
         solver_stats::WORKER_STATS_ENTRY_STRIDE,
         state_exchange::ExchangeBuffers,
         test_support::{
-            all_enabled_cut_state_layouts, permissive_state_boxes, state_layout, study_dims,
+            StageContextFixture, all_enabled_cut_state_layouts, equipment_free_geometry,
+            hydro_free_stochastic_context, permissive_state_boxes, state_layout, study_dims,
             trial_state_records,
         },
         trajectory::TrajectoryRecord,
@@ -2276,6 +2275,7 @@ mod tests {
         }
     }
 
+    // row 0: z-inflow definition (z_inflow[0] = rhs), the only row; col 1 is the free z column.
     fn minimal_template_1_0() -> StageTemplate {
         StageTemplate {
             num_cols: 3,
@@ -2284,16 +2284,33 @@ mod tests {
             col_starts: vec![0_i32, 0, 1, 1],
             row_indices: vec![0_i32],
             values: vec![1.0],
-            col_lower: vec![0.0, 0.0, 0.0],
+            col_lower: vec![0.0, f64::NEG_INFINITY, 0.0],
             col_upper: vec![f64::INFINITY; 3],
             objective: vec![0.0, 0.0, 1.0],
             row_lower: vec![0.0],
             row_upper: vec![0.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
+        }
+    }
+
+    /// A hydro-free, state-free counterpart of [`minimal_template_1_0`] — a
+    /// single theta column, no rows.
+    fn zero_hydro_template() -> StageTemplate {
+        StageTemplate {
+            num_cols: 1,
+            num_rows: 0,
+            num_nz: 0,
+            col_starts: vec![0_i32, 0],
+            row_indices: vec![],
+            values: vec![],
+            col_lower: vec![0.0],
+            col_upper: vec![f64::INFINITY],
+            objective: vec![1.0],
+            row_lower: vec![],
+            row_upper: vec![],
+            n_state: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -2310,16 +2327,23 @@ mod tests {
         }
     }
 
-    fn single_workspace(solver: MockSolver, n_state: usize) -> Vec<SolverWorkspace<MockSolver>> {
+    fn single_workspace(
+        solver: MockSolver,
+        n_state: usize,
+        hydro_count: usize,
+    ) -> Vec<SolverWorkspace<MockSolver>> {
         use crate::lp::builder::PatchBuffer;
         vec![SolverWorkspace {
             rank: 0,
             worker_id: 0,
             solver: ProfiledSolver::new(solver),
-            patch_buf: PatchBuffer::new(1, 0, 0, 0, 0, 0, 0),
+            patch_buf: PatchBuffer::new(
+                &crate::test_support::state_layout(hydro_count, 0),
+                &[],
+                &[],
+            ),
             current_state: Vec::with_capacity(n_state),
             scratch: ScratchBuffers {
-                noise_buf: Vec::new(),
                 inflow_m3s_buf: Vec::new(),
                 lag_matrix_buf: Vec::new(),
                 par_inflow_buf: Vec::new(),
@@ -2545,8 +2569,8 @@ mod tests {
             bwd_max_openings,
             real_states_capacity,
             7,
-            4,
-            3,
+            &state_layout(4, 0),
+            &HorizonMode::Finite { num_stages: 3 },
         );
 
         let send_stride = n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE;
@@ -2594,7 +2618,6 @@ mod tests {
         // `ctx.templates`; mirror that here so `frozen` does not alias the
         // `&templates` borrow held by `ctx`.
         let frozen_templates = templates.clone();
-        let base_rows = vec![1_usize; n_stages];
         let n_state = state.n_state;
         let forward_passes = 2_u32;
 
@@ -2602,7 +2625,7 @@ mod tests {
             FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let trial_states = vec![vec![10.0], vec![20.0]];
         let records = trial_state_records(&trial_states, n_stages);
-        let mut exchange = ExchangeBuffers::new(n_state, trial_states.len(), 1);
+        let mut exchange = ExchangeBuffers::new(&state, trial_states.len(), 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2610,37 +2633,14 @@ mod tests {
 
         let solution = solution_1_0(100.0, -5.0);
         let comm = StubComm;
-        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
+        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state, 1);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+        let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -2673,8 +2673,8 @@ mod tests {
             bwd_max_openings,
             n_state,
             local_count,
-            n_state,
-            n_stages,
+            &state,
+            &horizon,
         );
 
         let mut inputs = BackwardPassInputs {
@@ -2763,7 +2763,6 @@ mod tests {
         stochastic: &cobre_stochastic::StochasticContext,
         state: &StateSpace,
         templates: &[StageTemplate],
-        base_rows: &[usize],
         n_stages: usize,
         records: &[TrajectoryRecord],
     ) -> (usize, usize, usize) {
@@ -2780,7 +2779,7 @@ mod tests {
             10,
             &vec![0; node_graph.n_pools],
         );
-        let mut exchange = ExchangeBuffers::new(n_state, trial_count, 1);
+        let mut exchange = ExchangeBuffers::new(state, trial_count, 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -2788,7 +2787,7 @@ mod tests {
 
         let solution = solution_1_0(100.0, -5.0);
         let comm = StubComm;
-        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
+        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state, 1);
         // The basis node axis is the canonical NODE count (production sizes it to
         // `node_graph.nodes.len()`), not `n_stages`: a fan's per-child basis keys on
         // sibling node positions that exceed the stage count.
@@ -2796,32 +2795,9 @@ mod tests {
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates,
-            base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+        let fixture = StageContextFixture::new(templates, &state_boxes, &geometry);
+        let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
             node_graph,
@@ -2852,8 +2828,8 @@ mod tests {
             bwd_max_openings,
             n_state,
             local_count,
-            n_state,
-            n_stages,
+            state,
+            &horizon,
         );
 
         let mut inputs = BackwardPassInputs {
@@ -2967,7 +2943,6 @@ mod tests {
 
         let state = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
-        let base_rows = vec![1_usize; n_stages];
         let trial_states = vec![vec![10.0], vec![20.0], vec![30.0]];
 
         let hetero_records =
@@ -2981,7 +2956,6 @@ mod tests {
             &stochastic,
             &state,
             &templates,
-            &base_rows,
             n_stages,
             &hetero_records,
         );
@@ -2990,7 +2964,6 @@ mod tests {
             &stochastic,
             &state,
             &templates,
-            &base_rows,
             n_stages,
             &homo_records,
         );
@@ -3141,7 +3114,7 @@ mod tests {
         (0..count)
             .map(|i| {
                 let mut ws =
-                    single_workspace(MockSolver::always_ok(solution_1_0(100.0, -5.0)), n_state);
+                    single_workspace(MockSolver::always_ok(solution_1_0(100.0, -5.0)), n_state, 1);
                 let mut w = ws.remove(0);
                 w.worker_id = i as i32;
                 w
@@ -3159,7 +3132,6 @@ mod tests {
         stochastic: &cobre_stochastic::StochasticContext,
         state: &StateSpace,
         templates: &[StageTemplate],
-        base_rows: &[usize],
         n_stages: usize,
         records: &[TrajectoryRecord],
         scheduler: BackwardScheduler,
@@ -3194,7 +3166,7 @@ mod tests {
             10,
             &vec![0; node_graph.n_pools],
         );
-        let mut exchange = ExchangeBuffers::new(n_state, trial_count, 1);
+        let mut exchange = ExchangeBuffers::new(state, trial_count, 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -3209,32 +3181,9 @@ mod tests {
         // Cut-batch scratch is pool-indexed (backward writes `cut_batches[successor_pool_id]`).
         let mut cut_batches = empty_cut_batches(node_graph.n_pools);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates,
-            base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+        let fixture = StageContextFixture::new(templates, &state_boxes, &geometry);
+        let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
             node_graph,
@@ -3268,8 +3217,8 @@ mod tests {
             bwd_max_openings,
             n_state,
             local_count,
-            n_state,
-            n_stages,
+            state,
+            &horizon,
         );
         state_machine.set_scheduler(scheduler);
 
@@ -3362,6 +3311,10 @@ mod tests {
     /// column 0 — `is_external_terminal_leaf` eligible) and ONE Generated leaf
     /// (id 3 — never eligible), so a single node's backward exercises both the
     /// fusion-eligible and the exhaustive-solve branch side by side.
+    ///
+    /// Hydro-free: `run_enumerated_backward_over_graph`'s harness declares no
+    /// `external_inflow_library`, and the External leaf's declared column must
+    /// resolve against an empty inflow noise class to avoid it.
     fn mixed_terminal_fan_graph() -> (NodeGraph, cobre_stochastic::StochasticContext) {
         use crate::setup::node_graph::build_node_graph;
         use cobre_core::HorizonGraph;
@@ -3386,7 +3339,7 @@ mod tests {
         }
 
         let n_stages = 3_usize;
-        let stochastic = make_stochastic_context(n_stages, 3);
+        let stochastic = hydro_free_stochastic_context(n_stages, 3);
         let study_stage_ids = [0_i32, 1, 2];
         let resolver = StageIdResolver::from_study_stage_ids(&study_stage_ids);
         let graph = HorizonGraph {
@@ -3424,9 +3377,14 @@ mod tests {
         comm: &C,
     ) -> (Result<BackwardResult, SddpError>, Vec<usize>) {
         let n_stages = 3_usize;
-        let state = state_layout(1, 0);
-        let templates = vec![minimal_template_1_0(); n_stages];
-        let base_rows = vec![1_usize; n_stages];
+        let n_hydros = stochastic.n_hydros();
+        let state = state_layout(n_hydros, 0);
+        let template = if n_hydros == 0 {
+            zero_hydro_template()
+        } else {
+            minimal_template_1_0()
+        };
+        let templates = vec![template; n_stages];
         let frozen_templates: Vec<StageTemplate> = (0..node_graph.n_pools)
             .map(|p| templates[node_graph.pool_stage[p].0].clone())
             .collect();
@@ -3439,44 +3397,21 @@ mod tests {
             10,
             &vec![0; node_graph.n_pools],
         );
-        let mut exchange = ExchangeBuffers::new(n_state, 1, 1);
+        let mut exchange = ExchangeBuffers::new(&state, 1, 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let solution = solution_1_0(100.0, -5.0);
-        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
+        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state, n_hydros);
         let mut basis_store = empty_basis_store(1, node_graph.nodes.len());
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, comm.size(), comm.size());
         let mut cut_batches = empty_cut_batches(node_graph.n_pools);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+        let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
             node_graph,
@@ -3513,7 +3448,7 @@ mod tests {
             .unwrap_or(0)
             .max(1);
         let mut state_machine =
-            BackwardPassState::new(1, 1, bwd_max_openings, n_state, 1, n_state, n_stages);
+            BackwardPassState::new(1, 1, bwd_max_openings, n_state, 1, &state, &horizon);
 
         let mut inputs = BackwardPassInputs {
             workspaces: &mut workspaces,
@@ -3660,8 +3595,8 @@ mod tests {
 
         let traversal = Traversal::resolve(&node_graph, true, 1);
         let mut enumerated_state = EnumeratedForwardScratch::default();
-        enumerated_state.set_out_state_for_test(root, node_graph.nodes.len(), &[10.0]);
-        enumerated_state.set_out_state_for_test(trunk, node_graph.nodes.len(), &[20.0]);
+        enumerated_state.set_out_state_for_test(root, node_graph.nodes.len(), &[]);
+        enumerated_state.set_out_state_for_test(trunk, node_graph.nodes.len(), &[]);
         assert!(
             enumerated_state
                 .fused_terminal_slice(external_leaf)
@@ -3856,7 +3791,6 @@ mod tests {
 
         let state = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
-        let base_rows = vec![1_usize; n_stages];
         let trial_states = vec![vec![10.0], vec![20.0], vec![30.0], vec![40.0]];
         let f = trial_states.len();
 
@@ -3887,7 +3821,6 @@ mod tests {
                 &stochastic,
                 &state,
                 &templates,
-                &base_rows,
                 n_stages,
                 &records_a,
                 scheduler,
@@ -3898,7 +3831,6 @@ mod tests {
                 &stochastic,
                 &state,
                 &templates,
-                &base_rows,
                 n_stages,
                 &records_b,
                 scheduler,
@@ -3951,7 +3883,6 @@ mod tests {
         let state_layout_fixture = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
         let frozen_templates = templates.clone();
-        let base_rows = vec![1_usize; n_stages];
         let n_state = state_layout_fixture.n_state;
         let forward_passes = 2_u32;
 
@@ -3959,7 +3890,7 @@ mod tests {
             FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let trial_states = vec![vec![10.0], vec![20.0]];
         let records = trial_state_records(&trial_states, n_stages);
-        let mut exchange = ExchangeBuffers::new(n_state, trial_states.len(), 1);
+        let mut exchange = ExchangeBuffers::new(&state_layout_fixture, trial_states.len(), 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -3967,37 +3898,14 @@ mod tests {
 
         let solution = solution_1_0(100.0, -5.0);
         let comm = StubComm;
-        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
+        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state, 1);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+        let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -4029,8 +3937,8 @@ mod tests {
             bwd_max_openings,
             n_state,
             local_count,
-            n_state,
-            n_stages,
+            &state_layout_fixture,
+            &horizon,
         );
         let resolved =
             Phase::Backward.resolve_profile(Some(&cobre_io::config::PhaseSolverProfileConfig {
@@ -4103,7 +4011,6 @@ mod tests {
         let state = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
         let frozen_templates = templates.clone();
-        let base_rows = vec![1_usize; n_stages];
         let n_state = state.n_state;
         let forward_passes = 2_u32;
 
@@ -4111,7 +4018,7 @@ mod tests {
             FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let trial_states = vec![vec![10.0], vec![20.0]];
         let records = trial_state_records(&trial_states, n_stages);
-        let mut exchange = ExchangeBuffers::new(n_state, trial_states.len(), 1);
+        let mut exchange = ExchangeBuffers::new(&state, trial_states.len(), 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -4119,37 +4026,14 @@ mod tests {
 
         let solution = solution_1_0(100.0, -5.0);
         let comm = StubComm;
-        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
+        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state, 1);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&vec![0; templates.len()]);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+        let ctx = fixture.ctx();
         let study_dims = study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -4181,8 +4065,8 @@ mod tests {
             bwd_max_openings,
             n_state,
             local_count,
-            n_state,
-            n_stages,
+            &state,
+            &horizon,
         );
 
         let mut inputs = BackwardPassInputs {
@@ -4268,14 +4152,24 @@ mod tests {
         // One worker whose DCS binding-count contribution bumps only slot 1 (the
         // resident binding cut), matching what the DCS path emits at iteration i.
         let mut workspaces =
-            single_workspace(MockSolver::always_ok(solution_1_0(0.0, 0.0)), n_state);
+            single_workspace(MockSolver::always_ok(solution_1_0(0.0, 0.0)), n_state, 1);
         let contrib = &mut workspaces[0].backward_accum.metadata_sync_contribution;
         contrib.clear();
         contrib.resize(pop, 0);
         contrib[1] = 1;
 
         let comm = StubComm;
-        let mut state = BackwardPassState::new(1, 1, n_openings, n_state, 1, n_state, n_stages);
+        let mut state = BackwardPassState::new(
+            1,
+            1,
+            n_openings,
+            n_state,
+            1,
+            &state_layout(n_state, 0),
+            &HorizonMode::Finite {
+                num_stages: n_stages,
+            },
+        );
 
         state
             .sync_stage_metadata(successor, 0, pop, i, &workspaces, &mut fcf, &comm)
@@ -4610,17 +4504,20 @@ mod tests {
     fn by_node_scratch_sizing_follows_configured_scheduler_only() {
         use cobre_io::config::BackwardScheduler;
 
+        let state = state_layout(3, 0);
+        let horizon = HorizonMode::Finite { num_stages: 5 };
+
         // No scheduler set ⇒ empty (the pre-existing ByScenario/sampled default).
-        let baseline = BackwardPassState::new(1, 1, 4, 0, 2, 3, 5);
+        let baseline = BackwardPassState::new(1, 1, 4, 0, 2, &state, &horizon);
         assert_eq!(baseline.by_node_scratch_arena_capacity(), 0);
 
         // set_scheduler(ByNode) sizes it.
-        let mut by_node_only = BackwardPassState::new(1, 1, 4, 0, 2, 3, 5);
+        let mut by_node_only = BackwardPassState::new(1, 1, 4, 0, 2, &state, &horizon);
         by_node_only.set_scheduler(BackwardScheduler::ByNode { block_size: None });
         assert!(by_node_only.by_node_scratch_arena_capacity() > 0);
 
         // set_scheduler(ByScenario) keeps it empty.
-        let mut by_scenario_only = BackwardPassState::new(1, 1, 4, 0, 2, 3, 5);
+        let mut by_scenario_only = BackwardPassState::new(1, 1, 4, 0, 2, &state, &horizon);
         by_scenario_only.set_scheduler(BackwardScheduler::ByScenario {});
         assert_eq!(by_scenario_only.by_node_scratch_arena_capacity(), 0);
     }
@@ -4740,8 +4637,8 @@ mod tests {
         use cobre_stochastic::ForwardNoiseTables;
 
         let comm = StubComm;
-        let num_stages = setup.stage_data.stages.len();
-        let node_graph = &setup.node_graph;
+        let num_stages = setup.inputs.stage_data.stages.len();
+        let node_graph = &setup.inputs.node_graph;
         let total_forward_passes = usize::try_from(
             crate::test_support::node_scenario_count(node_graph)
                 .expect("scenario count must not overflow"),
@@ -4762,56 +4659,55 @@ mod tests {
             })
             .collect();
 
-        let stage_ctx = StageContext {
-            templates: &setup.stage_data.stage_templates.templates,
-            state_boxes: &setup.stage_data.stage_templates.state_boxes,
-            base_rows: &setup.stage_data.stage_templates.base_rows,
-            geometry_per_stage: &setup.stage_data.stage_templates.geometry_per_stage,
-            noise_scale: &setup.stage_data.stage_templates.noise_scale,
-            n_hydros: setup.stage_data.stage_templates.n_hydros,
-            cost_scale_factor: setup.stage_data.stage_templates.cost_scale_factor,
-            n_load_buses: setup.stage_data.stage_templates.n_load_buses,
-            load_balance_row_starts: &setup.stage_data.stage_templates.load_balance_row_starts,
-            load_bus_indices: &setup.stage_data.stage_templates.load_bus_indices,
-            block_counts_per_stage: &setup.stage_data.block_counts_per_stage,
-            ncs_col_starts: &setup.stage_data.stage_templates.ncs_col_starts,
-            n_ncs: setup.stage_data.stage_templates.n_ncs,
-            ncs_stochastic_dense_col: &setup.ncs_stochastic_dense_col,
-            ncs_stochastic_windows: &setup.ncs_stochastic_windows,
-            anticipated_windows: &setup.anticipated_windows,
-            study_stage_ids: &setup.study_stage_ids,
-            ncs_max_gen: &setup.ncs_max_gen,
-            ncs_allow_curtailment: &setup.ncs_allow_curtailment,
-            discount_factors: setup.stage_data.stage_templates.discount_factors(),
-            cumulative_discount_factors: setup
+        let fixture = StageContextFixture::from_stage_templates(
+            &setup.inputs.stage_data.stage_templates,
+            setup.inputs.stage_data.stage_templates.state_boxes(),
+        )
+        .ncs_stochastic_dense_col(&setup.inputs.ncs.stochastic_dense_col)
+        .ncs_stochastic_windows(&setup.inputs.ncs.stochastic_windows)
+        .anticipated_windows(
+            setup
+                .inputs
                 .stage_data
-                .stage_templates
+                .study_dims
+                .anticipated_plants
+                .windows(),
+        )
+        .study_stage_ids(&setup.inputs.study_stage_ids)
+        .ncs_max_gen(&setup.inputs.ncs.max_gen)
+        .ncs_allow_curtailment(&setup.inputs.ncs.allow_curtailment)
+        .discount_factors(setup.inputs.stage_data.time_value.discount_factors())
+        .cumulative_discount_factors(
+            setup
+                .inputs
+                .stage_data
+                .time_value
                 .cumulative_discount_factors(),
-            stage_lag_transitions: &setup.stage_data.stage_lag_transitions,
-            noise_group_ids: &setup.stage_data.noise_group_ids,
-            downstream_par_order: setup.downstream_par_order,
-        };
-        let tr = &setup.scenario_libraries.training;
+        )
+        .stage_lag_transitions(&setup.inputs.stage_data.stage_lag_transitions)
+        .noise_group_ids(&setup.inputs.stage_data.noise_group_ids);
+        let stage_ctx = fixture.ctx();
+        let tr = &setup.inputs.scenario_libraries.training;
         let training_ctx = TrainingContext {
-            horizon: &setup.horizon,
-            state: &setup.stage_data.state,
-            cut_state_layouts: &setup.stage_data.cut_state_layouts,
-            study_dims: &setup.stage_data.study_dims,
-            inflow_method: &setup.inflow_method,
-            stochastic: &setup.stochastic,
-            initial_state: &setup.initial_state,
+            horizon: &setup.inputs.horizon,
+            state: &setup.inputs.stage_data.state,
+            cut_state_layouts: &setup.inputs.cut_state_layouts,
+            study_dims: &setup.inputs.stage_data.study_dims,
+            inflow_method: &setup.inputs.stage_data.study_dims.inflow_method,
+            stochastic: &setup.inputs.stochastic,
+            initial_state: &setup.inputs.initial.state,
             inflow_scheme: tr.inflow_scheme,
             load_scheme: tr.load_scheme,
             ncs_scheme: tr.ncs_scheme,
-            stages: &setup.stage_data.stages,
+            stages: &setup.inputs.stage_data.stages,
             historical_library: tr.historical.as_ref(),
             external_inflow_library: tr.external_inflow.as_ref(),
             external_load_library: tr.external_load.as_ref(),
             external_ncs_library: tr.external_ncs.as_ref(),
-            lag_accum_seed: &setup.derived_inflow_seeds.accum,
-            lag_weight_seed: &setup.derived_inflow_seeds.weight,
+            lag_accum_seed: &setup.inputs.initial.inflow_seeds.accum,
+            lag_weight_seed: &setup.inputs.initial.inflow_seeds.weight,
             dcs: None,
-            node_graph: &setup.node_graph,
+            node_graph: &setup.inputs.node_graph,
         };
 
         let sampler =
@@ -4834,16 +4730,10 @@ mod tests {
         };
 
         let fwd_params = crate::forward::EnumeratedParams {
-            num_stages,
             iteration: 1,
             fwd_offset: 0,
             local_forward_passes: total_forward_passes,
             total_forward_passes,
-            terminal_has_boundary_cuts: false,
-            noise_dim: training_ctx.stochastic.dim(),
-            initial_state: training_ctx.initial_state,
-            lag_accum_seed: training_ctx.lag_accum_seed,
-            lag_weight_seed: training_ctx.lag_weight_seed,
             ctx: &stage_ctx,
             frozen: &frozen,
             fcf: &setup.fcf,
@@ -4867,7 +4757,7 @@ mod tests {
 
         let n_state = training_ctx.state.n_state;
         let mut cut_batches = empty_cut_batches(node_graph.n_pools);
-        let mut exchange = ExchangeBuffers::new(n_state, total_forward_passes.max(1), 1);
+        let mut exchange = ExchangeBuffers::new(training_ctx.state, total_forward_passes.max(1), 1);
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, 1);
         let risk_measures = vec![RiskMeasure::Expectation; num_stages];
         let bwd_max_openings = node_graph
@@ -4888,8 +4778,8 @@ mod tests {
             bwd_max_openings,
             n_state,
             total_forward_passes,
-            n_state,
-            num_stages,
+            training_ctx.state,
+            training_ctx.horizon,
         );
 
         let mut inputs = BackwardPassInputs {

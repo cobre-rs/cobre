@@ -632,6 +632,24 @@ fn append_boundary_policy_with_strict(dir: &Path, boundary_policy_dir: &Path, st
     write_file(dir, "config.json", &config);
 }
 
+/// Rewrites `config.json` to warm-start training from the case's own
+/// just-produced checkpoint at the default `output/policy` path.
+fn append_warm_start_policy(dir: &Path) {
+    write_file(
+        dir,
+        "config.json",
+        r#"{
+            "training": {
+                "selection": { "method": "sampled", "forward_passes": 1 },
+                "stopping_rules": [{ "type": "iteration_limit", "limit": 1 }]
+            },
+            "simulation": { "enabled": false },
+            "modeling": { "inflow_non_negativity": { "method": "none" } },
+            "policy": { "mode": "warm_start" }
+        }"#,
+    );
+}
+
 /// A compatible boundary (the case's own just-produced checkpoint) prints the
 /// selected boundary date, then the one-line reconciliation summary, and
 /// exits 0, without a solve. The per-family breakdown is gated behind
@@ -879,7 +897,6 @@ fn fpha_hydro_without_production_models_json_stdout_mentions_file() {
 
 // ── non-boundary scalar-parameter presence guard ───────────────────────────────
 
-/// Absolute path to `examples/<name>`, resolved two levels above the crate.
 fn copy_dir_recursive(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).unwrap();
     for entry in fs::read_dir(src).unwrap() {
@@ -945,4 +962,71 @@ fn non_boundary_resolved_scalar_parameter_validates() {
         .args(["validate", dir.path().to_str().unwrap()])
         .assert()
         .success();
+}
+
+/// A checkpoint written by another cobre version is refused at warm-start
+/// load, naming both versions.
+#[test]
+fn warm_start_refuses_a_policy_written_by_another_version() {
+    let dir = TempDir::new().unwrap();
+    write_boundary_case(dir.path(), 0);
+    run_case(dir.path());
+    append_warm_start_policy(dir.path());
+
+    cobre()
+        .args(["run", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    common::restamp_policy_version(&dir.path().join("output/policy"), "0.0.1");
+
+    cobre()
+        .args(["run", dir.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("written by cobre 0.0.1"))
+        .stderr(predicate::str::contains(format!(
+            "this is cobre {}",
+            env!("CARGO_PKG_VERSION")
+        )));
+}
+
+/// A boundary source written by another cobre version is refused at run,
+/// naming both versions.
+#[test]
+fn boundary_policy_written_by_another_version_is_refused_at_run() {
+    let dir = TempDir::new().unwrap();
+    write_boundary_case(dir.path(), 0);
+    run_case(dir.path());
+    let boundary_policy_dir = dir.path().join("output/policy");
+    append_boundary_policy(dir.path(), &boundary_policy_dir);
+
+    cobre()
+        .args([
+            "run",
+            dir.path().to_str().unwrap(),
+            "--output",
+            dir.path().join("boundary_ok").to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    common::restamp_policy_version(&boundary_policy_dir, "0.0.1");
+
+    cobre()
+        .args([
+            "run",
+            dir.path().to_str().unwrap(),
+            "--output",
+            dir.path().join("boundary_refused").to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("written by cobre 0.0.1"))
+        .stderr(predicate::str::contains(format!(
+            "this is cobre {}",
+            env!("CARGO_PKG_VERSION")
+        )));
 }

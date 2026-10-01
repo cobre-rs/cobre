@@ -141,8 +141,6 @@ pub(crate) struct StageKey<'a> {
     pub(crate) m: usize,
     /// Local scenario index within this worker's partition.
     pub(crate) local_m: usize,
-    /// Total number of stages in the horizon.
-    pub(crate) num_stages: usize,
     /// Current training iteration (used in error context).
     pub(crate) iteration: u64,
     /// Raw noise sample for this (stage, scenario) pair.
@@ -150,10 +148,6 @@ pub(crate) struct StageKey<'a> {
     /// Total LP row count, equal to `frozen[t].num_rows` (the frozen template
     /// absorbs all active cut rows as structural rows); sizes basis storage.
     pub(crate) basis_row_capacity: usize,
-    /// True when the last study stage (`T-1`) has at least one warm-start
-    /// (boundary) cut. When true, the terminal theta column is NOT zeroed so the
-    /// boundary cuts can contribute to the LP objective.
-    pub(crate) terminal_has_boundary_cuts: bool,
     /// Cut pool for stage `t`.
     pub(crate) pool: &'a CutPool,
     /// Dynamic Cut Selection hyperparameters, `Some` only when the dynamic method
@@ -209,17 +203,6 @@ where
     use crate::forward_pass_state::{ForwardPassInputs, ForwardPassState};
     let n_workers = workspaces.len().max(1);
     let num_stages = training_ctx.horizon.num_stages();
-    // This shim bypasses the session's static-terminal-template priming bake
-    // (it has no `IterationScratch` to read), so it derives the same
-    // fcf.pools-based value that bake would otherwise have captured.
-    let terminal_has_boundary_cuts = (num_stages > 0)
-        .then(|| {
-            training_ctx
-                .node_graph
-                .any_stage_node(StageIdx(num_stages - 1))
-        })
-        .flatten()
-        .is_some_and(|n| fcf.pools[training_ctx.node_graph.nodes[n].pool_id].warm_start_count > 0);
     let mut state = ForwardPassState::new(n_workers, num_stages, batch.local_forward_passes);
     let mut inputs = ForwardPassInputs {
         workspaces,
@@ -227,7 +210,6 @@ where
         ctx,
         frozen,
         fcf,
-        terminal_has_boundary_cuts,
         training_ctx,
         records,
         local_forward_passes: batch.local_forward_passes,

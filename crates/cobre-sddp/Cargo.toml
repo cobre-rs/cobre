@@ -72,20 +72,20 @@ tracing = "0.1"
 cc = "1.2"
 
 [dev-dependencies]
-arrow = { version = "59", default-features = false, features = ["prettyprint"] }
+arrow = { version = "60", default-features = false, features = ["prettyprint"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 cobre-core = { version = "0.16.0", path = "../cobre-core", features = ["test-support"] }
-criterion = { version = "0.7", default-features = false }
+criterion = { version = "0.8", default-features = false }
 # Used only by the `dcs_batched_scoring` bench to reproduce the pre-batching
 # per-candidate `dgemm` baseline (the crate's own `gemm_block` wrapper is
 # `pub(crate)` and so unreachable from a bench). Same pin as the normal dep.
 matrixmultiply = { workspace = true }
-parquet = { version = "59", default-features = false, features = ["arrow", "zstd"] }
+parquet = { version = "60", default-features = false, features = ["arrow", "zstd"] }
 proptest = "1"
 rand = "0.10"
 rand_distr = "0.6"
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 tempfile = "3"
 tracing-subscriber = "0.3"
 
@@ -96,6 +96,7 @@ harness = false
 [[bench]]
 name = "cut_application_anticipated_state"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name = "cut_selection"
@@ -108,6 +109,12 @@ harness = false
 [[bench]]
 name = "dcs_batched_scoring"
 harness = false
+required-features = ["test-support"]
+
+[[bench]]
+name = "patch_fill"
+harness = false
+required-features = ["test-support"]
 
 # Override unsafe_code to "allow" for this crate because it has two unsafe
 # surfaces, each isolated behind a safe wrapper: (1) the cut-selection kernel

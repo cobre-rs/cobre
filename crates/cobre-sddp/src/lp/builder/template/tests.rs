@@ -1,52 +1,55 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
+#![expect(
     clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
     clippy::needless_range_loop,
     clippy::doc_markdown,
-    clippy::doc_overindented_list_items,
-    clippy::similar_names
+    reason = "the fixture spells out one complete study inline so each assertion traces to a literal, the test reads non-negative CSC offsets, the loop index addresses parallel arrays, and test docs name LP symbols that are not code identifiers"
 )]
 
 use chrono::NaiveDate;
 use cobre_core::scenario::SamplingScheme;
 use cobre_core::{
     AnticipatedConfig, Block, BlockMode, BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties,
-    ContractBlockBounds, ContractType, DeficitSegment, EnergyContract, EntityId, Hydro,
-    HydroBlockBounds, HydroGenerationModel, HydroPenalties, HydroStageBounds, LineBlockBounds,
-    LineStagePenalties, LoadModel, NcsStagePenalties, NoiseMethod, PenaltiesCountsSpec,
-    PenaltiesDefaults, PostStudyStage, PostStudyStages, PostStudyThermalBound, PumpingBlockBounds,
-    PumpingStation, ResolvedBounds, ResolvedPenalties, ScenarioSourceConfig, Stage,
-    StageRiskConfig, StageStateConfig, SystemBuilder, Thermal, ThermalBlockBounds,
-    ThermalStageBounds,
+    ContractBlockBounds, ContractType, DeficitSegment, EnergyContract, EntityId, FillingConfig,
+    Hydro, HydroBlockBounds, HydroGenerationModel, HydroPenalties, HydroStageBounds,
+    LineBlockBounds, LineStagePenalties, LoadModel, NcsStagePenalties, NoiseMethod,
+    NonControllableSource, PenaltiesCountsSpec, PenaltiesDefaults, PostStudyStage, PostStudyStages,
+    PostStudyThermalBound, PumpingBlockBounds, PumpingStation, ResolvedBounds, ResolvedNcsBounds,
+    ResolvedNcsFactors, ResolvedPenalties, ScenarioSourceConfig, Stage, StageRiskConfig,
+    StageStateConfig, SystemBuilder, Thermal, ThermalBlockBounds, ThermalStageBounds,
 };
 use cobre_stochastic::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
 use cobre_stochastic::season_cast::post_study_calendar_stages;
 
+use crate::block_clock::M3S_TO_HM3;
 use crate::hydro_models::PrepareHydroModelsResult;
 use crate::indexer::{
-    AnticipatedLocal, BlockIdx, Boundary, HydroCell, HydroCellIndex, HydroSys, StateSpace,
-    ThermalSys, anticipated_resolution_for,
+    AnticipatedLocal, AnticipatedPlants, BlockIdx, Boundary, HydroCell, HydroCellIndex, HydroSys,
+    NcsSys, PumpingSys, StateSpace, StudyDimensions, ThermalSys, anticipated_resolution_for,
 };
 use crate::inflow_method::InflowNonNegativityMethod;
 use crate::lead_time::AnticipatedResolution;
 use crate::resolved_parameters::ResolvedParameters;
-use crate::setup::bucket_topology::build_transit_bucket_topology;
-use crate::setup::template_postprocess::{
-    compute_cumulative_discount_factors, compute_per_stage_discount_factors, postprocess_templates,
+use crate::test_support::{
+    assert_templates_byte_identical, resolve_anticipated_commitments, state_layout_full,
 };
-use crate::setup::{
-    PostStudyResolved, resolve_anticipated_commitments, resolve_post_study_artifacts,
-    resolve_state_layout,
+use crate::time_value::{
+    DeliveryCalendar, PostStudyResolved, TimeValue, compute_cumulative_discount_factors,
+    compute_per_stage_discount_factors, resolve_post_study_artifacts,
 };
-use crate::test_support::state_layout_full;
 
-use super::super::test_support::{ctx_anticipated_and_mask_inputs, state_layout_for};
+/// The value `build_template_build_ctx`'s own `time_value` parameter takes at
+/// every direct test call site — resolved through the same production entry
+/// point (`TimeValue::from_system`) rather than hand-assembled.
+fn build_time_value_for(system: &cobre_core::System) -> TimeValue {
+    let anticipated_plants = AnticipatedPlants::build(system.thermals());
+    TimeValue::from_system(
+        system,
+        &anticipated_plants,
+        DeliveryCalendar::from_system(system),
+    )
+}
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -212,22 +215,39 @@ fn system_with_thermals(thermals: Vec<Thermal>) -> cobre_core::System {
 /// `system_with_thermals`'s bus carries a `std_mw == 0.0` load model; its slot
 /// is admitted under `SamplingScheme::External` and excluded under
 /// `SamplingScheme::InSample` (the byte-neutral default every other caller
-/// threads).
+/// threads). The scheme resolves the membership list the caller passes into
+/// `resolve_lp_build_inputs` — its own `load_bus_indices` derivation is a
+/// pure id-to-position map, no scheme of its own.
 #[test]
-fn collect_load_bus_indices_honors_threaded_scheme() {
+fn resolve_lp_build_inputs_load_bus_indices_honors_threaded_scheme() {
     let system = system_with_thermals(vec![]);
-    let bus_pos: std::collections::BTreeMap<EntityId, usize> = system
-        .buses()
-        .iter()
-        .enumerate()
-        .map(|(i, b)| (b.id, i))
-        .collect();
+    let production_models = ProductionModelSet::new(Vec::new(), &[], 0);
+    let study_dims = StudyDimensions::default();
+    let time_value = build_time_value_for(&system);
+    let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let resolved_params = empty_resolved_params();
 
-    let external = super::collect_load_bus_indices(&system, &bus_pos, SamplingScheme::External);
-    assert_eq!(external, vec![0]);
+    let external = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &system.load_noise_member_bus_ids(SamplingScheme::External),
+        &production_models,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    assert_eq!(external.load_bus_indices, vec![0]);
 
-    let in_sample = super::collect_load_bus_indices(&system, &bus_pos, SamplingScheme::InSample);
-    assert!(in_sample.is_empty());
+    let in_sample = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &system.load_noise_member_bus_ids(SamplingScheme::InSample),
+        &production_models,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    assert!(in_sample.load_bus_indices.is_empty());
 }
 
 /// Build empty [`ResolvedParameters`] (no parameters).
@@ -306,7 +326,7 @@ fn fixture_hydro(id: i32) -> Hydro {
 /// `SystemBuilder::build` sorts every entity Vec by `id.0`, so passing
 /// stations out of declaration order exercises the canonical-ordering
 /// guarantee that `build_template_build_ctx` relies on when threading the
-/// slice into `ctx.pumping_stations`/`pumping_pos`. The two hydros and bus
+/// slice into `ctx.pumping_stations`/`ctx.positions`. The two hydros and bus
 /// exist solely to satisfy pumping-station reference validation.
 fn system_with_pumping_stations(stations: Vec<PumpingStation>) -> cobre_core::System {
     let n_pumping = stations.len();
@@ -431,11 +451,12 @@ fn fixture_pumping_station(id: i32) -> PumpingStation {
 // ── Pumping data threaded into TemplateBuildCtx ────────────────────────────
 
 /// Stations declared out of ID order are exposed ID-sorted on the ctx, and
-/// `pumping_pos` maps each station id to its slot in that sorted slice.
+/// `ctx.positions.pumping` maps each station id to its slot in that sorted
+/// slice.
 ///
 /// Declaration order `[30, 10, 20]` must become `[10, 20, 30]` on the ctx
 /// (the canonical sort applied by `SystemBuilder::build`), with
-/// `pumping_pos = {10->0, 20->1, 30->2}`.
+/// `positions.pumping = {10->Some(0), 20->Some(1), 30->Some(2)}`.
 #[test]
 fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
     let stations = vec![
@@ -448,33 +469,32 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
 
     let ids: Vec<i32> = ctx.pumping_stations.iter().map(|p| p.id.0).collect();
@@ -484,26 +504,22 @@ fn build_template_build_ctx_pumping_stations_id_sorted_and_pos_mapped() {
         "ctx.pumping_stations must be ID-sorted regardless of declaration order"
     );
 
-    assert_eq!(
-        ctx.pumping_pos.len(),
-        3,
-        "pumping_pos has one entry per station"
-    );
-    assert_eq!(ctx.pumping_pos[&EntityId(10)], 0);
-    assert_eq!(ctx.pumping_pos[&EntityId(20)], 1);
-    assert_eq!(ctx.pumping_pos[&EntityId(30)], 2);
+    assert_eq!(ctx.positions.pumping(EntityId(10)), Some(0));
+    assert_eq!(ctx.positions.pumping(EntityId(20)), Some(1));
+    assert_eq!(ctx.positions.pumping(EntityId(30)), Some(2));
 
     for (slot, station) in ctx.pumping_stations.iter().enumerate() {
         assert_eq!(
-            ctx.pumping_pos[&station.id], slot,
-            "pumping_pos[{:?}] must equal its slot in the sorted slice",
+            ctx.positions.pumping(station.id),
+            Some(slot),
+            "positions.pumping({:?}) must equal its slot in the sorted slice",
             station.id
         );
     }
 }
 
-/// `ctx.n_pumping` equals `pumping_stations.len()` and the resolved-bounds
-/// station count, and that count is the source `StageLayout` reserves from.
+/// `ctx.pumping_stations.len()` equals the resolved-bounds station count,
+/// and that count is what `StageLayout` reserves pumping-flow columns for.
 #[test]
 fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
     let stations = vec![fixture_pumping_station(7), fixture_pumping_station(3)];
@@ -512,45 +528,39 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
 
+    assert_eq!(ctx.pumping_stations.len(), 2, "two stations were declared");
     assert_eq!(
-        ctx.n_pumping,
         ctx.pumping_stations.len(),
-        "n_pumping == slice len"
-    );
-    assert_eq!(ctx.n_pumping, 2, "two stations were declared");
-    assert_eq!(
-        ctx.n_pumping,
         ctx.resolved.bounds.n_pumping(),
-        "ctx.n_pumping must agree with the resolved-bounds station count"
+        "ctx.pumping_stations.len() must agree with the resolved-bounds station count"
     );
 
     // Block-major column reservation is pinned separately by the layout-module
@@ -560,25 +570,24 @@ fn build_template_build_ctx_n_pumping_matches_slice_and_bounds() {
         .iter()
         .find(|s| s.id >= 0)
         .expect("one study stage");
-    let state = state_layout_for(&ctx);
-    let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, 0);
+    let layout = super::super::layout::StageLayout::new(&ctx, stage, 0);
     assert_eq!(
-        layout.equipment.n_pumping, ctx.n_pumping,
-        "StageLayout.n_pumping must equal the ctx-sourced count"
+        layout.geometry.pumping_flow.len(),
+        ctx.pumping_stations.len() * layout.clock.n_blks(),
+        "StageLayout must reserve exactly one pumping-flow column per station per block"
     );
 }
 
-/// `build_stage_templates` records the layout-owned pumping column base for
-/// every stage: `pumping_col_starts[t]` equals
-/// `StageLayout::new(..).col_pumping_start`, and the scalar `n_pumping`
-/// equals `StageLayout::new(..).n_pumping` (constant across stages under the
-/// dense layout).
+/// `build_stage_templates` records the layout-owned pumping-flow range for
+/// every stage: `geometry_per_stage[t].pumping_flow` equals
+/// `StageLayout::new(..).geometry.pumping_flow`, with the station count
+/// constant across stages under the dense layout.
 ///
 /// This pins the threading contract the simulation extraction pipeline reads
 /// from: the column base is sourced from the layout, the sole owner of the
 /// pumping-flow column base.
 #[test]
-fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
+fn build_stage_templates_records_the_layout_pumping_flow_range_per_stage() {
     let stations = vec![fixture_pumping_station(5), fixture_pumping_station(2)];
     let system = system_with_pumping_stations(stations);
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
@@ -586,7 +595,7 @@ fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
     let normal_lp = PrecomputedNormal::default();
     let resolved_params = empty_resolved_params();
 
-    let templates = super::build_stage_templates_resolving_layout(
+    let templates = crate::build_stage_templates_resolving_layout(
         &system,
         InflowNonNegativityMethod::None,
         &par_lp,
@@ -597,53 +606,400 @@ fn build_stage_templates_records_layout_pumping_col_start_per_stage() {
     )
     .expect("build_stage_templates: valid system");
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
 
-    assert_eq!(templates.pumping_col_starts.len(), study_stages.len());
-    assert_eq!(
-        templates.n_pumping, 2,
-        "two stations were declared; the dense count is a scalar"
-    );
+    assert_eq!(templates.geometry_per_stage.len(), study_stages.len());
     for (t, stage) in study_stages.iter().enumerate() {
-        let state = state_layout_for(&ctx);
-        let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, t);
+        let layout = super::super::layout::StageLayout::new(&ctx, stage, t);
         assert_eq!(
-            templates.pumping_col_starts[t], layout.equipment.col_pumping_start,
-            "stage {t}: pumping_col_starts must equal layout.col_pumping_start"
+            ctx.pumping_stations.len(),
+            2,
+            "stage {t}: two stations were declared"
         );
+        let geom = &templates.geometry_per_stage[t];
         assert_eq!(
-            templates.n_pumping, layout.equipment.n_pumping,
-            "stage {t}: scalar n_pumping must equal layout.n_pumping",
+            geom.pumping_flow,
+            layout.geometry.pumping_flow.start
+                ..layout.geometry.pumping_flow.start + ctx.pumping_stations.len() * geom.n_blks,
+            "stage {t}: geometry.pumping_flow must equal the layout's own pumping range"
         );
     }
+}
+
+/// `StageGeometry::pumping_flow` spans exactly `n_pumping * n_blks` columns at
+/// every stage, block-major over the station count, and
+/// `StageGeometry::pumping_flow_col` addresses it by
+/// `pumping_flow.start + p * n_blks + blk`, on the pumping-station fixture
+/// study.
+#[test]
+fn geometry_pumping_family_is_block_major_over_the_station_count() {
+    let stations = vec![fixture_pumping_station(5), fixture_pumping_station(2)];
+    let system = system_with_pumping_stations(stations);
+    let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
+    let par_lp = PrecomputedPar::default();
+    let normal_lp = PrecomputedNormal::default();
+    let resolved_params = empty_resolved_params();
+
+    let templates = crate::build_stage_templates_resolving_layout(
+        &system,
+        InflowNonNegativityMethod::None,
+        &par_lp,
+        &normal_lp,
+        &hydro_result.production,
+        &hydro_result.evaporation,
+        &resolved_params,
+    )
+    .expect("build_stage_templates: valid system");
+
+    for t in 0..templates.geometry_per_stage.len() {
+        let geom = &templates.geometry_per_stage[t];
+        let n_pumping = system.pumping_stations().len();
+        assert_eq!(
+            geom.pumping_flow.len(),
+            n_pumping * geom.n_blks,
+            "stage {t}: pumping_flow must span n_pumping*n_blks columns"
+        );
+        for p in 0..n_pumping {
+            for blk in 0..geom.n_blks {
+                assert_eq!(
+                    geom.pumping_flow_col(PumpingSys::new(p), BlockIdx::new(blk)),
+                    geom.pumping_flow.start + p * geom.n_blks + blk,
+                    "stage {t}: pumping_flow_col({p}, {blk}) must equal \
+                     pumping_flow.start + p*n_blks+blk"
+                );
+            }
+        }
+    }
+}
+
+// ── NCS data threaded into TemplateBuildCtx and StageGeometry ─────────────
+
+/// Build a non-controllable source with the given id (bus ref fixed to the
+/// fixture bus; a non-degenerate installed capacity, curtailment allowed).
+fn fixture_non_controllable_source(id: i32) -> NonControllableSource {
+    NonControllableSource {
+        id: EntityId(id),
+        name: format!("W{id}"),
+        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        bus_id: EntityId(1),
+        entry_stage_id: None,
+        exit_stage_id: None,
+        max_generation_mw: 100.0,
+        allow_curtailment: true,
+        curtailment_cost: 5.0,
+    }
+}
+
+/// Build a one-bus, two-hydro system with the supplied non-controllable
+/// sources over `n_blks` blocks. Mirrors `system_with_pumping_stations`; the
+/// two hydros and bus exist solely to satisfy NCS bus-reference validation.
+fn system_with_non_controllable_sources(
+    sources: Vec<NonControllableSource>,
+    n_blks: usize,
+) -> cobre_core::System {
+    let n_ncs = sources.len();
+    let n_hydros = 2_usize;
+    let n_stages = 1_usize;
+
+    let bus = fixture_bus();
+    let hydros = vec![fixture_hydro(1), fixture_hydro(2)];
+
+    let blocks: Vec<Block> = (0..n_blks)
+        .map(|b| Block {
+            index: b,
+            name: format!("BLK{b}"),
+            duration_hours: 372.0,
+        })
+        .collect();
+
+    let stages: Vec<Stage> = vec![Stage {
+        index: 0,
+        id: 0,
+        start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+        season_id: Some(0),
+        blocks,
+        block_mode: BlockMode::Parallel,
+        state_config: StageStateConfig {
+            storage: false,
+            inflow_lags: false,
+        },
+        risk_config: StageRiskConfig::Expectation,
+        scenario_config: ScenarioSourceConfig {
+            branching_factor: 1,
+            noise_method: NoiseMethod::Saa,
+        },
+    }];
+
+    let load_models = vec![LoadModel {
+        bus_id: EntityId(1),
+        stage_id: 0,
+        mean_mw: 100.0,
+        std_mw: 0.0,
+    }];
+
+    let resolved_bounds = ResolvedBounds::new(
+        &BoundsCountsSpec {
+            n_hydros,
+            n_thermals: 0,
+            n_lines: 0,
+            n_pumping: 0,
+            n_contracts: 0,
+            n_stages,
+            k_max: 0,
+        },
+        &BoundsDefaults {
+            hydro: default_hydro_bounds(),
+            hydro_block: default_hydro_block_bounds(),
+            thermal: ThermalStageBounds { cost_per_mwh: 0.0 },
+            thermal_block: ThermalBlockBounds {
+                min_generation_mw: 0.0,
+                max_generation_mw: 100.0,
+            },
+            line_block: LineBlockBounds {
+                direct_mw: 0.0,
+                reverse_mw: 0.0,
+            },
+            pumping_block: PumpingBlockBounds {
+                min_flow_m3s: 0.0,
+                max_flow_m3s: 0.0,
+            },
+            contract_block: ContractBlockBounds {
+                min_mw: 0.0,
+                max_mw: 0.0,
+                price_per_mwh: 0.0,
+            },
+        },
+    );
+    let penalties = ResolvedPenalties::new(
+        &PenaltiesCountsSpec {
+            n_hydros,
+            n_buses: 1,
+            n_lines: 0,
+            n_ncs,
+            n_stages,
+        },
+        &PenaltiesDefaults {
+            hydro: default_hydro_penalties(),
+            bus: BusStagePenalties { excess_cost: 0.0 },
+            line: LineStagePenalties { exchange_cost: 0.0 },
+            ncs: NcsStagePenalties {
+                curtailment_cost: 0.0,
+            },
+        },
+    );
+    let max_gen: Vec<f64> = sources.iter().map(|s| s.max_generation_mw).collect();
+
+    SystemBuilder::new()
+        .buses(vec![bus])
+        .hydros(hydros)
+        .non_controllable_sources(sources)
+        .stages(stages)
+        .load_models(load_models)
+        .bounds(resolved_bounds)
+        .penalties(penalties)
+        .resolved_ncs_bounds(ResolvedNcsBounds::new(n_ncs, n_stages, &max_gen))
+        .resolved_ncs_factors(ResolvedNcsFactors::new(n_ncs, n_stages, n_blks))
+        .build()
+        .expect("system_with_non_controllable_sources: valid system")
+}
+
+/// `StageGeometry::ncs_generation` spans exactly `n_ncs * n_blks` columns at
+/// every stage, matches the stage's own `StageLayout`, and
+/// `StageGeometry::ncs_generation_col` addresses it by
+/// `ncs_generation.start + sys_idx * n_blks + blk`, on a deck that models NCS.
+#[test]
+fn geometry_ncs_family_matches_the_stage_layout() {
+    let sources = vec![
+        fixture_non_controllable_source(5),
+        fixture_non_controllable_source(2),
+    ];
+    let system = system_with_non_controllable_sources(sources, 2);
+    let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
+    let par_lp = PrecomputedPar::default();
+    let normal_lp = PrecomputedNormal::default();
+    let resolved_params = empty_resolved_params();
+
+    let templates = crate::build_stage_templates_resolving_layout(
+        &system,
+        InflowNonNegativityMethod::None,
+        &par_lp,
+        &normal_lp,
+        &hydro_result.production,
+        &hydro_result.evaporation,
+        &resolved_params,
+    )
+    .expect("build_stage_templates: valid system");
+
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
+    let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
+        &system,
+        InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
+        &par_lp,
+        &hydro_result.production,
+        &hydro_result.evaporation,
+        &resolved.state,
+        &topology,
+        &inputs,
+    );
+    let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
+
+    for (t, stage) in study_stages.iter().enumerate() {
+        let layout = super::super::layout::StageLayout::new(&ctx, stage, t);
+        assert_eq!(
+            ctx.non_controllable_sources.len(),
+            2,
+            "stage {t}: two NCS sources were declared"
+        );
+        let geom = &templates.geometry_per_stage[t];
+        let n_ncs = ctx.non_controllable_sources.len();
+        assert_eq!(
+            geom.ncs_generation.len(),
+            n_ncs * geom.n_blks,
+            "stage {t}: ncs_generation must span n_ncs*n_blks columns"
+        );
+        assert_eq!(
+            geom.ncs_generation,
+            layout.geometry.ncs_generation.start
+                ..layout.geometry.ncs_generation.start + n_ncs * geom.n_blks,
+            "stage {t}: geometry.ncs_generation must equal the layout's own NCS range"
+        );
+        for sys_idx in 0..n_ncs {
+            for blk in 0..geom.n_blks {
+                assert_eq!(
+                    geom.ncs_generation_col(NcsSys::new(sys_idx), BlockIdx::new(blk)),
+                    geom.ncs_generation.start + sys_idx * geom.n_blks + blk,
+                    "stage {t}: ncs_generation_col({sys_idx}, {blk}) must equal \
+                     ncs_generation.start + sys_idx*n_blks+blk"
+                );
+            }
+        }
+    }
+}
+
+/// `StageGeometry::ncs_generation`/`pumping_flow` span exactly the system's
+/// own NCS/pumping-station count times `n_blks` at every stage, on the NCS
+/// and pumping-station fixture decks above.
+#[test]
+fn ncs_and_pumping_families_span_the_system_count_per_block_at_every_stage() {
+    let sources = vec![
+        fixture_non_controllable_source(5),
+        fixture_non_controllable_source(2),
+    ];
+    let ncs_system = system_with_non_controllable_sources(sources, 2);
+    let hydro_result = PrepareHydroModelsResult::default_from_system(&ncs_system);
+    let par_lp = PrecomputedPar::default();
+    let normal_lp = PrecomputedNormal::default();
+    let resolved_params = empty_resolved_params();
+    let ncs_templates = crate::build_stage_templates_resolving_layout(
+        &ncs_system,
+        InflowNonNegativityMethod::None,
+        &par_lp,
+        &normal_lp,
+        &hydro_result.production,
+        &hydro_result.evaporation,
+        &resolved_params,
+    )
+    .expect("build_stage_templates: valid system");
+    for geom in &ncs_templates.geometry_per_stage {
+        assert_eq!(
+            geom.ncs_generation.len(),
+            ncs_system.non_controllable_sources().len() * geom.n_blks,
+            "ncs_generation must span the system NCS count * n_blks columns"
+        );
+    }
+
+    let stations = vec![fixture_pumping_station(5), fixture_pumping_station(2)];
+    let pumping_system = system_with_pumping_stations(stations);
+    let hydro_result = PrepareHydroModelsResult::default_from_system(&pumping_system);
+    let pumping_templates = crate::build_stage_templates_resolving_layout(
+        &pumping_system,
+        InflowNonNegativityMethod::None,
+        &par_lp,
+        &normal_lp,
+        &hydro_result.production,
+        &hydro_result.evaporation,
+        &resolved_params,
+    )
+    .expect("build_stage_templates: valid system");
+    for geom in &pumping_templates.geometry_per_stage {
+        assert_eq!(
+            geom.pumping_flow.len(),
+            pumping_system.pumping_stations().len() * geom.n_blks,
+            "pumping_flow must span the system pumping-station count * n_blks columns"
+        );
+    }
+}
+
+/// A system with zero study stages returns empty templates — the early
+/// return `build_stage_templates` takes before touching `state_layout`.
+#[test]
+fn build_stage_templates_empty_system_yields_no_templates() {
+    let bus = fixture_bus();
+    let system = SystemBuilder::new()
+        .buses(vec![bus])
+        .build()
+        .expect("bus-only system must build");
+    let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
+    let par_lp = PrecomputedPar::default();
+    let normal_lp = PrecomputedNormal::default();
+    let resolved_params = empty_resolved_params();
+
+    let result = crate::build_stage_templates_resolving_layout(
+        &system,
+        InflowNonNegativityMethod::None,
+        &par_lp,
+        &normal_lp,
+        &hydro_result.production,
+        &hydro_result.evaporation,
+        &resolved_params,
+    )
+    .expect("zero-stage system must resolve");
+
+    assert!(result.templates.is_empty());
 }
 
 // ── Contract data threaded into TemplateBuildCtx and StageGeometry ─────────
@@ -777,7 +1133,7 @@ fn system_with_contracts(contracts: Vec<EnergyContract>, n_blks: usize) -> cobre
 }
 
 /// One import + one export contract (declared out of ID order) are exposed
-/// ID-sorted on the ctx; `contract_pos` maps each id to its slot, and the
+/// ID-sorted on the ctx; `ctx.positions.contract` maps each id to its slot, and the
 /// per-direction counts are derived by `contract_type`.
 #[test]
 fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
@@ -790,33 +1146,32 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
 
     assert_eq!(ctx.contracts.len(), 2);
@@ -826,14 +1181,25 @@ fn build_template_build_ctx_contracts_counted_and_pos_mapped() {
         vec![10, 20],
         "ctx.contracts must be ID-sorted regardless of declaration order"
     );
-    assert_eq!(ctx.n_contract_import, 1);
-    assert_eq!(ctx.n_contract_export, 1);
-    assert_eq!(ctx.contract_pos[&EntityId(10)], 0);
-    assert_eq!(ctx.contract_pos[&EntityId(20)], 1);
+    let n_import = ctx
+        .contracts
+        .iter()
+        .filter(|c| c.contract_type == ContractType::Import)
+        .count();
+    let n_export = ctx
+        .contracts
+        .iter()
+        .filter(|c| c.contract_type == ContractType::Export)
+        .count();
+    assert_eq!(n_import, 1);
+    assert_eq!(n_export, 1);
+    assert_eq!(ctx.positions.contract(EntityId(10)), Some(0));
+    assert_eq!(ctx.positions.contract(EntityId(20)), Some(1));
     for (slot, contract) in ctx.contracts.iter().enumerate() {
         assert_eq!(
-            ctx.contract_pos[&contract.id], slot,
-            "contract_pos[{:?}] must equal its slot in the sorted slice",
+            ctx.positions.contract(contract.id),
+            Some(slot),
+            "positions.contract({:?}) must equal its slot in the sorted slice",
             contract.id
         );
     }
@@ -853,47 +1219,45 @@ fn stage_layout_geometry_populates_contract_ranges() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
     let stage = system
         .stages()
         .iter()
         .find(|s| s.id >= 0)
         .expect("one study stage");
-    let state = state_layout_for(&ctx);
-    let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, 0);
-    let geometry = layout.geometry(stage.block_mode);
+    let layout = super::super::layout::StageLayout::new(&ctx, stage, 0);
+    let geometry = layout.geometry.clone();
 
     assert_eq!(geometry.contract_import.len(), 2, "1 import * 2 blocks");
     assert_eq!(geometry.contract_export.len(), 2, "1 export * 2 blocks");
     assert_eq!(
-        geometry.contract_import.start, layout.equipment.col_contract_import_start,
+        geometry.contract_import.start, layout.geometry.contract_import.start,
         "import range anchored at the layout import-block start"
     );
     assert_eq!(
@@ -912,44 +1276,41 @@ fn stage_layout_geometry_empty_contracts_are_pumping_end_anchored() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
     let stage = system
         .stages()
         .iter()
         .find(|s| s.id >= 0)
         .expect("one study stage");
-    let state = state_layout_for(&ctx);
-    let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, 0);
-    let col_pumping_end =
-        layout.equipment.col_pumping_start + layout.equipment.n_pumping * layout.n_blks;
-    let geometry = layout.geometry(stage.block_mode);
+    let layout = super::super::layout::StageLayout::new(&ctx, stage, 0);
+    let col_pumping_end = layout.geometry.pumping_flow.end;
+    let geometry = layout.geometry.clone();
 
     assert!(geometry.contract_import.is_empty());
     assert!(geometry.contract_export.is_empty());
@@ -1061,33 +1422,32 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let _ = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let _ = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
 }
 
@@ -1095,7 +1455,7 @@ fn build_template_build_ctx_contract_count_divergence_panics() {
 /// system with `T_a`(K=2), `T_b`(no anticipated), `T_c`(K=3).
 ///
 /// Expected: `n_anticipated`=2, `k_max`=3, `anticipated_lead_stages`=[2,3],
-/// `anticipated_thermal_indices`=[0,2].
+/// `anticipated_plants`=[0,2].
 #[test]
 fn build_template_build_ctx_populates_anticipated_metadata() {
     let thermals = vec![
@@ -1141,46 +1501,54 @@ fn build_template_build_ctx_populates_anticipated_metadata() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
 
-    assert_eq!(ctx.n_anticipated, 2, "n_anticipated");
-    assert_eq!(ctx.k_max, 3, "k_max");
+    assert_eq!(ctx.study_dims.anticipated_plants.len(), 2, "n_anticipated");
     assert_eq!(
-        ctx.anticipated_lead_stages,
+        ctx.state
+            .anticipated_resolution
+            .ring_size(&ctx.state.anticipated_lead_stages),
+        3,
+        "k_max"
+    );
+    assert_eq!(
+        ctx.state.anticipated_lead_stages,
         vec![2, 3],
         "anticipated_lead_stages"
     );
     assert_eq!(
-        ctx.anticipated_thermal_indices,
+        ctx.study_dims
+            .anticipated_plants
+            .thermals()
+            .collect::<Vec<_>>(),
         vec![ThermalSys::new(0), ThermalSys::new(2)],
-        "anticipated_thermal_indices"
+        "anticipated_plants"
     );
 }
 
@@ -1219,44 +1587,49 @@ fn build_template_build_ctx_zero_anticipated_when_none() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
 
-    assert_eq!(ctx.n_anticipated, 0, "n_anticipated");
-    assert_eq!(ctx.k_max, 0, "k_max");
+    assert_eq!(ctx.study_dims.anticipated_plants.len(), 0, "n_anticipated");
+    assert_eq!(
+        ctx.state
+            .anticipated_resolution
+            .ring_size(&ctx.state.anticipated_lead_stages),
+        0,
+        "k_max"
+    );
     assert!(
-        ctx.anticipated_lead_stages.is_empty(),
+        ctx.state.anticipated_lead_stages.is_empty(),
         "anticipated_lead_stages"
     );
     assert!(
-        ctx.anticipated_thermal_indices.is_empty(),
-        "anticipated_thermal_indices"
+        ctx.study_dims.anticipated_plants.len() == 0,
+        "anticipated_plants"
     );
 }
 
@@ -1452,9 +1825,10 @@ fn anticipated_invariance_system() -> cobre_core::System {
 /// Assert two `StageTemplate`s are bit-for-bit equivalent under the swap-(0,1)
 /// permutation on anticipated-decision, anticipated-state (slot-major), and
 /// anticipated-fishing columns/rows.
-// Paired per-template layout offsets (a/b); a params struct would relocate
-// the arity, not reduce it.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the equivalence check takes each varied input explicitly"
+)]
 fn assert_lp_equivalence_after_anticipated_swap(
     tpl_a: &cobre_solver::StageTemplate,
     tpl_b: &cobre_solver::StageTemplate,
@@ -1604,7 +1978,7 @@ fn csc_to_dense(tpl: &cobre_solver::StageTemplate) -> Vec<Vec<f64>> {
 
 /// Invariance probe at the LP-construction layer: the templates from
 /// [`build_single_stage_template`] are equivalent under a permutation of the
-/// `anticipated_thermal_indices` / `anticipated_lead_stages` arrays.
+/// `anticipated_plants` / `anticipated_lead_stages` arrays.
 ///
 /// A full-`System` declaration-order test is a tautology here — `SystemBuilder::build`
 /// sorts by `EntityId`, so both orderings present identical canonical input and
@@ -1624,121 +1998,136 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx_a, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims_a = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs_a = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims_a,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx_a = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs_a,
     );
 
-    assert_eq!(ctx_a.n_anticipated, 2);
-    assert_eq!(ctx_a.k_max, 3);
+    assert_eq!(ctx_a.study_dims.anticipated_plants.len(), 2);
     assert_eq!(
-        ctx_a.anticipated_thermal_indices,
+        ctx_a
+            .state
+            .anticipated_resolution
+            .ring_size(&ctx_a.state.anticipated_lead_stages),
+        3
+    );
+    assert_eq!(
+        ctx_a
+            .study_dims
+            .anticipated_plants
+            .thermals()
+            .collect::<Vec<_>>(),
         vec![ThermalSys::new(0), ThermalSys::new(1)]
     );
-    assert_eq!(ctx_a.anticipated_lead_stages, vec![2, 3]);
+    assert_eq!(ctx_a.state.anticipated_lead_stages, vec![2, 3]);
 
     // Both anticipated arrays must be permuted in lockstep to preserve the
     // (thermal_idx, K_i) pairing.
-    let ctx_b = super::super::layout::TemplateBuildCtx {
-        hydros: ctx_a.hydros,
-        thermals: ctx_a.thermals,
-        lines: ctx_a.lines,
-        buses: ctx_a.buses,
-        load_models: ctx_a.load_models,
-        cascade: ctx_a.cascade,
-        hydro_cell_index: ctx_a.hydro_cell_index,
-        resolved: super::super::layout::ResolvedTables {
-            bounds: ctx_a.resolved.bounds,
-            penalties: ctx_a.resolved.penalties,
-            resolved_generic_bounds: ctx_a.resolved.resolved_generic_bounds,
-            resolved_load_factors: ctx_a.resolved.resolved_load_factors,
-            resolved_ncs_bounds: ctx_a.resolved.resolved_ncs_bounds,
-            resolved_ncs_factors: ctx_a.resolved.resolved_ncs_factors,
-            resolved_parameters: ctx_a.resolved.resolved_parameters,
-        },
-        hydro_pos: ctx_a.hydro_pos.clone(),
-        thermal_pos: ctx_a.thermal_pos.clone(),
-        line_pos: ctx_a.line_pos.clone(),
-        bus_pos: ctx_a.bus_pos.clone(),
-        par_lp: ctx_a.par_lp,
-        production_models: ctx_a.production_models,
-        evaporation_models: ctx_a.evaporation_models,
-        generic_constraints: ctx_a.generic_constraints,
-        non_controllable_sources: ctx_a.non_controllable_sources,
-        pumping_stations: ctx_a.pumping_stations,
-        pumping_pos: ctx_a.pumping_pos.clone(),
-        n_pumping: ctx_a.n_pumping,
-        contracts: ctx_a.contracts,
-        contract_pos: ctx_a.contract_pos.clone(),
-        n_contract_import: ctx_a.n_contract_import,
-        n_contract_export: ctx_a.n_contract_export,
-        diversion_upstream: ctx_a.diversion_upstream.clone(),
-        n_hydros: ctx_a.n_hydros,
-        n_thermals: ctx_a.n_thermals,
-        n_lines: ctx_a.n_lines,
-        n_buses: ctx_a.n_buses,
-        max_par_order: ctx_a.max_par_order,
-        n_anticipated: ctx_a.n_anticipated,
-        k_max: ctx_a.k_max,
-        anticipated_lead_stages: vec![
-            ctx_a.anticipated_lead_stages[1],
-            ctx_a.anticipated_lead_stages[0],
+    let ctx_b_anticipated_plants = AnticipatedPlants::from_positions_for_test(
+        vec![
+            ctx_a
+                .study_dims
+                .anticipated_plants
+                .thermal_of(AnticipatedLocal::new(1)),
+            ctx_a
+                .study_dims
+                .anticipated_plants
+                .thermal_of(AnticipatedLocal::new(0)),
         ],
-        anticipated_thermal_indices: vec![
-            ctx_a.anticipated_thermal_indices[1],
-            ctx_a.anticipated_thermal_indices[0],
+        vec![
+            ctx_a.study_dims.anticipated_plants.windows()[1],
+            ctx_a.study_dims.anticipated_plants.windows()[0],
         ],
-        anticipated_windows: vec![ctx_a.anticipated_windows[1], ctx_a.anticipated_windows[0]],
-        anticipated_resolution: AnticipatedResolution {
-            per_plant: vec![
-                ctx_a.anticipated_resolution.per_plant[1].clone(),
-                ctx_a.anticipated_resolution.per_plant[0].clone(),
-            ],
-            k_max: ctx_a.anticipated_resolution.k_max,
-            max_fanout: ctx_a.anticipated_resolution.max_fanout,
-        },
-        study_stage_ids: ctx_a.study_stage_ids.clone(),
-        delivery_stage_ids: ctx_a.delivery_stage_ids.clone(),
-        has_penalty: ctx_a.has_penalty,
-        delivery_cumulative_discount_factors: ctx_a.delivery_cumulative_discount_factors.clone(),
-        delivery_total_hours: ctx_a.delivery_total_hours.clone(),
-        filling_v_target: ctx_a.filling_v_target.clone(),
-        arc_stage_weights: ctx_a.arc_stage_weights.clone(),
-        arc_spread_chrono: ctx_a.arc_spread_chrono.clone(),
-        arc_arrival_density: ctx_a.arc_arrival_density.clone(),
-        per_stage_mask: ctx_a.per_stage_mask.clone(),
-        post_study_resolved: ctx_a.post_study_resolved.clone(),
+    );
+    let ctx_b_lead_stages = vec![
+        ctx_a.state.anticipated_lead_stages[1],
+        ctx_a.state.anticipated_lead_stages[0],
+    ];
+    let ctx_b_resolution = AnticipatedResolution {
+        per_plant: vec![
+            ctx_a.state.anticipated_resolution.per_plant[1].clone(),
+            ctx_a.state.anticipated_resolution.per_plant[0].clone(),
+        ],
     };
+    let max_par_order = par_lp.max_order();
+    let effective_lag_counts: Vec<usize> = if max_par_order > 0 {
+        (0..resolved.state.hydro_count)
+            .map(|h| {
+                if h < par_lp.n_hydros() {
+                    par_lp.effective_lag_count(h)
+                } else {
+                    max_par_order
+                }
+            })
+            .collect()
+    } else {
+        vec![0; resolved.state.hydro_count]
+    };
+    let ctx_b_state = StateSpace::new(
+        resolved.state.hydro_count,
+        max_par_order,
+        topology.column_order.clone(),
+        ctx_b_lead_stages,
+        ctx_b_resolution,
+        &effective_lag_counts,
+    );
+    let study_dims_b = crate::test_support::build_study_dimensions(
+        &system,
+        InflowNonNegativityMethod::None,
+        ctx_b_anticipated_plants.clone(),
+        0,
+    );
+    let inputs_b = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims_b,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx_b = super::build_template_build_ctx(
+        &system,
+        &par_lp,
+        &hydro_result.production,
+        &hydro_result.evaporation,
+        &ctx_b_state,
+        &topology,
+        &inputs_b,
+    );
 
     assert_eq!(
-        ctx_b.anticipated_thermal_indices,
+        ctx_b
+            .study_dims
+            .anticipated_plants
+            .thermals()
+            .collect::<Vec<_>>(),
         vec![ThermalSys::new(1), ThermalSys::new(0)]
     );
-    assert_eq!(ctx_b.anticipated_lead_stages, vec![3, 2]);
+    assert_eq!(ctx_b.state.anticipated_lead_stages, vec![3, 2]);
 
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
 
@@ -1747,57 +2136,55 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
     for stage_idx in [0_usize, 2, 3] {
         let stage = study_stages[stage_idx];
 
-        let state_a = state_layout_for(&ctx_a);
-        let state_b = state_layout_for(&ctx_b);
-
-        let tpl_a = super::build_single_stage_template(&ctx_a, &state_a, stage, stage_idx).template;
-        let tpl_b = super::build_single_stage_template(&ctx_b, &state_b, stage, stage_idx).template;
+        let tpl_a = super::build_single_stage_template(&ctx_a, stage, stage_idx).template;
+        let tpl_b = super::build_single_stage_template(&ctx_b, stage, stage_idx).template;
 
         // Both templates share num_cols/num_rows: the layout depends only on
         // n_anticipated and k_max, unchanged by the swap.
-        let layout_a = super::super::layout::StageLayout::new(&ctx_a, &state_a, stage, stage_idx);
-        let layout_b = super::super::layout::StageLayout::new(&ctx_b, &state_b, stage, stage_idx);
+        let layout_a = super::super::layout::StageLayout::new(&ctx_a, stage, stage_idx);
+        let layout_b = super::super::layout::StageLayout::new(&ctx_b, stage, stage_idx);
 
         assert_eq!(
-            layout_a.anticipated.col_anticipated_decision_start,
-            layout_b.anticipated.col_anticipated_decision_start,
+            layout_a.geometry.anticipated_decision.start,
+            layout_b.geometry.anticipated_decision.start,
             "stage {stage_idx}: dec_start"
         );
         assert_eq!(
-            layout_a.col_anticipated_state_start(),
-            layout_b.col_anticipated_state_start(),
+            layout_a.state.commit_in.start, layout_b.state.commit_in.start,
             "stage {stage_idx}: state_start"
         );
         assert_eq!(
-            layout_a.anticipated.row_anticipated_fishing_start,
-            layout_b.anticipated.row_anticipated_fishing_start,
+            layout_a.anticipated.fishing_rows.start, layout_b.anticipated.fishing_rows.start,
             "stage {stage_idx}: fish_start"
         );
         assert_eq!(
-            layout_a.anticipated.n_anticipated_fishing_rows,
-            layout_b.anticipated.n_anticipated_fishing_rows,
+            layout_a.anticipated.fishing_rows.len(),
+            layout_b.anticipated.fishing_rows.len(),
             "stage {stage_idx}: n_fish_rows"
         );
 
         assert_lp_equivalence_after_anticipated_swap(
             &tpl_a,
             &tpl_b,
-            layout_a.anticipated.col_anticipated_decision_start,
-            layout_b.anticipated.col_anticipated_decision_start,
-            layout_a.col_anticipated_state_start(),
-            layout_b.col_anticipated_state_start(),
-            layout_a.anticipated.col_anticipated_slots_out_start,
-            layout_b.anticipated.col_anticipated_slots_out_start,
-            ctx_a.n_anticipated,
-            ctx_a.k_max,
-            layout_a.anticipated.row_anticipated_fishing_start,
-            layout_b.anticipated.row_anticipated_fishing_start,
-            layout_a.anticipated.n_anticipated_fishing_rows,
-            layout_a.anticipated.row_anticipated_state_out_def_start,
-            layout_b.anticipated.row_anticipated_state_out_def_start,
-            layout_a.anticipated.n_anticipated_state_out_def_rows,
-            layout_a.anticipated.row_anticipated_slot_definition_start,
-            layout_b.anticipated.row_anticipated_slot_definition_start,
+            layout_a.geometry.anticipated_decision.start,
+            layout_b.geometry.anticipated_decision.start,
+            layout_a.state.commit_in.start,
+            layout_b.state.commit_in.start,
+            layout_a.state.commit_out.start,
+            layout_b.state.commit_out.start,
+            ctx_a.study_dims.anticipated_plants.len(),
+            ctx_a
+                .state
+                .anticipated_resolution
+                .ring_size(&ctx_a.state.anticipated_lead_stages),
+            layout_a.anticipated.fishing_rows.start,
+            layout_b.anticipated.fishing_rows.start,
+            layout_a.anticipated.fishing_rows.len(),
+            layout_a.anticipated.state_out_def_rows.start,
+            layout_b.anticipated.state_out_def_rows.start,
+            layout_a.anticipated.state_out_def_rows.len(),
+            layout_a.anticipated.slot_definition_rows.start,
+            layout_b.anticipated.slot_definition_rows.start,
             &layout_a.anticipated.anticipated_slot_row_pos,
             &layout_b.anticipated.anticipated_slot_row_pos,
             stage_idx,
@@ -1807,55 +2194,61 @@ fn lp_template_invariant_under_anticipated_index_permutation() {
 
 // ── StageTemplates::empty ──────────────────────────────────────────────────
 
-/// Pins the all-empty shape (every per-stage collection empty, `n_hydros == n`)
-/// the empty-study early return relies on.
+/// Pins the all-empty shape the empty-study early return relies on.
 #[test]
-fn stage_templates_empty_is_all_empty_with_n_hydros() {
-    let n = 7_usize;
-    let empty = super::StageTemplates::empty(n, DEFAULT_COST_SCALE_FACTOR);
+fn stage_templates_empty_is_all_empty() {
+    let empty = super::StageTemplates::empty(DEFAULT_COST_SCALE_FACTOR);
 
-    assert_eq!(empty.n_hydros, n, "empty(n).n_hydros must equal n");
-    assert_eq!(empty.n_load_buses, 0, "n_load_buses must be 0");
+    assert_eq!(empty.n_load_buses(), 0, "n_load_buses must be 0");
 
     assert!(empty.templates.is_empty(), "templates");
-    assert!(empty.base_rows.is_empty(), "base_rows");
-    assert!(empty.noise_scale.is_empty(), "noise_scale");
-    assert!(empty.zeta_per_stage.is_empty(), "zeta_per_stage");
+    assert!(empty.state_boxes().is_empty(), "state_boxes");
     assert!(
         empty.block_hours_per_stage.is_empty(),
         "block_hours_per_stage"
-    );
-    assert!(
-        empty.load_balance_row_starts.is_empty(),
-        "load_balance_row_starts"
     );
     assert!(empty.load_bus_indices.is_empty(), "load_bus_indices");
     assert!(
         empty.generic_constraint_row_entries.is_empty(),
         "generic_constraint_row_entries"
     );
-    assert!(empty.ncs_col_starts.is_empty(), "ncs_col_starts");
-    assert_eq!(empty.n_ncs, 0, "n_ncs");
-    assert!(empty.pumping_col_starts.is_empty(), "pumping_col_starts");
-    assert_eq!(empty.n_pumping, 0, "n_pumping");
     assert!(empty.diversion_upstream.is_empty(), "diversion_upstream");
     assert!(
         empty.hydro_productivities_per_stage.is_empty(),
         "hydro_productivities_per_stage"
     );
-    assert!(empty.discount_factors().is_empty(), "discount_factors");
-    assert!(
-        empty.cumulative_discount_factors().is_empty(),
-        "cumulative_discount_factors"
-    );
 }
 
-// ── discount-factor placeholder is replaced by the public path ─────────────
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "state_boxes read before postprocess_templates filled them")]
+fn state_boxes_read_before_postprocess_panics() {
+    let mut unfilled = super::StageTemplates::empty(DEFAULT_COST_SCALE_FACTOR);
+    unfilled
+        .templates
+        .push(crate::test_support::transit_bucket_only_template(1, 1));
+
+    let _ = unfilled.state_boxes();
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "set_state_boxes needs one state box per stage")]
+fn set_state_boxes_rejects_a_box_count_other_than_the_stage_count() {
+    let mut templates = super::StageTemplates::empty(DEFAULT_COST_SCALE_FACTOR);
+    templates
+        .templates
+        .push(crate::test_support::transit_bucket_only_template(1, 1));
+
+    templates.set_state_boxes(Vec::new());
+}
+
+// ── theta's coefficient is the stage's one-step discount factor ────────────
 
 /// Build a 3-stage thermals-only system carrying a non-zero global annual
 /// discount rate. Empty `transitions` means every stage falls back to the
-/// global rate, so the postprocessed per-stage factors are all < 1.0 and the
-/// cumulative vector compounds below the 1.0 placeholder.
+/// global rate, so the per-stage factors are all < 1.0 and the cumulative
+/// vector compounds below 1.0.
 fn discounted_multi_stage_system() -> cobre_core::System {
     discounted_multi_stage_system_with_post_study(None)
 }
@@ -1992,51 +2385,62 @@ fn discounted_multi_stage_system_with_post_study(
         .expect("discounted_multi_stage_system: valid system")
 }
 
-/// The public build+postprocess path installs real discount factors. The
-/// discount fields are private, so a caller only ever observes the postprocessed
-/// values, never the all-`1.0` placeholder `build_stage_templates` leaves behind.
+/// Building the templates gives every stage's theta coefficient the one-step
+/// discount factor `TimeValue` resolves from the system's non-zero annual
+/// discount rate.
 #[test]
-fn postprocessed_stage_templates_carry_discounted_factors() {
+fn built_stage_templates_carry_the_one_step_discount_on_theta() {
     let system = discounted_multi_stage_system();
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
-    let normal_lp = PrecomputedNormal::default();
     let resolved_params = empty_resolved_params();
-    let topology = build_transit_bucket_topology(&system, false);
-    let (state_layout, _, _) = resolve_state_layout(&system, &par_lp, &topology, None)
-        .expect("resolve_state_layout: valid test fixture");
+    let (topology, layout) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
 
-    let mut templates = super::build_stage_templates(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        layout.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let templates = super::build_stage_templates(
+        &system,
         &par_lp,
-        &normal_lp,
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        &state_layout,
-        &topology.per_stage_mask,
-        &topology.arc_stage_weights,
-        &topology.arc_spread_chrono,
-        &topology.arc_arrival_density,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
-    )
-    .expect("build_stage_templates: valid system");
-
-    let _report = postprocess_templates(
-        &mut templates,
-        &system,
-        &state_layout,
-        DEFAULT_COST_SCALE_FACTOR,
+        &layout.state,
+        &topology,
+        inputs,
     );
 
-    let cumulative = templates.cumulative_discount_factors();
+    let discount_factors = time_value.discount_factors();
+    assert!(
+        discount_factors.iter().any(|&d| d < 1.0),
+        "the 0.10 annual rate must give at least one one-step factor below 1.0, got {discount_factors:?}"
+    );
+    for (t, template) in templates.templates.iter().enumerate() {
+        assert_eq!(
+            template.objective[layout.state.theta].to_bits(),
+            discount_factors[t].to_bits(),
+            "stage {t}: theta's objective must be the stage's one-step discount factor"
+        );
+    }
+
+    let cumulative = time_value.cumulative_discount_factors();
     assert_eq!(
         cumulative.len(),
         templates.templates.len(),
-        "cumulative_discount_factors length must equal templates.len() after postprocess"
+        "cumulative_discount_factors length must equal templates.len()"
     );
     assert_eq!(
         cumulative[0], 1.0,
@@ -2044,7 +2448,7 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
     );
     assert!(
         cumulative.iter().any(|&d| d < 1.0),
-        "postprocessed cumulative factors must drop below the 1.0 placeholder, got {cumulative:?}"
+        "cumulative factors must drop below 1.0, got {cumulative:?}"
     );
     assert!(
         cumulative[cumulative.len() - 1] < 1.0,
@@ -2053,8 +2457,92 @@ fn postprocessed_stage_templates_carry_discounted_factors() {
     );
 }
 
+/// Theta's coefficient lands on `state.theta`, never a hand re-derivation from
+/// `n_state`/`n_hydros`: this fixture's commitment-hold region (one anticipated
+/// thermal, `k_max = 1`) shifts `theta` off both (`n_state == 1`,
+/// `n_hydros == 0`, `theta == 2`), so a wrong re-derivation would silently
+/// discount the wrong column. Two builds that differ only in the one-step
+/// factors may differ in theta and in the anticipated decision's price (which
+/// carries its relative delivery discount), and nowhere else.
+#[test]
+fn theta_discount_lands_on_the_state_theta_column_with_anticipated_thermals() {
+    let system = anticipated_lead_config_system(2, 744.0, AnticipatedConfig::LeadStages(1), 1);
+    let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
+    let par_lp = PrecomputedPar::default();
+    let resolved_params = empty_resolved_params();
+    let (topology, layout) = crate::test_support::resolved_layout_for(&system, &par_lp);
+    let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let study_dims = crate::test_support::build_study_dimensions(
+        &system,
+        InflowNonNegativityMethod::None,
+        layout.anticipated_plants.clone(),
+        0,
+    );
+    assert_eq!(
+        layout.state.theta, 2,
+        "fixture sanity: theta must sit past commit_out/commit_in"
+    );
+    assert_eq!(
+        layout.state.n_state, 1,
+        "fixture sanity: one commitment slot"
+    );
+
+    let build = |discount_factors: &[f64]| {
+        let time_value = TimeValue::from_parts(
+            discount_factors.to_vec(),
+            compute_cumulative_discount_factors(discount_factors),
+            vec![744.0; discount_factors.len()],
+            vec![0, 1],
+            PostStudyResolved::default(),
+        );
+        let inputs = crate::test_support::resolve_lp_build_inputs(
+            &system,
+            &[],
+            &hydro_result.production,
+            &study_dims,
+            &time_value,
+            &hydro_cell_index,
+            &resolved_params,
+        );
+        super::build_stage_templates(
+            &system,
+            &par_lp,
+            &hydro_result.production,
+            &hydro_result.evaporation,
+            &layout.state,
+            &topology,
+            inputs,
+        )
+    };
+
+    let discount_factors = [0.6_f64, 0.3_f64];
+    let undiscounted = build(&[1.0, 1.0]);
+    let discounted = build(&discount_factors);
+
+    let theta = layout.state.theta;
+    for (t, &d) in discount_factors.iter().enumerate() {
+        assert_eq!(
+            discounted.templates[t].objective[theta].to_bits(),
+            d.to_bits(),
+            "stage {t}: theta's objective must be the stage's one-step discount factor"
+        );
+        let decision_col =
+            discounted.geometry_per_stage[t].anticipated_decision_col(AnticipatedLocal::new(0));
+        for j in 0..discounted.templates[t].num_cols {
+            if j == theta || j == decision_col {
+                continue;
+            }
+            assert_eq!(
+                discounted.templates[t].objective[j].to_bits(),
+                undiscounted.templates[t].objective[j].to_bits(),
+                "stage {t} col {j}: only theta and the decision's delivery discount may move with the factors"
+            );
+        }
+    }
+}
+
 // ── Delivery-axis extended vectors (delivery_stage_ids / delivery_total_hours /
-// delivery_cumulative_discount_factors) ────────────────────────────────────
+// time_value) ────────────────────────────────────────────────────────────
 
 /// Two post-study stages following the discounted 3-stage study horizon,
 /// mirroring [`cobre_core::model::post_study`]'s doc fixture. No thermal
@@ -2085,36 +2573,41 @@ fn delivery_stage_ids_equals_study_stage_ids_with_no_post_study() {
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
 
-    assert_eq!(ctx.delivery_stage_ids, ctx.study_stage_ids);
+    let study_stage_ids: Vec<i32> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(ctx.time_value.delivery_stage_ids(), study_stage_ids);
 }
 
 /// Three study stages (ids `[0, 1, 2]`) plus two post-study stages continue
@@ -2127,41 +2620,49 @@ fn delivery_stage_ids_continue_the_horizon_with_synthetic_ids() {
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
 
-    assert_eq!(ctx.study_stage_ids, vec![0, 1, 2]);
-    assert_eq!(ctx.delivery_stage_ids, vec![0, 1, 2, 3, 4]);
+    let study_stage_ids: Vec<i32> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(study_stage_ids, vec![0, 1, 2]);
+    assert_eq!(ctx.time_value.delivery_stage_ids(), vec![0, 1, 2, 3, 4]);
     assert!(
-        ctx.delivery_stage_ids.windows(2).all(|w| w[0] < w[1]),
+        ctx.time_value
+            .delivery_stage_ids()
+            .windows(2)
+            .all(|w| w[0] < w[1]),
         "delivery_stage_ids must be strictly increasing, got {:?}",
-        ctx.delivery_stage_ids
+        ctx.time_value.delivery_stage_ids()
     );
 }
 
@@ -2174,50 +2675,49 @@ fn delivery_vectors_read_the_post_study_element_at_its_delivery_index() {
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
 
     assert_eq!(
-        ctx.delivery_total_hours[3],
+        ctx.time_value.delivery_total_hours(3),
         post_study.stages[0].duration_hours
     );
     assert_eq!(
-        ctx.delivery_cumulative_discount_factors[3],
-        ctx.post_study_resolved.cumulative_discount_factors[0]
+        ctx.time_value.relative_delivery_discount(0, 3),
+        ctx.time_value.post_study().cumulative_discount_factors[0]
     );
 }
 
-/// `delivery_cumulative_discount_factors` is bit-identical to
+/// `TimeValue`'s delivery-axis factors are bit-identical to
 /// `compute_cumulative_discount_factors` run over the study's own per-stage
 /// factors concatenated with the post-study per-stage factors — the same
 /// identity `continued_cumulative_discount_matches_extended_horizon`
-/// (`crate::setup`) already pins for the post-study half alone.
+/// (`crate::time_value`) already pins for the post-study half alone.
 #[test]
 fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
     let post_study = two_post_study_stages();
@@ -2225,33 +2725,32 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
 
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
@@ -2272,9 +2771,12 @@ fn delivery_cumulative_discount_matches_recomputed_extended_horizon() {
     extended_per_stage.extend_from_slice(&per_stage_post);
     let extended_cumulative = compute_cumulative_discount_factors(&extended_per_stage);
 
+    let recomputed: Vec<f64> = (0..extended_cumulative.len())
+        .map(|m| ctx.time_value.relative_delivery_discount(0, m))
+        .collect();
     assert_eq!(
-        ctx.delivery_cumulative_discount_factors, extended_cumulative,
-        "delivery_cumulative_discount_factors must be bit-identical to \
+        recomputed, extended_cumulative,
+        "TimeValue's delivery-axis factors must be bit-identical to \
          compute_cumulative_discount_factors over study++post per-stage factors"
     );
 }
@@ -2426,7 +2928,7 @@ fn three_post_study_stages() -> Vec<PostStudyStage> {
     ]
 }
 
-/// Build `ctx.post_study_resolved` for a two-anticipated-thermal,
+/// Build `ctx.time_value.post_study()` for a two-anticipated-thermal,
 /// three-post-study-stage system declaring exactly `thermal_bounds`.
 fn build_post_study_resolved_for(
     ids: [i32; 2],
@@ -2442,44 +2944,49 @@ fn build_post_study_resolved_for(
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
-    ctx.post_study_resolved
+    ctx.time_value.post_study().clone()
 }
 
 /// Given `post_study` is `None`, `resolve_post_study_artifacts` returns
 /// [`PostStudyResolved::default`] and the accessor returns `None` on the empty
 /// table, never a panic.
 #[test]
-fn resolve_post_study_artifacts_none_returns_default_and_empty_table() {
-    let resolved =
-        resolve_post_study_artifacts(None, &[], &cobre_core::HorizonGraph::default(), 1.0, 1.0);
+fn post_study_artifacts_none_returns_default_and_empty_table() {
+    let resolved = resolve_post_study_artifacts(
+        None,
+        &[],
+        &cobre_core::HorizonGraph::default(),
+        1.0,
+        1.0,
+        &[],
+    );
 
     assert_eq!(resolved, PostStudyResolved::default());
     assert_eq!(
@@ -2527,7 +3034,7 @@ const FULL_TABLE_VALUES: [[(f64, f64, f64); 3]; 2] = [
 
 /// Every `(local, stage)` cell of `ids` x 3 stages, valued from
 /// [`FULL_TABLE_VALUES`], sorted canonically by `(thermal_id,
-/// post_study_stage_index)` — [`PostStudyThermalLookup::new`](crate::setup::PostStudyThermalLookup::new)'s
+/// post_study_stage_index)` — [`PostStudyThermalLookup::new`](crate::time_value::PostStudyThermalLookup::new)'s
 /// own precondition, which anticipated-local order (`ids` here) does not
 /// generally satisfy.
 fn full_two_plant_three_stage_bounds(ids: [i32; 2]) -> Vec<PostStudyThermalBound> {
@@ -2551,7 +3058,7 @@ fn full_two_plant_three_stage_bounds(ids: [i32; 2]) -> Vec<PostStudyThermalBound
 }
 
 /// A fully-declared 2-plant x 3-stage deck: every cell of the dense table
-/// agrees exactly with [`PostStudyThermalLookup::lookup`](crate::setup::PostStudyThermalLookup::lookup)
+/// agrees exactly with [`PostStudyThermalLookup::lookup`](crate::time_value::PostStudyThermalLookup::lookup)
 /// for the corresponding `EntityId` — pins the table as a faithful projection
 /// of the lookup, not merely a plausible one.
 #[test]
@@ -2849,7 +3356,7 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
         vec![vec![ResolvedProductionModel::ConstantProductivity {
             productivity: 0.5,
         }]],
-        1,
+        system.hydros(),
         1,
     )));
     let hydro_models = Box::leak(Box::new(PrepareHydroModelsResult::default_from_system(
@@ -2857,40 +3364,40 @@ fn build_active_violations_layout_and_template() -> (StageLayout<'static>, Stage
     )));
     let resolved_params = Box::leak(Box::new(empty_resolved_params()));
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(system, par_lp);
-    let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let (topology, resolved) = crate::test_support::resolved_layout_for(system, par_lp);
+    let topology = Box::leak(Box::new(topology));
+    let resolved = Box::leak(Box::new(resolved));
+    let hydro_cell_index = Box::leak(Box::new(HydroCellIndex::build(system.hydros())));
+    let time_value = Box::leak(Box::new(build_time_value_for(system)));
+    let study_dims = Box::leak(Box::new(crate::test_support::build_study_dimensions(
         system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    )));
+    let inputs = Box::leak(Box::new(crate::test_support::resolve_lp_build_inputs(
+        system,
+        &[],
+        production,
+        study_dims,
+        time_value,
+        hydro_cell_index,
+        resolved_params,
+    )));
+    let ctx = super::build_template_build_ctx(
+        system,
         par_lp,
-        system.load_models(),
         production,
         &hydro_models.evaporation,
-        resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        topology,
+        inputs,
     );
     let ctx = Box::leak(Box::new(ctx));
-    let state = Box::leak(Box::new(state_layout_for(ctx)));
     let stage = &system.stages()[0];
 
-    let template = super::build_single_stage_template(ctx, state, stage, 0).template;
-    let layout = StageLayout::new(ctx, state, stage, 0);
+    let template = super::build_single_stage_template(ctx, stage, 0).template;
+    let layout = StageLayout::new(ctx, stage, 0);
     (layout, template)
 }
 
@@ -2899,13 +3406,13 @@ fn relocated_operational_violation_row_counts() {
     let (layout, t) = build_active_violations_layout_and_template();
 
     // 4 row ranges each contain n_hydros * n_blks = 1 * 2 = 2 rows.
-    assert_eq!(layout.slack.oper_violation.min_outflow_rows.len(), 2);
-    assert_eq!(layout.slack.oper_violation.max_outflow_rows.len(), 2);
-    assert_eq!(layout.slack.oper_violation.min_turbine_rows.len(), 2);
-    assert_eq!(layout.slack.oper_violation.min_generation_rows.len(), 2);
+    assert_eq!(layout.oper_violation.min_outflow.len(), 2);
+    assert_eq!(layout.oper_violation.max_outflow.len(), 2);
+    assert_eq!(layout.oper_violation.min_turbine.len(), 2);
+    assert_eq!(layout.oper_violation.min_generation.len(), 2);
 
     assert!(
-        layout.slack.oper_violation.min_generation_rows.end <= t.num_rows,
+        layout.oper_violation.min_generation.end <= t.num_rows,
         "operational violation rows exceed num_rows"
     );
 }
@@ -2917,7 +3424,7 @@ fn relocated_min_outflow_row_bounds() {
     let expected_lower = 50.0; // min_outflow_m3s
 
     for blk in 0..2 {
-        let row = layout.slack.oper_violation.min_outflow_rows.start + blk;
+        let row = layout.oper_violation.min_outflow.start + blk;
         assert!(
             (t.row_lower[row] - expected_lower).abs() < 1e-10,
             "min_outflow row_lower (block {blk}) = {}, expected {}",
@@ -2939,7 +3446,7 @@ fn relocated_max_outflow_row_bounds() {
     let expected_upper = 800.0; // max_outflow_m3s
 
     for blk in 0..2 {
-        let row = layout.slack.oper_violation.max_outflow_rows.start + blk;
+        let row = layout.oper_violation.max_outflow.start + blk;
         assert_eq!(
             t.row_lower[row],
             f64::NEG_INFINITY,
@@ -2961,7 +3468,7 @@ fn relocated_min_turbine_row_bounds() {
     let expected_lower = 10.0; // min_turbined_m3s
 
     for blk in 0..2 {
-        let row = layout.slack.oper_violation.min_turbine_rows.start + blk;
+        let row = layout.oper_violation.min_turbine.start + blk;
         assert!(
             (t.row_lower[row] - expected_lower).abs() < 1e-10,
             "min_turbine row_lower (block {blk}) = {}, expected {}",
@@ -2983,7 +3490,7 @@ fn relocated_min_generation_row_bounds() {
     let expected_lower = 5.0; // min_generation_mw
 
     for blk in 0..2 {
-        let row = layout.slack.oper_violation.min_generation_rows.start + blk;
+        let row = layout.oper_violation.min_generation.start + blk;
         assert!(
             (t.row_lower[row] - expected_lower).abs() < 1e-10,
             "min_generation row_lower (block {blk}) = {}, expected {}",
@@ -3008,26 +3515,23 @@ fn relocated_min_outflow_matrix_coefficients() {
     let n_blks = 2;
 
     for blk in 0..n_blks {
-        let row = layout.slack.oper_violation.min_outflow_rows.start + blk;
+        let row = layout.oper_violation.min_outflow.start + blk;
 
-        let entries = csc_entries_for_col(&t, layout.equipment.turbine.start + blk);
+        let entries = csc_entries_for_col(&t, layout.geometry.turbine.start + blk);
         let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
         assert!(
             v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
             "turbine blk{blk} entry for min_outflow row: {v:?}"
         );
 
-        let entries = csc_entries_for_col(&t, layout.equipment.spillage.start + blk);
+        let entries = csc_entries_for_col(&t, layout.geometry.spillage.start + blk);
         let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
         assert!(
             v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
             "spillage blk{blk} entry for min_outflow row: {v:?}"
         );
 
-        let entries = csc_entries_for_col(
-            &t,
-            layout.slack.oper_violation.outflow_below_slack.start + blk,
-        );
+        let entries = csc_entries_for_col(&t, layout.geometry.outflow_below_slack.start + blk);
         let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
         assert!(
             v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
@@ -3045,18 +3549,12 @@ fn both_outflow_rows_exclude_diversion() {
     let n_blks = 2;
 
     for blk in 0..n_blks {
-        let div_col = layout.equipment.diversion.start + blk;
+        let div_col = layout.geometry.diversion.start + blk;
         let entries = csc_entries_for_col(&t, div_col);
 
         for (label, start) in [
-            (
-                "min_outflow",
-                layout.slack.oper_violation.min_outflow_rows.start,
-            ),
-            (
-                "max_outflow",
-                layout.slack.oper_violation.max_outflow_rows.start,
-            ),
+            ("min_outflow", layout.oper_violation.min_outflow.start),
+            ("max_outflow", layout.oper_violation.max_outflow.start),
         ] {
             let row = start + blk;
             let entry = entries.iter().find(|e| e.0 == row);
@@ -3074,11 +3572,8 @@ fn relocated_max_outflow_matrix_slack_is_negative() {
     let n_blks = 2;
 
     for blk in 0..n_blks {
-        let row = layout.slack.oper_violation.max_outflow_rows.start + blk;
-        let entries = csc_entries_for_col(
-            &t,
-            layout.slack.oper_violation.outflow_above_slack.start + blk,
-        );
+        let row = layout.oper_violation.max_outflow.start + blk;
+        let entries = csc_entries_for_col(&t, layout.geometry.outflow_above_slack.start + blk);
         let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
         assert!(
             v.is_some() && (v.unwrap() - (-1.0)).abs() < 1e-15,
@@ -3094,26 +3589,23 @@ fn relocated_min_turbine_matrix_only_turbine_cols() {
     let n_blks = 2;
 
     for blk in 0..n_blks {
-        let row = layout.slack.oper_violation.min_turbine_rows.start + blk;
+        let row = layout.oper_violation.min_turbine.start + blk;
 
-        let entries = csc_entries_for_col(&t, layout.equipment.turbine.start + blk);
+        let entries = csc_entries_for_col(&t, layout.geometry.turbine.start + blk);
         let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
         assert!(
             v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
             "turbine blk{blk} min_turbine: {v:?}"
         );
 
-        let entries_spill = csc_entries_for_col(&t, layout.equipment.spillage.start + blk);
+        let entries_spill = csc_entries_for_col(&t, layout.geometry.spillage.start + blk);
         let v_spill = entries_spill.iter().find(|e| e.0 == row);
         assert!(
             v_spill.is_none(),
             "spillage should not appear in min_turbine row (blk {blk})"
         );
 
-        let entries = csc_entries_for_col(
-            &t,
-            layout.slack.oper_violation.turbine_below_slack.start + blk,
-        );
+        let entries = csc_entries_for_col(&t, layout.geometry.turbine_below_slack.start + blk);
         let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
         assert!(
             v.is_some() && (v.unwrap() - 1.0).abs() < 1e-15,
@@ -3130,19 +3622,16 @@ fn relocated_min_generation_constant_productivity_coefficients() {
     let rho = 0.5;
 
     for blk in 0..n_blks {
-        let row = layout.slack.oper_violation.min_generation_rows.start + blk;
+        let row = layout.oper_violation.min_generation.start + blk;
 
-        let entries = csc_entries_for_col(&t, layout.equipment.turbine.start + blk);
+        let entries = csc_entries_for_col(&t, layout.geometry.turbine.start + blk);
         let v = entries.iter().find(|e| e.0 == row).map(|e| e.1);
         assert!(
             v.is_some() && (v.unwrap() - rho).abs() < 1e-10,
             "turbine blk{blk} min_gen coeff: {v:?}, expected {rho}"
         );
 
-        let entries_s = csc_entries_for_col(
-            &t,
-            layout.slack.oper_violation.generation_below_slack.start + blk,
-        );
+        let entries_s = csc_entries_for_col(&t, layout.geometry.generation_below_slack.start + blk);
         let vs = entries_s.iter().find(|e| e.0 == row).map(|e| e.1);
         assert!(
             vs.is_some() && (vs.unwrap() - 1.0).abs() < 1e-15,
@@ -3152,53 +3641,18 @@ fn relocated_min_generation_constant_productivity_coefficients() {
 }
 
 #[test]
-fn relocated_operational_violation_rows_outside_dual_relevant() {
-    let (layout, t) = build_active_violations_layout_and_template();
-
-    assert_eq!(
-        t.n_dual_relevant, 0,
-        "n_dual_relevant is always 0 with column-bound state pinning"
-    );
-
-    assert!(
-        layout.slack.oper_violation.min_outflow_rows.start > t.n_dual_relevant,
-        "min_outflow row {} must be > n_dual_relevant {}",
-        layout.slack.oper_violation.min_outflow_rows.start,
-        t.n_dual_relevant
-    );
-    assert!(
-        layout.slack.oper_violation.max_outflow_rows.start > t.n_dual_relevant,
-        "max_outflow row {} must be > n_dual_relevant {}",
-        layout.slack.oper_violation.max_outflow_rows.start,
-        t.n_dual_relevant
-    );
-    assert!(
-        layout.slack.oper_violation.min_turbine_rows.start > t.n_dual_relevant,
-        "min_turbine row {} must be > n_dual_relevant {}",
-        layout.slack.oper_violation.min_turbine_rows.start,
-        t.n_dual_relevant
-    );
-    assert!(
-        layout.slack.oper_violation.min_generation_rows.start > t.n_dual_relevant,
-        "min_generation row {} must be > n_dual_relevant {}",
-        layout.slack.oper_violation.min_generation_rows.start,
-        t.n_dual_relevant
-    );
-}
-
-#[test]
 fn relocated_diagnostic_template_operational_violation_correctness() {
     let (layout, t) = build_active_violations_layout_and_template();
 
     assert!(
-        !layout.slack.oper_violation.outflow_below_slack.is_empty(),
+        !layout.geometry.outflow_below_slack.is_empty(),
         "operational-violation slack columns must be present when hydros exist"
     );
 
     // Per-block formulation: RHS is in rate units (m3/s or MW), not volume/energy.
     let block_hours_0 = 720.0;
 
-    let row = layout.slack.oper_violation.min_outflow_rows.start;
+    let row = layout.oper_violation.min_outflow.start;
     assert!(
         (t.row_lower[row] - 50.0).abs() < 1e-10,
         "min_outflow row_lower = {}, expected 50.0 (rate units m3/s)",
@@ -3210,7 +3664,7 @@ fn relocated_diagnostic_template_operational_violation_correctness() {
         "min_outflow row_upper must be +inf for >= constraint"
     );
 
-    let col = layout.slack.oper_violation.outflow_below_slack.start;
+    let col = layout.geometry.outflow_below_slack.start;
     assert_eq!(
         t.col_lower[col], 0.0,
         "outflow_below_slack col_lower must be 0"
@@ -3236,282 +3690,38 @@ fn relocated_diagnostic_template_operational_violation_correctness() {
         DEFAULT_COST_SCALE_FACTOR
     );
 
-    let col_above = layout.slack.oper_violation.outflow_above_slack.start;
+    let col_above = layout.geometry.outflow_above_slack.start;
     assert_eq!(t.col_upper[col_above], f64::INFINITY);
     assert!(t.objective[col_above] > 0.0);
 
-    let col_turb = layout.slack.oper_violation.turbine_below_slack.start;
+    let col_turb = layout.geometry.turbine_below_slack.start;
     assert_eq!(t.col_upper[col_turb], f64::INFINITY);
     assert!(t.objective[col_turb] > 0.0);
 
-    let col_gen = layout.slack.oper_violation.generation_below_slack.start;
+    let col_gen = layout.geometry.generation_below_slack.start;
     assert_eq!(t.col_upper[col_gen], f64::INFINITY);
     assert!(t.objective[col_gen] > 0.0);
 
-    let min_turb_row = layout.slack.oper_violation.min_turbine_rows.start;
+    let min_turb_row = layout.oper_violation.min_turbine.start;
     assert!(
         (t.row_lower[min_turb_row] - 10.0).abs() < 1e-10,
         "min_turbine row_lower = {}, expected 10.0 (rate units m3/s)",
         t.row_lower[min_turb_row],
     );
 
-    let min_gen_row = layout.slack.oper_violation.min_generation_rows.start;
+    let min_gen_row = layout.oper_violation.min_generation.start;
     assert!(
         (t.row_lower[min_gen_row] - 5.0).abs() < 1e-10,
         "min_generation row_lower = {}, expected 5.0 (rate units MW)",
         t.row_lower[min_gen_row],
     );
 
-    let max_outflow_row = layout.slack.oper_violation.max_outflow_rows.start;
+    let max_outflow_row = layout.oper_violation.max_outflow.start;
     assert!(
         (t.row_upper[max_outflow_row] - 800.0).abs() < 1e-10,
         "max_outflow row_upper = {}, expected 800.0 (rate units m3/s)",
         t.row_upper[max_outflow_row],
     );
-}
-
-// ── build_filling_v_target backward fold ─────────────────────────────────
-
-use cobre_core::FillingConfig;
-use std::collections::HashMap as VTargetMap;
-
-/// A single non-cascade hydro carrying a `FillingConfig`
-/// (`start_stage_id`/`entry_stage_id`), used by the `build_filling_v_target`
-/// fold tests. All other fields are inert.
-fn vtarget_filling_hydro(id: i32, start: i32, entry: i32) -> Hydro {
-    let mut hydro = Hydro {
-        unit_groups: Vec::new(),
-        id: EntityId(id),
-        name: format!("H{id}"),
-        operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-        downstream_id: None,
-        travel_time_hours: None,
-        entry_stage_id: Some(entry),
-        exit_stage_id: None,
-        min_storage_hm3: 0.0,
-        max_storage_hm3: 100.0,
-        min_outflow_m3s: 0.0,
-        max_outflow_m3s: None,
-        generation_model: HydroGenerationModel::ConstantProductivity,
-        min_turbined_m3s: 0.0,
-        max_turbined_m3s: FIXTURE_NONBINDING_MAX_TURBINED_M3S,
-        specific_productivity_mw_per_m3s_per_m: None,
-        min_generation_mw: 0.0,
-        max_generation_mw: 1_000_000.0,
-        tailrace: None,
-        hydraulic_losses: None,
-        efficiency: None,
-        evaporation_coefficients_mm: None,
-        evaporation_reference_volumes_hm3: None,
-        diversion: None,
-        filling: Some(FillingConfig {
-            start_stage_id: start,
-            filling_min_rate_m3s: 0.0,
-        }),
-        penalties: hydro_penalties_zero(),
-    };
-    hydro.declare_mirror_unit_group(EntityId(1));
-    hydro
-}
-
-/// A `ResolvedBounds` table for one hydro across `n_stages` stages, with every
-/// stage's `min_storage_hm3` and `filling_min_rate_m3s` set to the given values.
-fn vtarget_bounds(n_stages: usize, min_storage: f64, rate: f64) -> ResolvedBounds {
-    let mut bounds = ResolvedBounds::new(
-        &BoundsCountsSpec {
-            n_hydros: 1,
-            n_thermals: 0,
-            n_lines: 0,
-            n_pumping: 0,
-            n_contracts: 0,
-            n_stages,
-            k_max: 0,
-        },
-        &BoundsDefaults {
-            hydro: default_hydro_bounds(),
-            hydro_block: default_hydro_block_bounds(),
-            thermal: ThermalStageBounds { cost_per_mwh: 0.0 },
-            thermal_block: ThermalBlockBounds {
-                min_generation_mw: 0.0,
-                max_generation_mw: 0.0,
-            },
-            line_block: LineBlockBounds {
-                direct_mw: 0.0,
-                reverse_mw: 0.0,
-            },
-            pumping_block: PumpingBlockBounds {
-                min_flow_m3s: 0.0,
-                max_flow_m3s: 0.0,
-            },
-            contract_block: ContractBlockBounds {
-                min_mw: 0.0,
-                max_mw: 0.0,
-                price_per_mwh: 0.0,
-            },
-        },
-    );
-    for stage_idx in 0..n_stages {
-        let hb = bounds.hydro_bounds_mut(0, stage_idx);
-        hb.min_storage_hm3 = min_storage;
-        hb.filling_min_rate_m3s = rate;
-    }
-    bounds
-}
-
-/// Identity `stage_id → stage_idx` map for `n_stages` study stages.
-fn vtarget_id_map(n_stages: usize) -> VTargetMap<i32, usize> {
-    (0..n_stages).map(|i| (i as i32, i)).collect()
-}
-
-/// The fixture: `start = 2`, `entry = 4`, `min_storage = 60`, per-stage ζ = 2.592
-/// (`total_hours = 720`, `M3S_TO_HM3 = 0.0036`), `rate = 5`. The backward fold
-/// pins `V_target[3] = 60` (the dead-volume anchor at L = entry − 1) and
-/// `V_target[2] = 60 − 2.592·5 = 47.04` (one stage of minimum accumulation
-/// below the anchor). No `V_target` is emitted at PreFilling (ids 0, 1) or
-/// Operating (id ≥ 4).
-#[test]
-fn build_filling_v_target_backward_fold_ac_values() {
-    let n_stages = 5;
-    let hydros = vec![vtarget_filling_hydro(1, 2, 4)];
-    let bounds = vtarget_bounds(n_stages, 60.0, 5.0);
-    // ζ_t = total_hours[t]·M3S_TO_HM3 = 720·0.0036 = 2.592 at every stage.
-    let total_hours = vec![720.0; n_stages];
-    let v_target =
-        super::build_filling_v_target(&hydros, &bounds, &total_hours, &vtarget_id_map(n_stages));
-
-    // L = entry − 1 = 3: anchored at the dead volume.
-    assert!(
-        (v_target[&(0, 3)] - 60.0).abs() < 1e-9,
-        "V_target[3] == min_storage == 60.0, got {}",
-        v_target[&(0, 3)]
-    );
-    // Early Filling stage 2: 60 − 2.592·5 = 47.04.
-    assert!(
-        (v_target[&(0, 2)] - 47.04).abs() < 1e-9,
-        "V_target[2] == 60 − 2.592·5 == 47.04, got {}",
-        v_target[&(0, 2)]
-    );
-    // No entry outside the Filling window {2, 3}.
-    assert!(
-        !v_target.contains_key(&(0, 0)),
-        "no V_target at PreFilling id 0"
-    );
-    assert!(
-        !v_target.contains_key(&(0, 1)),
-        "no V_target at PreFilling id 1"
-    );
-    assert!(
-        !v_target.contains_key(&(0, 4)),
-        "no V_target at Operating id 4"
-    );
-    assert_eq!(v_target.len(), 2, "exactly one V_target per Filling stage");
-}
-
-/// Over-provisioned schedule: a fill rate large enough that the backward fold's
-/// unclipped value would exceed `min_storage` is impossible (non-negative rate
-/// only lowers it); the contract is that EVERY `V_target[t] ≤ min_storage`. With
-/// a wide Filling window (ids 1..=5, entry = 6) and a high rate, every earliest
-/// floor sits strictly below the dead volume and the clip never raises one above
-/// it. The clip is verified to hold at every Filling stage.
-#[test]
-fn build_filling_v_target_clips_at_min_storage_when_over_provisioned() {
-    let n_stages = 7;
-    let min_storage = 30.0;
-    let hydros = vec![vtarget_filling_hydro(1, 1, 6)]; // Filling ids {1,2,3,4,5}.
-    // A high rate (50 m³/s over ζ = 2.592 ⇒ 129.6 hm³/stage) far exceeds the
-    // 30 hm³ dead volume, so the unclipped earliest floors go deeply negative.
-    let bounds = vtarget_bounds(n_stages, min_storage, 50.0);
-    let total_hours = vec![720.0; n_stages];
-    let v_target =
-        super::build_filling_v_target(&hydros, &bounds, &total_hours, &vtarget_id_map(n_stages));
-
-    for stage_id in 1..=5 {
-        let v = v_target[&(0, stage_id)];
-        assert!(
-            v <= min_storage + 1e-12,
-            "V_target[{stage_id}] = {v} must not exceed the dead volume {min_storage}"
-        );
-    }
-    assert!(
-        (v_target[&(0, 5)] - min_storage).abs() < 1e-9,
-        "V_target[L] == min_storage (the clip is a no-op at the anchor)"
-    );
-    assert!(
-        v_target[&(0, 1)] < v_target[&(0, 5)],
-        "earliest floor strictly below the anchor"
-    );
-}
-
-/// A zero fill rate makes the trajectory FLAT: every Filling stage's floor
-/// equals `min_storage` (the design's `rate == 0 ⇒ V_target[t] == V_target[t+1]`
-/// degenerate case). The clip is a no-op throughout.
-#[test]
-fn build_filling_v_target_flat_when_rate_is_zero() {
-    let n_stages = 5;
-    let hydros = vec![vtarget_filling_hydro(1, 1, 4)]; // Filling ids {1,2,3}.
-    let bounds = vtarget_bounds(n_stages, 45.0, 0.0);
-    let total_hours = vec![720.0; n_stages];
-    let v_target =
-        super::build_filling_v_target(&hydros, &bounds, &total_hours, &vtarget_id_map(n_stages));
-    for stage_id in 1..=3 {
-        assert!(
-            (v_target[&(0, stage_id)] - 45.0).abs() < 1e-9,
-            "flat trajectory: V_target[{stage_id}] == min_storage == 45.0"
-        );
-    }
-}
-
-/// A non-filling hydro (no `FillingConfig`) yields an EMPTY map — the
-/// parity-neutrality contract for the precompute itself.
-#[test]
-fn build_filling_v_target_empty_for_non_filling() {
-    let n_stages = 3;
-    let mut h = vtarget_filling_hydro(1, 1, 2);
-    h.filling = None;
-    h.entry_stage_id = None;
-    let hydros = vec![h];
-    let bounds = vtarget_bounds(n_stages, 50.0, 5.0);
-    let total_hours = vec![720.0; n_stages];
-    let v_target =
-        super::build_filling_v_target(&hydros, &bounds, &total_hours, &vtarget_id_map(n_stages));
-    assert!(
-        v_target.is_empty(),
-        "non-filling hydro ⇒ empty V_target map"
-    );
-}
-
-/// Assert two `StageTemplate`s are byte-identical: CSC structure
-/// (`col_starts`, `row_indices`, `values`), bounds (`col_lower`/`col_upper`,
-/// `row_lower`/`row_upper`), `objective`, and the full dense matrix — every
-/// `f64` compared by `to_bits()` so it is true bit-identity, not approximate.
-fn assert_templates_byte_identical(tpl_a: &StageTemplate, tpl_b: &StageTemplate) {
-    assert_eq!(tpl_a.num_cols, tpl_b.num_cols, "num_cols");
-    assert_eq!(tpl_a.num_rows, tpl_b.num_rows, "num_rows");
-    assert_eq!(tpl_a.num_nz, tpl_b.num_nz, "num_nz");
-    assert_eq!(tpl_a.n_state, tpl_b.n_state, "n_state");
-
-    assert_eq!(tpl_a.col_starts, tpl_b.col_starts, "col_starts");
-    assert_eq!(tpl_a.row_indices, tpl_b.row_indices, "row_indices");
-
-    let bits = |xs: &[f64]| xs.iter().map(|v| v.to_bits()).collect::<Vec<u64>>();
-    assert_eq!(bits(&tpl_a.values), bits(&tpl_b.values), "values");
-    assert_eq!(bits(&tpl_a.col_lower), bits(&tpl_b.col_lower), "col_lower");
-    assert_eq!(bits(&tpl_a.col_upper), bits(&tpl_b.col_upper), "col_upper");
-    assert_eq!(bits(&tpl_a.objective), bits(&tpl_b.objective), "objective");
-    assert_eq!(bits(&tpl_a.row_lower), bits(&tpl_b.row_lower), "row_lower");
-    assert_eq!(bits(&tpl_a.row_upper), bits(&tpl_b.row_upper), "row_upper");
-
-    let dense_a = csc_to_dense(tpl_a);
-    let dense_b = csc_to_dense(tpl_b);
-    for i in 0..tpl_a.num_rows {
-        for j in 0..tpl_a.num_cols {
-            assert_eq!(
-                dense_a[i][j].to_bits(),
-                dense_b[i][j].to_bits(),
-                "dense coefficient mismatch at row {i} col {j}"
-            );
-        }
-    }
 }
 
 /// One-bus, one-hydro FPHA system whose single stage carries `n_blks` blocks
@@ -3649,47 +3859,45 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
                 gamma_s: 0.05,
             }],
         }]],
-        1,
+        system.hydros(),
         1,
     );
     let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &production,
         &hydro_models.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
-    let state = state_layout_for(&ctx);
     let stage = &system.stages()[0];
-    super::build_single_stage_template(&ctx, &state, stage, 0).template
+    super::build_single_stage_template(&ctx, stage, 0).template
 }
 
-/// `K = 1` chronological build collapses to the parallel LP: the
-/// `storage_internal` interior-column family is empty, there is one water row,
+/// `K = 1` chronological build collapses to the parallel LP: the interior
+/// storage-boundary column family is empty, there is one water row,
 /// and FPHA rides the single incoming/outgoing storage pair — so the two
 /// templates are byte-identical. This anchors the layout half of
 /// the chronological feature against any regression that perturbs the `K = 1`
@@ -3698,7 +3906,7 @@ fn block_template(block_mode: BlockMode, n_blks: usize) -> StageTemplate {
 fn chronological_k1_byte_identical_to_parallel() {
     let parallel = block_template(BlockMode::Parallel, 1);
     let chronological = block_template(BlockMode::Chronological, 1);
-    assert_templates_byte_identical(&parallel, &chronological);
+    assert_templates_byte_identical(&parallel, &chronological, "parallel vs chronological");
 }
 
 /// `theta` and `n_state` are pure functions of `(N, L, A, k_max)` and are
@@ -3711,11 +3919,9 @@ fn chronological_k1_byte_identical_to_parallel() {
 fn theta_and_n_state_invariant_to_block_mode() {
     let hydro_count = 1_usize;
     let max_par_order = 0_usize;
-    let n_anticipated = 0_usize;
-    let k_max = 0_usize;
     let n_blks = 3_usize;
 
-    let state = state_layout_full(hydro_count, max_par_order, n_anticipated, k_max, vec![]);
+    let state = state_layout_full(hydro_count, max_par_order, vec![]);
     let parallel_theta = state.theta;
     let parallel_n_state = state.n_state;
 
@@ -3763,7 +3969,7 @@ fn block_layout_and_template(
                 gamma_s: 0.05,
             }],
         }]],
-        1,
+        system.hydros(),
         1,
     )));
     let hydro_models = Box::leak(Box::new(PrepareHydroModelsResult::default_from_system(
@@ -3771,57 +3977,57 @@ fn block_layout_and_template(
     )));
     let resolved_params = Box::leak(Box::new(empty_resolved_params()));
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(system, par_lp);
-    let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let (topology, resolved) = crate::test_support::resolved_layout_for(system, par_lp);
+    let topology = Box::leak(Box::new(topology));
+    let resolved = Box::leak(Box::new(resolved));
+    let hydro_cell_index = Box::leak(Box::new(HydroCellIndex::build(system.hydros())));
+    let time_value = Box::leak(Box::new(build_time_value_for(system)));
+    let study_dims = Box::leak(Box::new(crate::test_support::build_study_dimensions(
         system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    )));
+    let inputs = Box::leak(Box::new(crate::test_support::resolve_lp_build_inputs(
+        system,
+        &[],
+        production,
+        study_dims,
+        time_value,
+        hydro_cell_index,
+        resolved_params,
+    )));
+    let ctx = super::build_template_build_ctx(
+        system,
         par_lp,
-        system.load_models(),
         production,
         &hydro_models.evaporation,
-        resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        topology,
+        inputs,
     );
     let ctx = Box::leak(Box::new(ctx));
-    let state = Box::leak(Box::new(state_layout_for(ctx)));
     let stage = &system.stages()[0];
 
-    let template = super::build_single_stage_template(ctx, state, stage, 0).template;
-    let layout = StageLayout::new(ctx, state, stage, 0);
+    let template = super::build_single_stage_template(ctx, stage, 0).template;
+    let layout = StageLayout::new(ctx, stage, 0);
     let tau: Vec<f64> = stage
         .blocks
         .iter()
-        .map(|b| b.duration_hours * super::super::M3S_TO_HM3)
+        .map(|b| b.duration_hours * M3S_TO_HM3)
         .collect();
     (layout, template, tau)
 }
 
-/// AC#1: a chronological `K = 2` Operating hydro emits two chained rows; block
+/// A chronological `K = 2` Operating hydro emits two chained rows; block
 /// `k`'s row carries `+1.0` on `Sᵏ`, `−1.0` on `Sᵏ⁻¹`, and `+τ_k` on that block's
 /// turbine column.
 #[test]
 fn chronological_water_balance_chained_rows() {
     let (layout, t, tau) = block_layout_and_template(BlockMode::Chronological, 2);
     let h = 0_usize;
-    let row0 = layout.rows.water_balance.start + h * 2;
-    let row1 = layout.rows.water_balance.start + h * 2 + 1;
+    let row0 = layout.geometry.water_balance.start() + h * 2;
+    let row1 = layout.geometry.water_balance.start() + h * 2 + 1;
 
     let entry = |col: usize, row: usize| -> f64 {
         let es = csc_entries_for_col(&t, col);
@@ -3850,7 +4056,9 @@ fn chronological_water_balance_chained_rows() {
     );
     assert_eq!(
         entry(
-            layout.turbine_col(HydroCell::new(h), BlockIdx::new(0)),
+            layout
+                .geometry
+                .turbine_col(HydroCell::new(h), BlockIdx::new(0)),
             row0
         ),
         tau[0]
@@ -3872,14 +4080,16 @@ fn chronological_water_balance_chained_rows() {
     );
     assert_eq!(
         entry(
-            layout.turbine_col(HydroCell::new(h), BlockIdx::new(1)),
+            layout
+                .geometry
+                .turbine_col(HydroCell::new(h), BlockIdx::new(1)),
             row1
         ),
         tau[1]
     );
 }
 
-/// AC#2: summing the `K` chronological water rows coefficient-wise (over every
+/// Summing the `K` chronological water rows coefficient-wise (over every
 /// column) reproduces the parallel single-row build. The interior `Sⁱ` terms cancel
 /// to `+1.0` on `Sᴷ` and `−1.0` on `S⁰`, and every `τ_k`-scaled flow term sums to
 /// its `ζ`-scaled parallel coefficient (`Σ_k τ_k = ζ`).
@@ -3896,10 +4106,10 @@ fn chronological_water_balance_telescopes_to_parallel() {
     // Interior storage columns are shifted into chronological's control region, so
     // parallel and chronological do NOT share control-region column indices; compare
     // per SEMANTIC column via each layout's accessors.
-    let par_row = par_layout.rows.water_balance.start + h;
+    let par_row = par_layout.geometry.water_balance.start() + h;
     let chr_sum = |chr_col: usize| -> f64 {
         (0..n_blks)
-            .map(|k| dense_chr[chr_layout.rows.water_balance.start + h * n_blks + k][chr_col])
+            .map(|k| dense_chr[chr_layout.geometry.water_balance.start() + h * n_blks + k][chr_col])
             .sum()
     };
     let assert_telescopes = |par_col: usize, chr_col: usize, label: &str| {
@@ -3918,7 +4128,7 @@ fn chronological_water_balance_telescopes_to_parallel() {
         "outgoing storage Sᴷ",
     );
     assert_telescopes(
-        par_layout.col_storage_in_start() + h,
+        par_layout.state.storage_in.start + h,
         chr_layout.block_storage_col(HydroSys::new(h), Boundary::Incoming),
         "incoming storage S⁰",
     );
@@ -3927,18 +4137,30 @@ fn chronological_water_balance_telescopes_to_parallel() {
     // block's τ_k sum reproduces the parallel ζ-scaled flow coefficient.
     for blk in 0..n_blks {
         assert_telescopes(
-            par_layout.turbine_col(HydroCell::new(h), BlockIdx::new(blk)),
-            chr_layout.turbine_col(HydroCell::new(h), BlockIdx::new(blk)),
+            par_layout
+                .geometry
+                .turbine_col(HydroCell::new(h), BlockIdx::new(blk)),
+            chr_layout
+                .geometry
+                .turbine_col(HydroCell::new(h), BlockIdx::new(blk)),
             "turbine",
         );
         assert_telescopes(
-            par_layout.spillage_col(HydroSys::new(h), BlockIdx::new(blk)),
-            chr_layout.spillage_col(HydroSys::new(h), BlockIdx::new(blk)),
+            par_layout
+                .geometry
+                .spillage_col(HydroSys::new(h), BlockIdx::new(blk)),
+            chr_layout
+                .geometry
+                .spillage_col(HydroSys::new(h), BlockIdx::new(blk)),
             "spillage",
         );
         assert_telescopes(
-            par_layout.diversion_col(HydroSys::new(h), BlockIdx::new(blk)),
-            chr_layout.diversion_col(HydroSys::new(h), BlockIdx::new(blk)),
+            par_layout
+                .geometry
+                .diversion_col(HydroSys::new(h), BlockIdx::new(blk)),
+            chr_layout
+                .geometry
+                .diversion_col(HydroSys::new(h), BlockIdx::new(blk)),
             "diversion",
         );
     }
@@ -3946,13 +4168,13 @@ fn chronological_water_balance_telescopes_to_parallel() {
     // Withdrawal slacks: parallel applies ±ζ once; chronological's per-block ±τ_k sum
     // recovers ±ζ.
     assert_telescopes(
-        par_layout.slack.withdrawal_slack_neg.start + h,
-        chr_layout.slack.withdrawal_slack_neg.start + h,
+        par_layout.geometry.withdrawal_slack_neg.start + h,
+        chr_layout.geometry.withdrawal_slack_neg.start + h,
         "withdrawal neg",
     );
     assert_telescopes(
-        par_layout.slack.withdrawal_slack_pos.start + h,
-        chr_layout.slack.withdrawal_slack_pos.start + h,
+        par_layout.geometry.withdrawal_slack_pos.start + h,
+        chr_layout.geometry.withdrawal_slack_pos.start + h,
         "withdrawal pos",
     );
 
@@ -3966,10 +4188,10 @@ fn chronological_water_balance_telescopes_to_parallel() {
         );
     }
 
-    // The telescoped RHS recovers the parallel RHS: Σ_k τ_k·(base − withdrawal) =
-    // ζ·(base − withdrawal).
+    // The telescoped RHS recovers the parallel RHS: Σ_k −(τ_k·withdrawal) =
+    // −(ζ·withdrawal).
     let chr_rhs_sum: f64 = (0..n_blks)
-        .map(|k| chr_t.row_lower[chr_layout.rows.water_balance.start + h * n_blks + k])
+        .map(|k| chr_t.row_lower[chr_layout.geometry.water_balance.start() + h * n_blks + k])
         .sum();
     let par_rhs = par_t.row_lower[par_row];
     assert!(
@@ -3995,28 +4217,28 @@ fn chronological_water_balance_telescopes_to_parallel() {
 fn stage_geometry_block_storage_col_matches_layout() {
     let n_blks = 3_usize;
     let (layout, _, _) = block_layout_and_template(BlockMode::Chronological, n_blks);
-    let geometry = layout.geometry(BlockMode::Chronological);
-    let storage_in_start = layout.col_storage_in_start();
-    let storage_internal_start = layout.equipment.storage_internal_start;
+    let geometry = layout.geometry.clone();
+    let storage_in_start = layout.state.storage_in.start;
+    let storage_internal_start = layout.geometry.storage_internal_start;
     let storage_final_start = layout.state.storage.start;
 
-    for h in 0..layout.n_h {
+    for h in 0..layout.state.hydro_count {
         assert_eq!(
-            geometry.block_storage_col(HydroSys::new(h), Boundary::Incoming),
+            geometry.block_storage_col(layout.state, HydroSys::new(h), Boundary::Incoming),
             storage_in_start + h,
             "S⁰ endpoint (the parallel-fill open-coded pair) must resolve to \
              storage_in_start + h at hydro {h}"
         );
         for k in 1..n_blks {
             assert_eq!(
-                geometry.block_storage_col(HydroSys::new(h), Boundary::Interior(k)),
+                geometry.block_storage_col(layout.state, HydroSys::new(h), Boundary::Interior(k)),
                 storage_internal_start + h * (n_blks - 1) + (k - 1),
                 "interior boundary S{k} must resolve to storage_internal_start + \
                  h * (n_blks - 1) + (k - 1) at hydro {h}"
             );
         }
         assert_eq!(
-            geometry.block_storage_col(HydroSys::new(h), Boundary::Outgoing),
+            geometry.block_storage_col(layout.state, HydroSys::new(h), Boundary::Outgoing),
             storage_final_start + h,
             "Sᴷ endpoint (the parallel-fill open-coded pair) must resolve to \
              storage_final_start + h at hydro {h}"
@@ -4032,117 +4254,126 @@ fn stage_geometry_block_storage_col_matches_layout() {
 fn stage_layout_geometry_field_equals_layout_source_at_k3() {
     let n_blks = 3_usize;
     let (layout, _, _) = block_layout_and_template(BlockMode::Chronological, n_blks);
-    let geometry = layout.geometry(BlockMode::Chronological);
+    let geometry = layout.geometry.clone();
 
-    assert_eq!(geometry.theta_col, layout.col_theta(), "theta_col");
-    assert_eq!(geometry.turbine, layout.equipment.turbine, "turbine");
-    assert_eq!(geometry.spillage, layout.equipment.spillage, "spillage");
-    assert_eq!(geometry.diversion, layout.equipment.diversion, "diversion");
-    assert_eq!(geometry.thermal, layout.equipment.thermal, "thermal");
+    assert_eq!(geometry.turbine, layout.geometry.turbine, "turbine");
+    assert_eq!(geometry.spillage, layout.geometry.spillage, "spillage");
+    assert_eq!(geometry.diversion, layout.geometry.diversion, "diversion");
+    assert_eq!(geometry.thermal, layout.geometry.thermal, "thermal");
     assert_eq!(
         geometry.anticipated_decision,
-        layout.anticipated_decision(),
+        layout.geometry.anticipated_decision.clone(),
         "anticipated_decision"
     );
-    assert_eq!(geometry.line_fwd, layout.equipment.line_fwd, "line_fwd");
-    assert_eq!(geometry.line_rev, layout.equipment.line_rev, "line_rev");
-    assert_eq!(geometry.deficit, layout.equipment.deficit, "deficit");
-    assert_eq!(geometry.excess, layout.equipment.excess, "excess");
+    assert_eq!(geometry.line_fwd, layout.geometry.line_fwd, "line_fwd");
+    assert_eq!(geometry.line_rev, layout.geometry.line_rev, "line_rev");
+    assert_eq!(geometry.deficit, layout.geometry.deficit, "deficit");
+    assert_eq!(geometry.excess, layout.geometry.excess, "excess");
     assert_eq!(
-        geometry.generation, layout.equipment.generation,
+        geometry.generation, layout.geometry.generation,
         "generation"
     );
     assert_eq!(
         geometry.evap_indices.is_empty(),
-        layout.evap_indices.is_empty(),
+        layout.geometry.evap_indices.is_empty(),
         "evap_indices emptiness"
     );
     assert_eq!(
-        geometry.inflow_slack, layout.slack.inflow_slack,
+        geometry.inflow_slack, layout.geometry.inflow_slack,
         "inflow_slack"
     );
     assert_eq!(
-        geometry.withdrawal_slack_neg, layout.slack.withdrawal_slack_neg,
+        geometry.withdrawal_slack_neg, layout.geometry.withdrawal_slack_neg,
         "withdrawal_slack_neg"
     );
     assert_eq!(
-        geometry.withdrawal_slack_pos, layout.slack.withdrawal_slack_pos,
+        geometry.withdrawal_slack_pos, layout.geometry.withdrawal_slack_pos,
         "withdrawal_slack_pos"
     );
     assert_eq!(
-        geometry.outflow_below_slack, layout.slack.oper_violation.outflow_below_slack,
+        geometry.outflow_below_slack, layout.geometry.outflow_below_slack,
         "outflow_below_slack"
     );
     assert_eq!(
-        geometry.outflow_above_slack, layout.slack.oper_violation.outflow_above_slack,
+        geometry.outflow_above_slack, layout.geometry.outflow_above_slack,
         "outflow_above_slack"
     );
     assert_eq!(
-        geometry.turbine_below_slack, layout.slack.oper_violation.turbine_below_slack,
+        geometry.turbine_below_slack, layout.geometry.turbine_below_slack,
         "turbine_below_slack"
     );
     assert_eq!(
-        geometry.generation_below_slack, layout.slack.oper_violation.generation_below_slack,
+        geometry.generation_below_slack, layout.geometry.generation_below_slack,
         "generation_below_slack"
     );
     assert_eq!(
-        geometry.contract_import, layout.equipment.contract_import,
+        geometry.contract_import, layout.geometry.contract_import,
         "contract_import"
     );
     assert_eq!(
-        geometry.contract_export, layout.equipment.contract_export,
+        geometry.contract_export, layout.geometry.contract_export,
         "contract_export"
     );
     assert_eq!(
-        geometry.water_balance, layout.rows.water_balance,
+        geometry.water_balance, layout.geometry.water_balance,
         "water_balance"
     );
     assert_eq!(
-        geometry.load_balance, layout.rows.load_balance,
+        geometry.load_balance, layout.geometry.load_balance,
         "load_balance"
     );
     assert_eq!(
         geometry.filling_target,
-        layout.filling_target(),
+        layout.geometry.filling_target.clone(),
         "filling_target"
     );
     assert_eq!(
         geometry.filling_target_col,
-        layout.filling_target_col(),
+        layout.geometry.filling_target_col.clone(),
         "filling_target_col"
     );
     assert_eq!(
         geometry.filled_min_storage_floor,
-        layout.filled_min_storage_floor(),
+        layout.geometry.filled_min_storage_floor.clone(),
         "filled_min_storage_floor"
     );
     assert_eq!(
         geometry.filled_min_storage_floor_col,
-        layout.filled_min_storage_floor_col(),
+        layout.geometry.filled_min_storage_floor_col.clone(),
         "filled_min_storage_floor_col"
     );
-    assert_eq!(
-        geometry.z_inflow_row_start, layout.rows.z_inflow_row_start,
-        "z_inflow_row_start"
-    );
-    assert_eq!(geometry.n_blks, layout.n_blks, "n_blks");
+    assert_eq!(geometry.n_blks, layout.clock.n_blks(), "n_blks");
     assert_eq!(geometry.block_mode, BlockMode::Chronological, "block_mode");
     assert_eq!(
-        geometry.fpha_hydro_indices, layout.fpha_hydro_indices,
+        geometry.fpha_hydro_indices, layout.geometry.fpha_hydro_indices,
         "fpha_hydro_indices"
     );
     assert_eq!(
-        geometry.evap_hydro_indices, layout.evap_hydro_indices,
+        geometry.evap_hydro_indices, layout.geometry.evap_hydro_indices,
         "evap_hydro_indices"
     );
     assert_eq!(
-        geometry.filling_target_hydro_indices, layout.filling.filling_target_hydro_indices,
+        geometry.filling_target_hydro_indices, layout.geometry.filling_target_hydro_indices,
         "filling_target_hydro_indices"
     );
     assert_eq!(
         geometry.filled_min_storage_floor_hydro_indices,
-        layout.filling.filled_min_storage_floor_hydro_indices,
+        layout.geometry.filled_min_storage_floor_hydro_indices,
         "filled_min_storage_floor_hydro_indices"
+    );
+}
+
+/// `StageGeometry::water_balance` is the layout's own family, kind included, on
+/// a Parallel stage too (the K3 test above covers Chronological).
+#[test]
+fn stage_layout_geometry_water_balance_family_matches_layout_source_in_parallel_mode() {
+    let n_blks = 3_usize;
+    let (layout, _, _) = block_layout_and_template(BlockMode::Parallel, n_blks);
+    let geometry = layout.geometry.clone();
+
+    assert_eq!(
+        geometry.water_balance, layout.geometry.water_balance,
+        "water_balance"
     );
 }
 
@@ -4320,35 +4551,33 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
-    let state = state_layout_for(&ctx);
 
     let mut saw_populated_filling_target = false;
     let mut saw_empty_filling_target = false;
@@ -4356,40 +4585,40 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
     let mut saw_empty_filled_floor = false;
 
     for (stage_idx, stage) in system.stages().iter().enumerate() {
-        let layout = super::super::layout::StageLayout::new(&ctx, &state, stage, stage_idx);
-        let geometry = layout.geometry(stage.block_mode);
+        let layout = super::super::layout::StageLayout::new(&ctx, stage, stage_idx);
+        let geometry = layout.geometry.clone();
 
         assert_eq!(
-            geometry.contract_import, layout.equipment.contract_import,
+            geometry.contract_import, layout.geometry.contract_import,
             "stage {stage_idx}: contract_import"
         );
         assert_eq!(
-            geometry.contract_export, layout.equipment.contract_export,
+            geometry.contract_export, layout.geometry.contract_export,
             "stage {stage_idx}: contract_export"
         );
         assert_eq!(
             geometry.anticipated_decision,
-            layout.anticipated_decision(),
+            layout.geometry.anticipated_decision.clone(),
             "stage {stage_idx}: anticipated_decision"
         );
         assert_eq!(
             geometry.filling_target,
-            layout.filling_target(),
+            layout.geometry.filling_target.clone(),
             "stage {stage_idx}: filling_target"
         );
         assert_eq!(
             geometry.filling_target_col,
-            layout.filling_target_col(),
+            layout.geometry.filling_target_col.clone(),
             "stage {stage_idx}: filling_target_col"
         );
         assert_eq!(
             geometry.filled_min_storage_floor,
-            layout.filled_min_storage_floor(),
+            layout.geometry.filled_min_storage_floor.clone(),
             "stage {stage_idx}: filled_min_storage_floor"
         );
         assert_eq!(
             geometry.filled_min_storage_floor_col,
-            layout.filled_min_storage_floor_col(),
+            layout.geometry.filled_min_storage_floor_col.clone(),
             "stage {stage_idx}: filled_min_storage_floor_col"
         );
 
@@ -4436,7 +4665,7 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
     );
 }
 
-/// AC#3: a chronological `K = 1` build's water-balance row is byte-identical to the
+/// A chronological `K = 1` build's water-balance row is byte-identical to the
 /// parallel build's — the single chained row IS the parallel row (`τ_1 = ζ`, no
 /// interior boundary). The full-template anchor is
 /// [`chronological_k1_byte_identical_to_parallel`]; this isolates the water row.
@@ -4444,7 +4673,7 @@ fn stage_geometry_rerouted_ranges_match_layout_source_at_every_stage() {
 fn chronological_k1_water_row_byte_identical() {
     let parallel = block_template(BlockMode::Parallel, 1);
     let (chrono_layout, chrono, _tau) = block_layout_and_template(BlockMode::Chronological, 1);
-    let row = chrono_layout.rows.water_balance.start;
+    let row = chrono_layout.geometry.water_balance.start();
 
     let dense_par = csc_to_dense(&parallel);
     let dense_chr = csc_to_dense(&chrono);
@@ -4488,7 +4717,7 @@ fn chronological_d06_gamma_v_on_both_block_columns() {
 
     for k in 1..=n_blks {
         let blk = k - 1;
-        let row = layout.row_fpha_start() + blk;
+        let row = layout.geometry.fpha.start + blk;
         assert_eq!(
             entry(
                 layout.block_storage_col(HydroSys::new(h), Boundary::from_index(k - 1, n_blks)),
@@ -4757,7 +4986,7 @@ fn filling_block_layout_and_template(
             ];
             2
         ],
-        2,
+        system.hydros(),
         FILL_N_STAGES,
     )));
     let hydro_models = Box::leak(Box::new(PrepareHydroModelsResult::default_from_system(
@@ -4765,41 +4994,41 @@ fn filling_block_layout_and_template(
     )));
     let resolved_params = Box::leak(Box::new(empty_resolved_params()));
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(system, par_lp);
-    let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let (topology, resolved) = crate::test_support::resolved_layout_for(system, par_lp);
+    let topology = Box::leak(Box::new(topology));
+    let resolved = Box::leak(Box::new(resolved));
+    let hydro_cell_index = Box::leak(Box::new(HydroCellIndex::build(system.hydros())));
+    let time_value = Box::leak(Box::new(build_time_value_for(system)));
+    let study_dims = Box::leak(Box::new(crate::test_support::build_study_dimensions(
         system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    )));
+    let inputs = Box::leak(Box::new(crate::test_support::resolve_lp_build_inputs(
+        system,
+        &[],
+        production,
+        study_dims,
+        time_value,
+        hydro_cell_index,
+        resolved_params,
+    )));
+    let ctx = super::build_template_build_ctx(
+        system,
         par_lp,
-        system.load_models(),
         production,
         &hydro_models.evaporation,
-        resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        topology,
+        inputs,
     );
     let ctx = Box::leak(Box::new(ctx));
-    let state = Box::leak(Box::new(state_layout_for(ctx)));
     let stage = &system.stages()[0];
 
-    let template = super::build_single_stage_template(ctx, state, stage, 0).template;
-    let layout = StageLayout::new(ctx, state, stage, 0);
-    (layout, template, ctx.filling_v_target.clone())
+    let template = super::build_single_stage_template(ctx, stage, 0).template;
+    let layout = StageLayout::new(ctx, stage, 0);
+    (layout, template, (*ctx.filling_v_target).clone())
 }
 
 /// D38–D42 preserved per block: at `K ≥ 2` a `PreFilling` hydro's `K`
@@ -4822,7 +5051,7 @@ fn chronological_prefilling_d38_d42_per_block() {
 
     for k in 1..=n_blks {
         let blk = k - 1;
-        let row = layout.rows.water_balance.start + h_pre * n_blks + blk;
+        let row = layout.geometry.water_balance.start() + h_pre * n_blks + blk;
         assert_eq!(
             entry(
                 layout.block_storage_col(HydroSys::new(h_pre), Boundary::from_index(k, n_blks)),
@@ -4848,13 +5077,17 @@ fn chronological_prefilling_d38_d42_per_block() {
             "PreFilling block {k}: frozen-identity RHS upper == 0"
         );
 
-        let spill_pre = layout.spillage_col(HydroSys::new(h_pre), BlockIdx::new(blk));
+        let spill_pre = layout
+            .geometry
+            .spillage_col(HydroSys::new(h_pre), BlockIdx::new(blk));
         assert_eq!(
             (t.col_lower[spill_pre], t.col_upper[spill_pre]),
             (0.0, 0.0),
             "PreFilling block {k}: spillage frozen [0,0] (no dam to spill from, D38/D39/D42)"
         );
-        let turb_pre = layout.turbine_col(HydroCell::new(h_pre), BlockIdx::new(blk));
+        let turb_pre = layout
+            .geometry
+            .turbine_col(HydroCell::new(h_pre), BlockIdx::new(blk));
         assert_eq!(
             (t.col_lower[turb_pre], t.col_upper[turb_pre]),
             (0.0, 0.0),
@@ -4862,7 +5095,9 @@ fn chronological_prefilling_d38_d42_per_block() {
         );
 
         // A Filling hydro's spillage is the legitimate D40 relief valve: free upward.
-        let spill_fill = layout.spillage_col(HydroSys::new(h_fill), BlockIdx::new(blk));
+        let spill_fill = layout
+            .geometry
+            .spillage_col(HydroSys::new(h_fill), BlockIdx::new(blk));
         assert_eq!(
             t.col_lower[spill_fill], 0.0,
             "Filling block {k}: spillage lower == 0"
@@ -4892,7 +5127,7 @@ fn chronological_filling_target_on_final_storage() {
     // H3 is the Filling hydro at stage 0 (positional index 1 after the id-sort).
     let h_fill = 1_usize;
     assert_eq!(
-        chr_layout.filling.filling_target_hydro_indices,
+        chr_layout.geometry.filling_target_hydro_indices,
         vec![HydroSys::new(h_fill)],
         "exactly the Filling hydro H3 emits a σ_fill target at stage 0"
     );
@@ -4902,7 +5137,7 @@ fn chronological_filling_target_on_final_storage() {
         sk_col, h_fill,
         "block_storage_col(h, K) aliases the outgoing endpoint (= dense hydro index)"
     );
-    let row = chr_layout.filling.row_filling_target_start;
+    let row = chr_layout.geometry.filling_target.start;
     let entry = |col: usize| csc_entry_sum(&chr_t, col, row);
     assert_eq!(
         entry(sk_col),
@@ -4910,7 +5145,7 @@ fn chronological_filling_target_on_final_storage() {
         "σ_fill row references Sᴷ (block_storage_col(h, K)), the stage-final storage"
     );
     assert_eq!(
-        entry(chr_layout.filling.col_filling_target_start),
+        entry(chr_layout.geometry.filling_target_col.start),
         1.0,
         "σ_fill row carries +1 on its σ_fill slack column"
     );
@@ -4934,7 +5169,9 @@ fn chronological_filling_target_on_final_storage() {
     );
 
     for blk in 0..n_blks {
-        let spill = chr_layout.spillage_col(HydroSys::new(h_fill), BlockIdx::new(blk));
+        let spill = chr_layout
+            .geometry
+            .spillage_col(HydroSys::new(h_fill), BlockIdx::new(blk));
         assert_eq!(
             (chr_t.col_lower[spill], chr_t.col_upper[spill]),
             (0.0, f64::INFINITY),
@@ -5090,42 +5327,47 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
-    assert_eq!(ctx.k_max, 1, "ctx.k_max");
     assert_eq!(
-        ctx.anticipated_lead_stages,
+        ctx.state
+            .anticipated_resolution
+            .ring_size(&ctx.state.anticipated_lead_stages),
+        1,
+        "ctx.state ring size"
+    );
+    assert_eq!(
+        ctx.state.anticipated_lead_stages,
         vec![1],
-        "ctx.anticipated_lead_stages"
+        "ctx.state.anticipated_lead_stages"
     );
 
-    let template_state = super::super::test_support::state_layout_with_resolution(&ctx);
+    let template_state = ctx.state;
     assert_eq!(template_state.k_max, 1, "template StateSpace k_max");
     assert_eq!(
         template_state.anticipated_lead_stages,
@@ -5134,47 +5376,30 @@ fn template_anticipated_resolution_matches_setup_lead_time() {
     );
     let expected_decider = vec![None, Some(0), Some(1)];
     assert_eq!(
-        anticipated_resolution_for(&template_state, AnticipatedLocal::new(0), 3).decider,
+        anticipated_resolution_for(template_state, AnticipatedLocal::new(0)).decider,
         expected_decider,
         "template's threaded resolution must resolve the calendar-derived decider"
     );
 
-    let (setup_resolution, setup_lead_stages) = resolve_anticipated_commitments(&system);
+    let (setup_resolution, setup_lead_stages) = resolve_anticipated_commitments(
+        &system,
+        &DeliveryCalendar::from_system(&system),
+        &AnticipatedPlants::build(system.thermals()),
+    );
     assert_eq!(
-        setup_lead_stages, ctx.anticipated_lead_stages,
+        setup_lead_stages, ctx.state.anticipated_lead_stages,
         "setup vs template anticipated_lead_stages"
     );
-    assert_eq!(setup_resolution.k_max, ctx.k_max, "setup vs template k_max");
+    assert_eq!(
+        setup_resolution.anchored_depth(),
+        ctx.state
+            .anticipated_resolution
+            .ring_size(&ctx.state.anticipated_lead_stages),
+        "setup vs template k_max"
+    );
     assert_eq!(
         setup_resolution.per_plant[0].decider, expected_decider,
         "setup vs template decider"
-    );
-}
-
-/// Mutation companion: builds the WRONG-BUT-COMPILING `StateSpace` for a
-/// `LeadTime` plant — `anticipated_lead_stages` from
-/// `cfg.lead_stages().unwrap_or(0)` (which is `0` for `LeadTime`) and no
-/// [`crate::indexer::StateSpace::set_anticipated_resolution`] attach — and
-/// shows its decider differs from the correct layout's: the resulting
-/// `Stages(0)` fallback resolves every delivery stage as self-delivered
-/// (`decider[m] == m` for all `m`), never the calendar-derived
-/// `[None, Some(0), Some(1)]` the correct resolution produces for the same
-/// system (`template_anticipated_resolution_matches_setup_lead_time`).
-#[test]
-fn pre_fix_template_state_layout_yields_differing_all_self_delivered_decider() {
-    let pre_fix_state = StateSpace::new(0, 0, 0, Vec::new(), 1, 0, vec![0], &[]);
-    let pre_fix_decider = anticipated_resolution_for(&pre_fix_state, AnticipatedLocal::new(0), 3)
-        .decider
-        .clone();
-    assert_eq!(
-        pre_fix_decider,
-        vec![Some(0), Some(1), Some(2)],
-        "pre-fix Stages(0) fallback resolves every delivery stage as self-delivered"
-    );
-    assert_ne!(
-        pre_fix_decider,
-        vec![None, Some(0), Some(1)],
-        "pre-fix decider must differ from the calendar-derived fixed resolution"
     );
 }
 
@@ -5189,47 +5414,49 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
     let par_lp = PrecomputedPar::default();
     let resolved_params = empty_resolved_params();
 
-    let (
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-    ) = ctx_anticipated_and_mask_inputs(&system, &par_lp);
+    let (topology, resolved) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    let (ctx, _, _) = super::build_template_build_ctx(
+    let time_value = build_time_value_for(&system);
+    let study_dims = crate::test_support::build_study_dimensions(
         &system,
         InflowNonNegativityMethod::None,
+        resolved.anticipated_plants.clone(),
+        0,
+    );
+    let inputs = crate::test_support::resolve_lp_build_inputs(
+        &system,
+        &[],
+        &hydro_result.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_params,
+    );
+    let ctx = super::build_template_build_ctx(
+        &system,
         &par_lp,
-        system.load_models(),
         &hydro_result.production,
         &hydro_result.evaporation,
-        &resolved_params,
-        anticipated_resolution,
-        anticipated_lead_stages,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        max_par_order,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        &resolved.state,
+        &topology,
+        &inputs,
     );
-    assert_eq!(ctx.anticipated_lead_stages, vec![1]);
+    assert_eq!(ctx.state.anticipated_lead_stages, vec![1]);
 
-    let template_state = super::super::test_support::state_layout_with_resolution(&ctx);
-    let template_decider = anticipated_resolution_for(&template_state, AnticipatedLocal::new(0), 3)
+    let template_state = ctx.state;
+    let template_decider = anticipated_resolution_for(template_state, AnticipatedLocal::new(0))
         .decider
         .clone();
 
-    let (setup_resolution, setup_lead_stages) = resolve_anticipated_commitments(&system);
-    assert_eq!(setup_lead_stages, ctx.anticipated_lead_stages);
+    let (setup_resolution, setup_lead_stages) = resolve_anticipated_commitments(
+        &system,
+        &DeliveryCalendar::from_system(&system),
+        &AnticipatedPlants::build(system.thermals()),
+    );
+    assert_eq!(setup_lead_stages, ctx.state.anticipated_lead_stages);
     assert_eq!(setup_resolution.per_plant[0].decider, template_decider);
 
-    let fallback_state = state_layout_for(&ctx);
-    let fallback_decider = anticipated_resolution_for(&fallback_state, AnticipatedLocal::new(0), 3)
+    let fallback_decider = anticipated_resolution_for(ctx.state, AnticipatedLocal::new(0))
         .decider
         .clone();
     assert_eq!(
@@ -5239,8 +5466,8 @@ fn template_leadstages_byte_identical_to_setup_and_fallback() {
     assert_eq!(template_decider, vec![None, Some(0), Some(1)]);
 }
 
-/// Minimal WARN-capturing `tracing::Subscriber`, mirroring
-/// `setup::tests::WarnRecorder` (the established setup-time advisory-test
+/// Minimal WARN-capturing `tracing::Subscriber`, mirroring setup's own
+/// `WarnRecorder` test fixture (the established setup-time advisory-test
 /// pattern for this crate).
 struct WarnRecorder {
     messages: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
@@ -5313,33 +5540,37 @@ fn build_stage_templates_never_emits_k0_advisory_itself() {
 
     let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
     let par_lp = PrecomputedPar::default();
-    let normal_lp = PrecomputedNormal::default();
     let resolved_params = empty_resolved_params();
-    let topology = build_transit_bucket_topology(&system, false);
-    let (state_layout, _, _) = resolve_state_layout(&system, &par_lp, &topology, None)
-        .expect("resolve_state_layout: valid test fixture");
-    let per_stage_mask = topology.per_stage_mask;
+    let (topology, layout) = crate::test_support::resolved_layout_for(&system, &par_lp);
     let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let study_dims = crate::test_support::build_study_dimensions(
+        &system,
+        InflowNonNegativityMethod::None,
+        layout.anticipated_plants.clone(),
+        0,
+    );
 
     let (subscriber, messages) = WarnRecorder::new();
     tracing::subscriber::with_default(subscriber, || {
+        let time_value = build_time_value_for(&system);
+        let inputs = crate::test_support::resolve_lp_build_inputs(
+            &system,
+            &[],
+            &hydro_result.production,
+            &study_dims,
+            &time_value,
+            &hydro_cell_index,
+            &resolved_params,
+        );
         let _ = super::build_stage_templates(
             &system,
-            InflowNonNegativityMethod::None,
             &par_lp,
-            &normal_lp,
             &hydro_result.production,
             &hydro_result.evaporation,
-            &resolved_params,
-            &state_layout,
-            &per_stage_mask,
-            &topology.arc_stage_weights,
-            &topology.arc_spread_chrono,
-            &topology.arc_arrival_density,
-            &hydro_cell_index,
-            SamplingScheme::InSample,
-        )
-        .expect("valid system");
+            &layout.state,
+            &topology,
+            inputs,
+        );
     });
 
     let recorded = messages.lock().unwrap();

@@ -166,7 +166,7 @@ one consistent identity story: the window's dates resolve against the same
 - **Internal representation is unchanged.** After resolution the engine still has
   a `PostStudyThermalBound`-equivalent keyed by the (now id-derived) post-study
   stage position; `post_study_calendar_stages` / `extended_delivery_stages` /
-  `delivery_stage_count` are unaffected in behavior. The redesign is an
+  `StateSpace::n_delivery` are unaffected in behavior. The redesign is an
   input-surface change, not a state-space change.
 
 ## 5. Validation changes (`cobre-io`)

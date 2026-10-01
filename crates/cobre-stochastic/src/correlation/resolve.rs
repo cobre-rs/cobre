@@ -286,9 +286,9 @@ impl DecomposedCorrelation {
 
         dims.assert_partitions(entity_order);
 
-        let inflow_order = &entity_order[..dims.n_hydros];
-        let load_order = &entity_order[dims.n_hydros..dims.n_hydros + dims.n_load_buses];
-        let ncs_order = &entity_order[dims.n_hydros + dims.n_load_buses..];
+        let inflow_order = &entity_order[dims.hydro_range()];
+        let load_order = &entity_order[dims.load_bus_range()];
+        let ncs_order = &entity_order[dims.ncs_range()];
         for group_factors in factors.values_mut() {
             Self::resolve_into(group_factors, inflow_order, EntityClass::Inflow);
             Self::resolve_into(group_factors, load_order, EntityClass::Load);

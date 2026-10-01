@@ -16,7 +16,7 @@ Available context structs:
 
 | Struct                | File                                             | Purpose                                                                                                                            | Mutability              |
 | --------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| `StageContext`        | `cobre-sddp/src/workspace/context.rs`            | Per-stage templates, base rows, layout                                                                                             | Immutable (`&`)         |
+| `StageContext`        | `cobre-sddp/src/workspace/context.rs`            | Per-stage templates, layout                                                                                             | Immutable (`&`)         |
 | `TrainingContext`     | `cobre-sddp/src/workspace/context.rs`            | Horizon, indexer, stochastic, initial state, the runtime node graph                                                                | Immutable (`&`)         |
 | `ScratchBuffers`      | `cobre-sddp/src/workspace/workspace.rs`          | Per-worker noise/patch scratch space                                                                                               | Mutable (`&mut`)        |
 | `SolverWorkspace`     | `cobre-sddp/src/workspace/workspace.rs`          | Solver + scratch + patch buffer                                                                                                    | Mutable (`&mut`)        |
@@ -63,7 +63,7 @@ study-level data. A new `NodeContext` struct was the other option the
 decision tree offered; it was not taken because it would add a second
 top-level context type threaded through every hot-path signature budget for a
 single field, when `TrainingContext` already carries exactly this shape of
-data. `StudySetup` owns the graph as `pub node_graph: NodeGraph` (built in
+data. `SolveInputs` owns the graph as `pub node_graph: NodeGraph` (built in
 `from_broadcast_params`, immediately after `build_scenario_libraries` — an
 `External`-bound node's Ω addresses the standardized library's raw scenario
 axis, so binding earlier would race the library's own standardization);
@@ -79,23 +79,37 @@ through a node's own `stage` field.
 
 ## StudySetup Sub-Structs
 
-`StudySetup` owns all pre-computed study state. It holds cohesive sub-structs
-plus a small number of bare residuals. Context constructors (`stage_ctx`,
-`training_ctx`, `simulation_ctx`) borrow directly from the sub-structs.
+`StudySetup` owns all pre-computed study state. It holds `SolveInputs` — the
+resolved inputs shared by the stage, training, and simulation contexts,
+disjoint from `fcf` — plus `fcf` and a small number of bare residuals. Context
+constructors (`stage_ctx`, `training_ctx`, `simulation_ctx`) are `SolveInputs`
+methods; `StudySetup` delegates to them unchanged. `StageData`'s templates are
+built by threading `crate::setup::resolve_lp_build_inputs`'s single resolution
+of the LP builder's study inputs (`LpBuildInputs`) into `build_stage_templates`,
+rather than the builder re-deriving them per stage. `resolve_stage_data`
+(`setup/mod.rs`) resolves the bucket topology and role-(a) state layout
+together through `resolve_state_and_topology`, then hands the resolved
+`LpBuildInputs` to `build_postprocessed_templates`, which builds the stage
+templates and runs the scaling/state-box postprocess in one step — the same
+`resolve_state_and_topology` step the test-support wrapper
+(`build_stage_templates_resolving_layout`) delegates through, so neither
+duplicates the other's resolution sequence.
 
 ### Cohesive sub-structs
 
-| Struct                | File                                           | Purpose                                                                                                                  | Visibility   | Storage form                |
-| --------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------ | --------------------------- |
-| `StageData`           | `cobre-sddp/src/setup/stage_data.rs`           | All stage-indexed data: templates, indexer, stages, entity counts, blocks, lag transitions, noise groups, scaling report | `pub`        | Aggregated sub-struct       |
-| `ScenarioLibraries`   | `cobre-sddp/src/setup/scenario_library_set.rs` | Training + simulation `PhaseLibraries` pair                                                                              | `pub`        | Aggregated sub-struct       |
-| `PhaseLibraries`      | `cobre-sddp/src/setup/scenario_library_set.rs` | Sampling schemes and optional libraries for one phase                                                                    | `pub`        | Aggregated sub-struct       |
-| `MethodologyConfig`   | `cobre-sddp/src/setup/methodology_config.rs`   | `horizon` + `inflow_method` — stochastic numerical methodology                                                           | `pub(crate)` | Aggregated sub-struct       |
-| `NodeGraph`           | `cobre-sddp/src/setup/node_graph.rs`           | Runtime node graph (F7): node identity/order, `node → pool` map, per-node Ω views/out-edges                              | `pub`        | Aggregated sub-struct       |
-| `LoopParams`          | `cobre-sddp/src/config.rs`                     | Pure-data projection of `LoopConfig` (excludes runtime-derived fields)                                                   | `pub`        | Projection of `LoopConfig`  |
-| `SimulationConfig`    | `cobre-sddp/src/simulation/config.rs`          | `n_scenarios`, `io_channel_capacity`                                                                                     | `pub`        | Literal reuse               |
-| `CutManagementConfig` | `cobre-sddp/src/config.rs`                     | Cut selection, budget cap, activity tolerance, warm-start cuts, per-stage risk measures                                  | `pub(crate)` | Literal reuse               |
-| `EventParams`         | `cobre-sddp/src/config.rs`                     | Output-side event flags; excludes runtime handles                                                                        | `pub(crate)` | Projection of `EventConfig` |
+| Struct                | File                                            | Purpose                                                                                                                              | Visibility   | Storage form                |
+| ---------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------ | --------------------------- |
+| `SolveInputs`          | `cobre-sddp/src/setup/solve_inputs.rs`          | Every input `stage_ctx`/`training_ctx`/`simulation_ctx` borrow from: `stage_data`, `stochastic`, `scenario_libraries`, `node_graph`, `initial`, `ncs`, `study_stage_ids`, `horizon`, `cut_management`, `cut_state_layouts` | `pub`        | Aggregated sub-struct       |
+| `StageData`            | `cobre-sddp/src/setup/stage_data.rs`            | All stage-indexed data: templates, time value, indexer, stages, entity counts, blocks, lag transitions, noise groups, scaling report | `pub`        | Aggregated sub-struct       |
+| `ScenarioLibraries`    | `cobre-sddp/src/setup/scenario_library_set.rs`  | Training + simulation `PhaseLibraries` pair                                                                                          | `pub`        | Aggregated sub-struct       |
+| `PhaseLibraries`       | `cobre-sddp/src/setup/scenario_library_set.rs`  | Sampling schemes and optional libraries for one phase                                                                                | `pub`        | Aggregated sub-struct       |
+| `InitialConditions`    | `cobre-sddp/src/setup/mod.rs`                   | Initial state vector + derived per-hydro PAR lag-slot/accumulator seeds                                                              | `pub(crate)` | Aggregated sub-struct       |
+| `NcsEntityData`        | `cobre-sddp/src/setup/mod.rs`                   | Per-stage and per-slot NCS entity data: dense column map, commissioning windows, max gen, curtailment                                | `pub(crate)` | Aggregated sub-struct       |
+| `NodeGraph`            | `cobre-sddp/src/setup/node_graph.rs`            | Runtime node graph: node identity/order, `node → pool` map, per-node Ω views/out-edges                                               | `pub`        | Aggregated sub-struct       |
+| `LoopParams`           | `cobre-sddp/src/config.rs`                      | Pure-data projection of `LoopConfig` (excludes runtime-derived fields)                                                               | `pub`        | Projection of `LoopConfig`  |
+| `SimulationConfig`     | `cobre-sddp/src/simulation/config.rs`           | `n_scenarios`, `io_channel_capacity`                                                                                                 | `pub`        | Literal reuse               |
+| `CutManagementConfig`  | `cobre-sddp/src/config.rs`                      | Cut selection, budget cap, activity tolerance, warm-start cuts, per-stage risk measures                                              | `pub(crate)` | Literal reuse               |
+| `EventParams`          | `cobre-sddp/src/config.rs`                      | Output-side event flags; excludes runtime handles                                                                                    | `pub(crate)` | Projection of `EventConfig` |
 
 ### Literal reuse vs projection
 
@@ -107,16 +121,18 @@ plus a small number of bare residuals. Context constructors (`stage_ctx`,
   per-invocation fields. Use when 1–3 fields must be excluded (example:
   `LoopParams` drops `n_fwd_threads`; `EventParams` drops runtime handles).
 - **New sub-struct**: introduce a dedicated type when no existing type
-  cohesively covers the grouping (example: `StageData`, `ScenarioLibraries`,
-  `MethodologyConfig`, `NodeGraph`).
+  cohesively covers the grouping (example: `SolveInputs`, `StageData`,
+  `ScenarioLibraries`, `NodeGraph`).
 
 ### Accessor policy
 
 `StudySetup` exposes a small impl surface: context builders (`stage_ctx`,
-`training_ctx`, `simulation_ctx`) plus targeted mutation setters
-(`replace_fcf`, `set_start_iteration`, `set_export_states`) and
-one typed read accessor (`simulation_config`). Every other access uses direct
-field paths (`setup.sub_struct.field`). Do not add accessor methods for plain
+`training_ctx`, `simulation_ctx`) are `SolveInputs` methods `StudySetup`
+delegates to unchanged, plus targeted mutation setters (`replace_fcf`,
+`set_start_iteration`, `set_export_states`) and one typed read accessor
+(`simulation_config`). Every other access uses direct field paths
+(`setup.inputs.sub_struct.field` for a `SolveInputs`-held sub-struct,
+`setup.sub_struct.field` otherwise). Do not add accessor methods for plain
 field reads — prefer the direct path.
 
 ---

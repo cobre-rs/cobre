@@ -148,9 +148,10 @@ impl Policy {
     ///
     /// Returns `max_k(intercept_k + coeffs_k · state)` over the stage's active
     /// Benders cuts — the FCF lower-bound value at that state. The coefficients
-    /// are the stored cut gradients (the raw `HiGHS` duals; see [`Policy::cut_matrix`]),
-    /// so the cut is read as `θ ≥ intercept + coeffs · state`. A stage with no
-    /// active cuts returns `float('-inf')` (NOT an error).
+    /// are the stored cut gradients (the incoming-state columns' reduced costs;
+    /// see [`Policy::cut_matrix`]), so the cut is read as
+    /// `θ ≥ intercept + coeffs · state`. A stage with no active cuts returns
+    /// `float('-inf')` (NOT an error).
     ///
     /// `stage` uses the FCF's 0-based stage indexing (stage `t - 1` for the
     /// 1-based SDDP stage `t`).
@@ -195,8 +196,8 @@ impl Policy {
     ///
     /// ## Sign convention
     ///
-    /// Coefficients are returned **exactly as stored** — the raw `HiGHS` dual of
-    /// the state-fixing rows, used directly as the FCF gradient. They are **NOT**
+    /// Coefficients are returned **exactly as stored** — the raw solver reduced
+    /// costs of the incoming-state columns, used directly as the FCF gradient. They are **NOT**
     /// negated. A downstream consumer reconstructs each cut as
     /// `θ ≥ intercept + coeffs · state`, consistent with [`Policy::evaluate`].
     /// (The LP-assembly negation in `build_cut_row_batch` is an internal detail

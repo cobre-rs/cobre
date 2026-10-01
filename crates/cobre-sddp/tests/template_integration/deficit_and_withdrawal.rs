@@ -15,7 +15,6 @@ fn test_multi_segment_deficit_column_count() {
         EntityId(1),
         BusSpec {
             name: "Bus0".to_string(),
-            operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
             deficit_segments: vec![
                 DeficitSegment {
                     depth_mw: Some(10.0),
@@ -30,7 +29,6 @@ fn test_multi_segment_deficit_column_count() {
                     cost_per_mwh: 5000.0,
                 },
             ],
-            excess_cost: 0.0,
             ..Default::default()
         },
     );
@@ -38,12 +36,10 @@ fn test_multi_segment_deficit_column_count() {
         EntityId(2),
         BusSpec {
             name: "Bus1".to_string(),
-            operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
             deficit_segments: vec![DeficitSegment {
                 depth_mw: None,
                 cost_per_mwh: 1000.0,
             }],
-            excess_cost: 0.0,
             ..Default::default()
         },
     );
@@ -196,7 +192,6 @@ fn test_multi_segment_deficit_bounds_and_objective() {
         EntityId(1),
         BusSpec {
             name: "Bus0".to_string(),
-            operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
             deficit_segments: vec![
                 DeficitSegment {
                     depth_mw: Some(10.0),
@@ -207,7 +202,6 @@ fn test_multi_segment_deficit_bounds_and_objective() {
                     cost_per_mwh: 5000.0,
                 },
             ],
-            excess_cost: 0.0,
             ..Default::default()
         },
     );
@@ -267,12 +261,10 @@ fn test_single_segment_backward_compat() {
         EntityId(1),
         BusSpec {
             name: "Bus0".to_string(),
-            operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
             deficit_segments: vec![DeficitSegment {
                 depth_mw: None,
                 cost_per_mwh: cost,
             }],
-            excess_cost: 0.0,
             ..Default::default()
         },
     );
@@ -319,7 +311,6 @@ fn test_multi_segment_deficit_load_balance_coefficients() {
         EntityId(1),
         BusSpec {
             name: "Bus0".to_string(),
-            operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
             deficit_segments: vec![
                 DeficitSegment {
                     depth_mw: Some(10.0),
@@ -330,7 +321,6 @@ fn test_multi_segment_deficit_load_balance_coefficients() {
                     cost_per_mwh: 5000.0,
                 },
             ],
-            excess_cost: 0.0,
             ..Default::default()
         },
     );
@@ -393,9 +383,9 @@ fn test_multi_segment_deficit_load_balance_coefficients() {
     );
 }
 
-/// Water balance RHS = ζ * (`deterministic_base` - `water_withdrawal_m3s`). With
-/// no PAR data base=0, so for withdrawal=10 the RHS is
-/// `744 * 3600/1_000_000 * (0 - 10) = -2.6784`.
+/// Water balance RHS = -(ζ * `water_withdrawal_m3s`); the realized inflow
+/// couples through the z-inflow column rather than a template RHS term. For
+/// withdrawal=10 the RHS is `-(744 * 3600/1_000_000 * 10) = -2.6784`.
 #[test]
 fn withdrawal_rhs_subtracted_from_water_balance() {
     let withdrawal = 10.0_f64;
@@ -415,8 +405,7 @@ fn withdrawal_rhs_subtracted_from_water_balance() {
     let row_water = 1_usize; // row_water_balance_start = N = 1
     let total_hours = 744.0_f64;
     let zeta = total_hours * 3_600.0 / 1_000_000.0;
-    // base = 0 (no PAR data)
-    let expected_rhs = zeta * (0.0 - withdrawal);
+    let expected_rhs = -(zeta * withdrawal);
     assert!(
         (t.row_lower[row_water] - expected_rhs).abs() < 1e-12,
         "water balance row_lower: expected {expected_rhs}, got {}",
@@ -493,8 +482,9 @@ fn withdrawal_slack_matrix_entry_coefficient_is_minus_zeta() {
     .expect("build ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
     // Withdrawal slack neg column: followed by N pos cols and 4*N operational violation slack columns.
-    let col_neg = t.num_cols - 1 - 4 * t.n_hydro - t.n_hydro;
+    let col_neg = t.num_cols - 1 - 4 * n_h - n_h;
     let row_water = 1_usize; // water balance for hydro 0 = N + h = 1 + 0
 
     let total_hours = 744.0_f64;
@@ -536,8 +526,9 @@ fn withdrawal_slack_objective_equals_cost_times_hours() {
     .expect("build ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
     // Withdrawal slack neg: followed by N pos cols and 4*N operational violation slack columns.
-    let col_w = t.num_cols - 1 - 4 * t.n_hydro - t.n_hydro;
+    let col_w = t.num_cols - 1 - 4 * n_h - n_h;
     let expected_obj = violation_cost * total_hours / COST_SCALE_FACTOR;
     assert!(
         (t.objective[col_w] - expected_obj).abs() < 1e-12,
@@ -561,8 +552,9 @@ fn withdrawal_slack_objective_zero_when_cost_is_zero() {
     .expect("build ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
     // Withdrawal slack neg: followed by N pos + 4*N operational violation slack columns.
-    let col_w = t.num_cols - 1 - 5 * t.n_hydro;
+    let col_w = t.num_cols - 1 - 5 * n_h;
     assert!(
         t.objective[col_w].abs() < 1e-15,
         "withdrawal slack neg objective must be 0 when cost=0, got {}",
@@ -585,10 +577,11 @@ fn withdrawal_slack_bounds_are_sign_aware_positive_target() {
     .expect("build ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
     // Trailing slack layout per hydro: neg, pos, then 4 operational violation
     // slacks (5 families after neg). col_neg is the first of the 6 trailing cols.
-    let col_neg = t.num_cols - 1 - 5 * t.n_hydro;
-    let col_pos = col_neg + t.n_hydro;
+    let col_neg = t.num_cols - 1 - 5 * n_h;
+    let col_pos = col_neg + n_h;
     assert!(
         (t.col_lower[col_neg] - 0.0).abs() < 1e-15,
         "neg slack lower bound must be 0.0, got {}",
@@ -629,12 +622,10 @@ fn two_hydro_withdrawal_slack_entries_per_hydro() {
         EntityId(1),
         BusSpec {
             name: "B1".to_string(),
-            operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
             deficit_segments: vec![DeficitSegment {
                 depth_mw: None,
                 cost_per_mwh: 500.0,
             }],
-            excess_cost: 0.0,
             ..Default::default()
         },
     );
@@ -782,28 +773,11 @@ fn two_hydro_withdrawal_slack_entries_per_hydro() {
                 EntityId(2),
                 HydroSpec {
                     name: "H2".to_string(),
-                    operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
                     bus_id: EntityId(1),
-                    downstream_id: None,
-                    entry_stage_id: None,
-                    exit_stage_id: None,
-                    min_storage_hm3: 0.0,
                     max_storage_hm3: 200.0,
-                    min_outflow_m3s: 0.0,
-                    max_outflow_m3s: None,
                     generation_model: HydroGenerationModel::ConstantProductivity,
-                    min_turbined_m3s: 0.0,
                     max_turbined_m3s: 100.0,
-                    specific_productivity_mw_per_m3s_per_m: None,
-                    min_generation_mw: 0.0,
                     max_generation_mw: 250.0,
-                    tailrace: None,
-                    hydraulic_losses: None,
-                    efficiency: None,
-                    evaporation_coefficients_mm: None,
-                    evaporation_reference_volumes_hm3: None,
-                    diversion: None,
-                    filling: None,
                     penalties: HydroPenalties {
                         spillage_cost: 0.01,
                         diversion_cost: 0.0,
@@ -829,28 +803,11 @@ fn two_hydro_withdrawal_slack_entries_per_hydro() {
                 EntityId(3),
                 HydroSpec {
                     name: "H3".to_string(),
-                    operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
                     bus_id: EntityId(1),
-                    downstream_id: None,
-                    entry_stage_id: None,
-                    exit_stage_id: None,
-                    min_storage_hm3: 0.0,
                     max_storage_hm3: 200.0,
-                    min_outflow_m3s: 0.0,
-                    max_outflow_m3s: None,
                     generation_model: HydroGenerationModel::ConstantProductivity,
-                    min_turbined_m3s: 0.0,
                     max_turbined_m3s: 100.0,
-                    specific_productivity_mw_per_m3s_per_m: None,
-                    min_generation_mw: 0.0,
                     max_generation_mw: 250.0,
-                    tailrace: None,
-                    hydraulic_losses: None,
-                    efficiency: None,
-                    evaporation_coefficients_mm: None,
-                    evaporation_reference_volumes_hm3: None,
-                    diversion: None,
-                    filling: None,
                     penalties: HydroPenalties {
                         spillage_cost: 0.01,
                         diversion_cost: 0.0,
@@ -893,13 +850,14 @@ fn two_hydro_withdrawal_slack_entries_per_hydro() {
     .expect("build ok");
 
     let t = &result.templates[0];
+    let n_h = system.hydros().len();
 
     // N=2, L=0: state+aux = N*(3+L)+1 = 7.
     // col_withdrawal_neg_start = 15, col_withdrawal_pos_start = 17,
     // operational violation slacks = 4*2 = 8, num_cols = 27.
     // Withdrawal neg columns: num_cols - 6*N = 27 - 12 = 15.
-    let col_w0 = t.num_cols - 6 * t.n_hydro;
-    let col_w1 = t.num_cols - 6 * t.n_hydro + 1;
+    let col_w0 = t.num_cols - 6 * n_h;
+    let col_w1 = t.num_cols - 6 * n_h + 1;
 
     let row_w0 = 2_usize; // water balance for hydro 0 (row_water_balance_start = N = 2)
     let row_w1 = 3_usize; // water balance for hydro 1
@@ -949,12 +907,10 @@ fn three_hydro_num_cols_includes_three_withdrawal_slacks() {
         EntityId(1),
         BusSpec {
             name: "B1".to_string(),
-            operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
             deficit_segments: vec![DeficitSegment {
                 depth_mw: None,
                 cost_per_mwh: 500.0,
             }],
-            excess_cost: 0.0,
             ..Default::default()
         },
     );
@@ -1090,28 +1046,11 @@ fn three_hydro_num_cols_includes_three_withdrawal_slacks() {
                 EntityId(1),
                 HydroSpec {
                     name: "H1".to_string(),
-                    operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
                     bus_id: EntityId(1),
-                    downstream_id: None,
-                    entry_stage_id: None,
-                    exit_stage_id: None,
-                    min_storage_hm3: 0.0,
                     max_storage_hm3: 200.0,
-                    min_outflow_m3s: 0.0,
-                    max_outflow_m3s: None,
                     generation_model: HydroGenerationModel::ConstantProductivity,
-                    min_turbined_m3s: 0.0,
                     max_turbined_m3s: 100.0,
-                    specific_productivity_mw_per_m3s_per_m: None,
-                    min_generation_mw: 0.0,
                     max_generation_mw: 250.0,
-                    tailrace: None,
-                    hydraulic_losses: None,
-                    efficiency: None,
-                    evaporation_coefficients_mm: None,
-                    evaporation_reference_volumes_hm3: None,
-                    diversion: None,
-                    filling: None,
                     penalties: HydroPenalties {
                         spillage_cost: 0.01,
                         diversion_cost: 0.0,
@@ -1137,28 +1076,11 @@ fn three_hydro_num_cols_includes_three_withdrawal_slacks() {
                 EntityId(2),
                 HydroSpec {
                     name: "H2".to_string(),
-                    operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
                     bus_id: EntityId(1),
-                    downstream_id: None,
-                    entry_stage_id: None,
-                    exit_stage_id: None,
-                    min_storage_hm3: 0.0,
                     max_storage_hm3: 200.0,
-                    min_outflow_m3s: 0.0,
-                    max_outflow_m3s: None,
                     generation_model: HydroGenerationModel::ConstantProductivity,
-                    min_turbined_m3s: 0.0,
                     max_turbined_m3s: 100.0,
-                    specific_productivity_mw_per_m3s_per_m: None,
-                    min_generation_mw: 0.0,
                     max_generation_mw: 250.0,
-                    tailrace: None,
-                    hydraulic_losses: None,
-                    efficiency: None,
-                    evaporation_coefficients_mm: None,
-                    evaporation_reference_volumes_hm3: None,
-                    diversion: None,
-                    filling: None,
                     penalties: HydroPenalties {
                         spillage_cost: 0.01,
                         diversion_cost: 0.0,
@@ -1184,28 +1106,11 @@ fn three_hydro_num_cols_includes_three_withdrawal_slacks() {
                 EntityId(3),
                 HydroSpec {
                     name: "H3".to_string(),
-                    operational_start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
                     bus_id: EntityId(1),
-                    downstream_id: None,
-                    entry_stage_id: None,
-                    exit_stage_id: None,
-                    min_storage_hm3: 0.0,
                     max_storage_hm3: 200.0,
-                    min_outflow_m3s: 0.0,
-                    max_outflow_m3s: None,
                     generation_model: HydroGenerationModel::ConstantProductivity,
-                    min_turbined_m3s: 0.0,
                     max_turbined_m3s: 100.0,
-                    specific_productivity_mw_per_m3s_per_m: None,
-                    min_generation_mw: 0.0,
                     max_generation_mw: 250.0,
-                    tailrace: None,
-                    hydraulic_losses: None,
-                    efficiency: None,
-                    evaporation_coefficients_mm: None,
-                    evaporation_reference_volumes_hm3: None,
-                    diversion: None,
-                    filling: None,
                     penalties: HydroPenalties {
                         spillage_cost: 0.01,
                         diversion_cost: 0.0,
@@ -1267,7 +1172,7 @@ fn three_hydro_num_cols_includes_three_withdrawal_slacks() {
 
     // Withdrawal slacks: 2*N withdrawal + 4*N operational = 6*N trailing columns;
     // withdrawal_neg starts at num_cols - 6*N.
-    let n_h = t.n_hydro;
+    let n_h = system.hydros().len();
     let neg_start = t.num_cols - 6 * n_h;
     let pos_start = neg_start + n_h;
     for h in 0..n_h {

@@ -26,7 +26,7 @@
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::BlockMode;
-use cobre_sddp::indexer::{HydroSys, StorageBoundaryGrid};
+use cobre_sddp::indexer::{BlockRowFamily, HydroSys};
 use cobre_sddp::lp::builder::StageGeometry;
 use cobre_sddp::{FutureCostFunction, SyncResult};
 use cobre_solver::{
@@ -142,25 +142,22 @@ impl SolverInterface for MockSolver {
     }
 }
 
-/// Minimal stage template for a single hydro, zero PAR lags.
+/// Minimal stage template for a hydro-free system (single `theta` column, no
+/// rows): pairs with `wrap_opening_tree`'s empty-system stochastic context.
 fn minimal_template() -> StageTemplate {
     StageTemplate {
-        num_cols: 3,
-        num_rows: 1,
-        num_nz: 1,
-        col_starts: vec![0, 0, 1, 1],
-        row_indices: vec![0],
-        values: vec![1.0],
-        col_lower: vec![0.0, 0.0, 0.0],
-        col_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-        objective: vec![0.0, 0.0, 1.0],
-        row_lower: vec![0.0],
-        row_upper: vec![0.0],
-        n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
+        num_cols: 1,
+        num_rows: 0,
+        num_nz: 0,
+        col_starts: vec![0, 0],
+        row_indices: vec![],
+        values: vec![],
+        col_lower: vec![0.0],
+        col_upper: vec![f64::INFINITY],
+        objective: vec![1.0],
+        row_lower: vec![],
+        row_upper: vec![],
+        n_state: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -237,7 +234,6 @@ fn simple_opening_tree(n_openings: usize) -> cobre_stochastic::OpeningTree {
     generate_opening_tree(
         42,
         &[stage],
-        1,
         &decomposed,
         &entity_order,
         dims,
@@ -773,14 +769,15 @@ mod lb_conformance {
     use cobre_core::SystemBuilder;
     use cobre_core::scenario::SamplingScheme;
     use cobre_sddp::{
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         horizon_mode::HorizonMode,
         indexer::{StateSpace, StudyDimensions},
         inflow_method::InflowNonNegativityMethod,
+        lead_time::AnticipatedResolution,
         lower_bound::{LbEvalScratch, LbEvalScratchBundle, evaluate_lower_bound},
         lp::builder::PatchBuffer,
         risk_measure::RiskMeasure,
-        test_support::cut_state_projection,
+        test_support::{StageContextFixture, cut_state_projection, equipment_free_geometry},
         workspace::{ScratchBuffers, WorkspaceSizing},
     };
     use cobre_solver::RowBatch;
@@ -798,11 +795,9 @@ mod lb_conformance {
         StateSpace::new(
             hydro_count,
             max_par_order,
-            0,
             Vec::new(),
-            0,
-            0,
             vec![],
+            AnticipatedResolution::default(),
             &vec![max_par_order; hydro_count],
         )
     }
@@ -841,52 +836,20 @@ mod lb_conformance {
     /// public-API integration test.
     #[test]
     fn evaluate_lower_bound_monotonicity_with_additional_cuts() {
-        let state_layout = state_layout_for(1, 0);
+        let state_layout = state_layout_for(0, 0);
         let template = minimal_template();
         let templates = vec![template];
-        let base_rows = vec![1_usize];
         let fcf = make_fcf(2, state_layout.n_state);
         let initial_state = vec![0.0_f64; state_layout.n_state];
-        let mut patch_buf = PatchBuffer::new(
-            state_layout.hydro_count,
-            state_layout.max_par_order,
-            0,
-            0,
-            0,
-            0,
-            0,
-        );
+        let mut patch_buf = PatchBuffer::new(&state_layout, &[], &[]);
         let opening_tree = simple_opening_tree(2);
         let rm = RiskMeasure::Expectation;
         let comm = LocalComm;
         let stochastic = wrap_opening_tree(opening_tree);
 
-        let ctx = StageContext {
-            state_boxes: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            geometry_per_stage: &[],
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[1]);
+        let fixture = StageContextFixture::new(&templates, &[], &geometry);
+        let ctx = fixture.ctx();
         let horizon = HorizonMode::Finite { num_stages: 2 };
         let study_dims = StudyDimensions::default();
         let cut_state_layouts = vec![
@@ -925,7 +888,8 @@ mod lb_conformance {
             row_upper: Vec::new(),
         };
         let mut lb_scratch = LbEvalScratch::new();
-        let mut noise_scratch = ScratchBuffers::new(WorkspaceSizing::default());
+        let mut noise_scratch =
+            ScratchBuffers::new(&training_ctx, &ctx, WorkspaceSizing::default());
 
         // First call: solver returns [50, 100] → LB = E[50, 100] = 75 (scaled).
         // After unscaling by COST_SCALE_FACTOR (1_000_000), LB = 75_000_000.
@@ -1013,13 +977,11 @@ fn build_geometry(
     has_inflow_penalty: bool,
     max_deficit_segments: usize,
     fpha_hydro_indices: Vec<HydroSys>,
-    fpha_planes: &[usize],
+    _fpha_planes: &[usize],
 ) -> StageGeometry {
     // theta = N*(3+L); control region starts at theta + 1 (no anticipated thermals).
     let theta = hydro_count * (3 + max_par_order);
     let turbine_start = theta + 1;
-    // StateSpace::storage_in.start under the same no-anticipated-thermals assumption.
-    let storage_in_base = hydro_count * (2 + max_par_order);
     let spillage_start = turbine_start + hydro_count * n_blks;
     let diversion_start = spillage_start + hydro_count * n_blks;
     let thermal_start = diversion_start + hydro_count * n_blks;
@@ -1071,11 +1033,8 @@ fn build_geometry(
     let water_balance_start = hydro_count;
     let load_balance_start = water_balance_start + hydro_count;
     let load_balance_end = load_balance_start + n_buses * n_blks;
-    let _ = fpha_planes; // FPHA row arithmetic is internal; only the column count matters here.
 
     StageGeometry {
-        // θ sits one column before the turbine block (`turbine.start == theta + 1`).
-        theta_col: turbine_start - 1,
         turbine: turbine_start..spillage_start,
         spillage: spillage_start..diversion_start,
         diversion: diversion_start..thermal_start,
@@ -1086,6 +1045,9 @@ fn build_geometry(
         deficit: deficit_start..excess_start,
         excess: excess_start..excess_end,
         generation,
+        // This conformance geometry models no NCS or pumping columns.
+        ncs_generation: 0..0,
+        pumping_flow: 0..0,
         evap_indices: Vec::new(),
         inflow_slack,
         withdrawal_slack_neg,
@@ -1099,8 +1061,10 @@ fn build_geometry(
         // `StageGeometry::from_layout`.
         contract_import: 0..0,
         contract_export: 0..0,
-        water_balance: water_balance_start..water_balance_start + hydro_count,
-        load_balance: load_balance_start..load_balance_end,
+        water_balance: BlockRowFamily::one_per_entity(
+            water_balance_start..water_balance_start + hydro_count,
+        ),
+        load_balance: BlockRowFamily::per_block(load_balance_start..load_balance_end),
         fpha: load_balance_end..load_balance_end,
         // This conformance geometry models no filling hydros, so the
         // terminal-target and operating-floor blocks are empty — including the
@@ -1109,9 +1073,8 @@ fn build_geometry(
         filling_target_col: 0..0,
         filled_min_storage_floor: 0..0,
         filled_min_storage_floor_col: 0..0,
-        z_inflow_row_start: 0,
         n_blks,
-        storage_boundary_grid: StorageBoundaryGrid::new(storage_in_base, 0, 0, n_blks),
+        storage_internal_start: 0,
         block_mode: BlockMode::Parallel,
         fpha_hydro_indices,
         evap_hydro_indices: Vec::new(),

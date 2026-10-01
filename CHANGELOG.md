@@ -9,6 +9,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — a policy loads only in the Cobre version that wrote it.**
+  Warm-start, resume, simulation-only and boundary-cut loads refuse a policy
+  checkpoint whose recorded Cobre version differs from the running one; the
+  error names both versions and asks you to retrain the policy, or re-export
+  the boundary policy, with the running version. The CLI reports it as a
+  validation error.
+
+- **BREAKING — a policy checkpoint whose stored basis does not match the
+  study's LP dimensions is refused at load.** The error names the node and
+  the expected and found columns and rows; earlier versions truncated such a
+  basis silently or started cold. The CLI reports it as a validation error.
+
+- **BREAKING — a generic constraint naming an evaporation block other than 0
+  on a parallel stage with two or more blocks is rejected at validation.**
+  Such a stage evaporates once per stage; reference block 0 or no block.
+
+- **BREAKING — a study whose precomputed inflow model does not match its
+  stages and hydros is refused at setup.** It previously ran silently as a
+  zero-inflow model; the error names both shapes.
+
+- **BREAKING — under historical inflow sampling, a study whose backward pass
+  cannot build a valid historical opening tree is refused at setup.** The
+  opening tree's library now goes through the same validation as the forward
+  pass's: a stage without a season, a study with no complete historical
+  window, and a standardized inflow that is not finite are reported as setup
+  errors. They were previously admitted silently.
+
+### Fixed
+
+- **A generic constraint's `hydro_inflow` term now accounts for water travel
+  time.** It used to add the whole same-block turbined and spilled flow of an
+  upstream plant, even when that water takes hours to arrive. It also left out
+  the transit water arriving from earlier stages. The upstream release and the
+  transit water it counts now match what the downstream reservoir's water
+  balance receives in that block. Studies without water travel time are
+  unchanged.
+
+- **A generic constraint's `hydro_inflow` term now counts the water that
+  passes through an upstream plant that is not yet built or is retired.** The
+  water balance already delivered that plant's local inflow, the releases
+  above it and the flows diverted into it to the first operating plant below.
+  The term left them out, so a constraint on that plant's total inflow
+  under-counted. Studies without such a plant are unchanged.
+
+- **A pumping station on a chronological stage with two or more blocks now
+  moves water between its own source and destination reservoirs in each
+  block.** In 0.16.0 each block's pumped volume was written into another
+  hydro's or another block's water balance, so the station could draw from
+  or fill a reservoir it is not connected to. Parallel-stage results are
+  unchanged.
+
+- **Cuts and the policy file keep every in-flight commitment when anticipated
+  thermals have different leads.** A shorter-lead plant's commitment could sit
+  in a ring position the cut rows left out, so the cut ignored it and the
+  lower bound could be wrong. The policy file also gave that commitment no
+  delivery date, and gave a date to some empty positions. Studies whose
+  anticipated thermals all share one lead are unaffected.
+
+- **`water_value_per_hm3` now reports each chronological block's own
+  water-balance dual.** On a chronological stage the water balance carries one
+  row per hydro per block; the column previously read a single row and
+  repeated that value on every block, and for every hydro after the first it
+  read another hydro's row instead of its own. Parallel-stage values are
+  unaffected.
+
+- **Inflow noise on a chronological stage with two or more blocks now reaches
+  its own hydro**, split across the blocks in proportion to their durations.
+  In 0.16.0 it was applied to another hydro's block row.
+
+- **On a parallel stage with two or more blocks, an evaporating hydro now
+  evaporates as one stage-level quantity, its violation priced for the whole
+  stage.** It was previously priced for one block's hours while its flow moved
+  the whole stage's water.
+
+- **An anticipated thermal decision taken after the study's first stage is no
+  longer discounted twice under a positive discount rate.** The decision's
+  cost was priced by the absolute delivery-stage discount; every other
+  stage-`t` cost is in stage-`t` units and the future-cost function already
+  carries it back to the root through that stage's own discount, so a
+  decision after stage 0 paid its discount twice. It is now priced relative
+  to its own decision stage, `D(delivery)/D(decision)`.
+
+- **The training lower bound now includes stage-0 load uncertainty.** The
+  lower bound's root-stage LP previously skipped the load-noise patch the
+  forward and backward passes apply, so a study with stochastic load at
+  stage 0 evaluated every opening against the template's load means instead
+  of its own realized draw. The root LP is now patched identically to the
+  forward pass; on a sampled scenario tree the lower and upper bounds are
+  not guaranteed to move in any particular direction relative to each other.
+
+- **Historical inflow sampling finds each window's lag years by walking the
+  study's season calendar.** It used to derive them by modular arithmetic on
+  season ids. A study that stops before its season cycle's last season now
+  takes its true calendar predecessor as the lag. An inflow model whose order
+  exceeds the declared seasons is covered. A custom season map with gaps in
+  its ids follows its real predecessors. A single-season study no longer
+  shifts every window by one year. Studies that do not use historical inflow
+  sampling are unaffected.
+
+- **Under historical inflow sampling, the backward pass's opening tree draws
+  from the same years, and inverts the noise with the same inflow model, as
+  the forward pass.** When the boundary lag depth was above the inflow model's
+  order, the tree searched for windows at the wider depth, so it drew from
+  fewer years than the forward pass and could read the wrong lag value. With
+  an AR(0) hydro under an external training scheme, it inverted the noise
+  with the fitted model instead of the one the LP applies. Studies that do not
+  use historical inflow sampling are unaffected.
+
 ## [0.16.0] - 2026-09-22
 
 ### Added

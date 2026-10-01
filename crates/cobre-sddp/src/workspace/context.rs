@@ -14,7 +14,7 @@ use crate::{
     setup::node_graph::{NodeGraph, StageIdx},
 };
 
-/// Immutable per-stage LP layout and noise scaling parameters.
+/// Immutable per-stage LP layout parameters.
 ///
 /// Read-only parameters shared by the forward pass, backward pass, and
 /// simulation pipeline. Slice fields are indexed by study stage `t` unless
@@ -25,40 +25,17 @@ pub struct StageContext<'a> {
     pub templates: &'a [StageTemplate],
     /// Per-stage admissible box for the outgoing state vector.
     pub state_boxes: &'a [StateBox],
-    /// Row index of the first water-balance row in each stage template.
-    pub base_rows: &'a [usize],
     /// Per-stage equipment geometry: `geometry_per_stage[t]` holds stage `t`'s
     /// column and row ranges; a single global stage-0 geometry would carry
     /// `n_blks`-striped bases that misread any stage with a differing block count.
-    /// Empty `&[]` in tests without a stage table — the reader falls back to
-    /// `StageGeometry::default`.
     pub geometry_per_stage: &'a [StageGeometry],
-    /// Noise scaling factors, layout: `[stage * n_hydros + hydro]`.
-    pub noise_scale: &'a [f64],
-    /// Hydro plants with LP variables.
-    pub n_hydros: usize,
     /// Resolved objective cost-scale factor (`modeling.cost_scale_factor`),
     /// mirroring [`StageTemplates::cost_scale_factor`](crate::lp::builder::StageTemplates::cost_scale_factor).
     /// Multiplies a scaled-objective quantity back to currency units at the
     /// stage-cost / immediate-cost reporting boundary.
     pub cost_scale_factor: f64,
-    /// Buses with stochastic load noise.
-    pub n_load_buses: usize,
-    /// Row index of the first load-balance row in each stage template.
-    pub load_balance_row_starts: &'a [usize],
     /// Bus indices for stochastic load mapping.
     pub load_bus_indices: &'a [usize],
-    /// Blocks per stage.
-    pub block_counts_per_stage: &'a [usize],
-    /// `ncs_col_starts[stage]` is the first NCS generation column at that stage.
-    /// The base shifts per stage under mid-horizon commissioning or varying block
-    /// counts, so the bound patch strides from this per-stage base, never a single
-    /// global stage-0 NCS base (which addresses the wrong columns for non-uniform
-    /// geometries).
-    pub ncs_col_starts: &'a [usize],
-    /// Full-system NCS column count, identical at every stage (the dense layout
-    /// keeps a dormant NCS's column).
-    pub n_ncs: usize,
     /// Stage-invariant stochastic-slot → dense NCS column index map, id-sorted in
     /// `StochasticContext::ncs_entity_ids` order — the order `transform_ncs_noise`
     /// emits its bound buffers. Length equals `n_stochastic_ncs`.
@@ -71,7 +48,7 @@ pub struct StageContext<'a> {
     pub ncs_stochastic_windows: &'a [(Option<i32>, Option<i32>)],
     /// Stage-invariant commissioning window `(entry, exit)` per anticipated
     /// thermal, in anticipated-local order (matching
-    /// `StudyDimensions::anticipated_thermal_indices`). The simulation
+    /// `StudyDimensions::anticipated_plants`). The simulation
     /// anticipated-decision read gates on the DELIVERY stage's `stage.id`, the same
     /// predicate the LP builder uses — never the decision stage.
     pub anticipated_windows: &'a [(Option<i32>, Option<i32>)],
@@ -101,11 +78,6 @@ pub struct StageContext<'a> {
     /// forward pass; uniform monthly studies give each stage a unique ID (no
     /// sharing).
     pub noise_group_ids: &'a [u32],
-    /// PAR order for the downstream (coarser-resolution) model. `0` for
-    /// uniform-resolution studies — every downstream accumulation path in
-    /// `accumulate_and_shift_lag_state` is skipped; non-zero (a
-    /// monthly-to-quarterly transition) sizes the downstream scratch buffers.
-    pub downstream_par_order: usize,
 }
 
 impl StageContext<'_> {
@@ -139,40 +111,11 @@ impl StageContext<'_> {
         &self.state_boxes[t.0]
     }
 
-    /// Row index of the first water-balance row at stage `t`.
-    #[inline]
-    #[must_use]
-    pub fn base_row(&self, t: StageIdx) -> usize {
-        self.base_rows[t.0]
-    }
-
-    /// Stage `t`'s equipment geometry, or `None` in a test fixture built
-    /// without a stage table (the reader falls back to `StageGeometry::default`).
-    #[inline]
-    #[must_use]
-    pub fn geometry(&self, t: StageIdx) -> Option<&StageGeometry> {
-        self.geometry_per_stage.get(t.0)
-    }
-
-    /// Blocks at stage `t`, or `0` when `block_counts_per_stage` is unpopulated.
+    /// Blocks at stage `t`.
     #[inline]
     #[must_use]
     pub fn block_count(&self, t: StageIdx) -> usize {
-        self.block_counts_per_stage.get(t.0).copied().unwrap_or(0)
-    }
-
-    /// Row index of the first load-balance row at stage `t`.
-    #[inline]
-    #[must_use]
-    pub fn load_balance_row_start(&self, t: StageIdx) -> usize {
-        self.load_balance_row_starts[t.0]
-    }
-
-    /// First NCS generation column at stage `t`.
-    #[inline]
-    #[must_use]
-    pub fn ncs_col_start(&self, t: StageIdx) -> usize {
-        self.ncs_col_starts[t.0]
+        self.geometry_per_stage[t.0].n_blks
     }
 
     /// One-step discount factor for the transition departing stage `t`, or

@@ -1,9 +1,9 @@
 //! SDDP solver for hydrothermal dispatch.
 
-// Internal (unpublished) workspace crate: public items intra-doc-link their
-// pub(crate) collaborators as a maintainer aid (docs read with
-// --document-private-items); the public-only doc gate flags these intentional links.
-#![allow(rustdoc::private_intra_doc_links)]
+#![allow(
+    rustdoc::private_intra_doc_links,
+    reason = "public items link their pub(crate) collaborators for docs read with --document-private-items; an expect would be unfulfilled there"
+)]
 #![cfg_attr(
     test,
     allow(
@@ -16,6 +16,8 @@
     )
 )]
 
+pub(crate) mod block_clock;
+pub(crate) mod bucket_topology;
 pub(crate) mod claim_scatter;
 pub mod config;
 pub mod convergence;
@@ -37,6 +39,7 @@ pub mod solver_stats;
 pub mod stochastic;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+pub(crate) mod time_value;
 pub mod training;
 pub mod validate_phases;
 pub mod workspace;
@@ -50,7 +53,6 @@ pub use convergence::{risk_measure, stopping_rule};
 
 pub use cut::{basis_reconstruct, cut_selection, cut_sync, dcs};
 
-pub(crate) use lp::generic_constraints;
 pub use lp::indexer;
 
 pub use policy::{policy_export, resolved_parameters, scaling_report};
@@ -90,14 +92,12 @@ pub use cut::{CutPool, FutureCostFunction};
 pub use error::SddpError;
 pub use fixed_delivery_echo::build_fixed_delivery_rows;
 pub use generic_constraint_echo::build_generic_constraint_echo_rows;
-#[cfg(any(test, feature = "test-support"))]
-pub use lp::builder::build_stage_templates_resolving_layout;
-pub use lp::builder::{StageTemplates, build_stage_templates};
+pub use lp::builder::StageTemplates;
 pub use policy::policy_export::{ReservedInflowLagLayout, reserve_boundary_inflow_lag_slots};
 pub use policy::policy_load::{
-    BoundaryInjection, BoundaryLoadRequest, FullFcf, LEGACY_COST_SCALE_FACTOR, PolicyLoadKind,
-    PolicyLoadProof, PolicyStageManifest, ValidatedBoundaryCuts,
-    boundary_policy_required_lag_depth, build_basis_cache_from_checkpoint,
+    BoundaryInjection, BoundaryLoadRequest, FullFcf, LEGACY_COST_SCALE_FACTOR,
+    POLICY_COBRE_VERSION, PolicyLoadKind, PolicyLoadProof, PolicyStageManifest,
+    ValidatedBoundaryCuts, boundary_policy_required_lag_depth, build_basis_cache_from_checkpoint,
     checkpoint_terminal_cost_scale_factor, compare_manifest_slot_identity, inject_boundary_cuts,
     load_boundary_cuts, rescale_checkpoint_cuts_for_load, resolve_boundary_state_requirements,
     validate_policy_load,
@@ -118,6 +118,8 @@ pub use production::hydro_models::{
     PrepareHydroModelsResult, ProductionModelSource, build_deviation_summary,
     build_evaporation_model_rows, build_hydro_model_summary, prepare_hydro_models,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use setup::lp_build_inputs::build_stage_templates_resolving_layout;
 pub use setup::{
     BoundaryStateRequirements, DEFAULT_COST_SCALE_FACTOR, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED,
     PrepareStochasticResult, StudyParams, StudySetup, build_stochastic_context_for_study,

@@ -24,8 +24,7 @@ use cobre_solver::freeze_rows_into_template;
 use cobre_solver::{RowBatch, SolverInterface, StageTemplate};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    ClassDimensions, ForwardNoiseTables, ForwardSampler, ForwardSamplerConfig,
-    build_forward_sampler,
+    ForwardNoiseTables, ForwardSampler, ForwardSamplerConfig, build_forward_sampler,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
@@ -120,8 +119,6 @@ pub(crate) struct SimWorkerParams<'w> {
     sampler: &'w ForwardSampler<'w>,
     /// Per-run scenario-invariant tables backing `sampler`'s `OutOfSample` draws.
     noise_tables: &'w ForwardNoiseTables,
-    /// Number of stages in the study horizon.
-    num_stages: usize,
     /// Number of MPI ranks, scaling rank-local progress to a global estimate.
     world_size: u32,
     /// The stage-0 root's canonical `NodeGraph` position — every scenario's
@@ -197,7 +194,6 @@ impl SimulationState {
     /// Panics if any of the following debug preconditions are violated:
     ///
     /// - `inputs.ctx.templates.len() != num_stages`
-    /// - `inputs.ctx.base_rows.len() != num_stages`
     /// - `inputs.training_ctx.initial_state.len() != state.n_state`
     pub(crate) fn run<S, C: Communicator>(
         &mut self,
@@ -338,12 +334,6 @@ fn debug_assert_inputs(
         ctx.templates.len()
     );
     debug_assert_eq!(
-        ctx.base_rows.len(),
-        num_stages,
-        "base_rows.len()={} != num_stages={num_stages}",
-        ctx.base_rows.len()
-    );
-    debug_assert_eq!(
         n_initial, n_state,
         "initial_state.len()={n_initial} != n_state={n_state}"
     );
@@ -372,7 +362,6 @@ fn run_sampled_simulation<S: SolverInterface + Send, C: Communicator>(
     world_size: u32,
 ) -> Result<(WorkerCosts, WorkerStats), SimulationError> {
     let training_ctx = inputs.training_ctx;
-    let num_stages = training_ctx.horizon.num_stages();
     let rank = inputs.comm.rank();
     let scenarios_complete = AtomicU32::new(0);
 
@@ -407,7 +396,6 @@ fn run_sampled_simulation<S: SolverInterface + Send, C: Communicator>(
         scenario_start,
         sampler,
         noise_tables,
-        num_stages,
         world_size,
         root_node,
     };
@@ -463,7 +451,6 @@ fn run_worker_scenarios<S: SolverInterface + Send>(
         params.training_ctx.study_dims,
         params.ctx.geometry_per_stage,
         params.output.hydro_cell_index,
-        params.output.entity_counts.thermal_ids.len(),
         params.output.entity_counts.hydro_ids.len(),
     );
 
@@ -490,7 +477,6 @@ fn run_worker_scenarios<S: SolverInterface + Send>(
             &mut ScenarioIds {
                 scenario_id,
                 global_scenario: scenario_id,
-                num_stages: params.num_stages,
                 total_scenarios: params.config.n_scenarios,
                 raw_noise_buf: &mut raw_noise_buf,
                 corr_scratch: &mut corr_scratch,
@@ -548,11 +534,6 @@ pub(crate) fn build_sim_sampler<'a>(
         },
         ctx: training_ctx.stochastic,
         stages: training_ctx.stages,
-        dims: ClassDimensions {
-            n_hydros: training_ctx.stochastic.n_hydros(),
-            n_load_buses: training_ctx.stochastic.n_load_buses(),
-            n_ncs: training_ctx.stochastic.n_stochastic_ncs(),
-        },
         historical_library: training_ctx.historical_library,
         external_inflow_library: training_ctx.external_inflow_library,
         external_load_library: training_ctx.external_load_library,

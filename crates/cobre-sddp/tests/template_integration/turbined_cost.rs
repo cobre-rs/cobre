@@ -128,7 +128,7 @@ fn turbined_cost_mixed_system_all_hydros_carry_cost() {
     let col_turbine_start = 13;
     let block_hours = 744.0;
 
-    let expected = 1.0 * block_hours / COST_SCALE_FACTOR;
+    let expected = block_hours / COST_SCALE_FACTOR;
     for h in 0..4 {
         assert!(
             (t.objective[col_turbine_start + h] - expected).abs() < 1e-15,
@@ -153,7 +153,7 @@ fn load_balance_rhs_matches_load_model_mean_mw() {
     )
     .expect("constant productivity ok");
     let t = &result.templates[0];
-    // No hydros → n_dual_relevant=0, water_balance_rows=0, load_balance at row 0, blk 0
+    // No hydros → water_balance_rows=0, load_balance at row 0, blk 0
     let load_row = 0;
     assert_eq!(
         t.row_lower[load_row], 100.0,
@@ -166,7 +166,7 @@ fn load_balance_rhs_matches_load_model_mean_mw() {
 }
 
 #[test]
-fn multiple_stages_produce_same_count_templates_and_base_rows() {
+fn multiple_stages_produce_same_count_templates_and_block_hours() {
     let system = one_hydro_system(3, 1);
     let result = build_stage_templates_resolving_layout(
         &system,
@@ -179,7 +179,7 @@ fn multiple_stages_produce_same_count_templates_and_base_rows() {
     )
     .expect("constant productivity ok");
     assert_eq!(result.templates.len(), 3);
-    assert_eq!(result.base_rows.len(), 3);
+    assert_eq!(result.block_hours_per_stage.len(), 3);
 }
 
 #[test]

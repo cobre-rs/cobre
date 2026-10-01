@@ -12,9 +12,7 @@ use crate::{
     error::SddpError,
     noise::{DownstreamAccumState, LagAccumState},
     stage_solve::{StageInputs, assemble_outgoing_state, fill_unscaled, run_stage_solve},
-    training::stage_solve_prep::{
-        InflowNoise, LoadNoise, StageSolvePrep, StageSolvePrepParams, StateSource,
-    },
+    training::stage_solve_prep::{InflowNoise, StageSolvePrep, StageSolvePrepParams, StateSource},
     trajectory::TrajectoryRecord,
     workspace::{BasisStoreSliceMut, CapturedBasis, SolverWorkspace},
 };
@@ -48,11 +46,9 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
         t,
         m,
         local_m,
-        num_stages,
         iteration,
         raw_noise,
         basis_row_capacity,
-        terminal_has_boundary_cuts,
         pool,
         dcs,
         node,
@@ -73,7 +69,6 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
 
     let prep_params = StageSolvePrepParams {
         state_source: StateSource(&ws.current_state),
-        load_noise: LoadNoise::Present,
         inflow_noise: InflowNoise::Transform,
         raw_noise,
     };
@@ -89,7 +84,7 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
     // Zero theta at the terminal stage (no successor to penalise), but NOT when
     // boundary cuts are loaded — those constrain theta from below and must stay
     // visible in the objective.
-    if horizon.is_terminal(t.next().0) && !terminal_has_boundary_cuts {
+    if horizon.is_terminal(t.next().0) && !pool.has_warm_start_cuts() {
         ws.solver.set_col_bounds(&[state.theta], &[0.0], &[0.0]);
     }
 
@@ -98,7 +93,7 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
     // `mem::take` the scratch buffer out before the solve borrows ws, so it can
     // be filled from `view` slices tied to ws while `&mut ws` is live; restored
     // after the last read so the next stage reuses the warmed allocation.
-    let mut unscaled_primal: Vec<f64> = std::mem::take(&mut ws.scratch.unscaled_primal);
+    let mut unscaled_primal = std::mem::take(&mut ws.scratch.unscaled_primal);
 
     // DCS branch solves the cut pool lazily from the cut-free base loaded above
     // (extracting the primal, not the dual); frozen branch solves the all-cuts LP
@@ -134,10 +129,8 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
             dcs_ctx,
         )?;
         let view = ws.backward_accum.dcs_solve.result_view();
-        let objective = view.objective;
         fill_unscaled(&mut unscaled_primal, view.primal, col_scale);
-        let _ = view;
-        objective
+        view.objective
     } else {
         let inputs = StageInputs {
             stage_context: ctx,
@@ -161,22 +154,20 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
             e
         })?;
 
-        let objective = view.objective;
         fill_unscaled(&mut unscaled_primal, view.primal, col_scale);
-        let _ = view;
-        objective
+        view.objective
     };
 
     let d_t = ctx.discount_factors.get(t.0).copied().unwrap_or(1.0);
     // Terminal boundary θ (post-horizon value-to-go) stays in the reported cost;
     // the interior subtraction would drop it from the UB alone. sddp.md
     // "Terminal boundary FCF in the reported total cost".
-    let stage_cost = if horizon.is_terminal(t.next().0) && terminal_has_boundary_cuts {
+    let stage_cost = if horizon.is_terminal(t.next().0) && pool.has_warm_start_cuts() {
         view_objective * ctx.cost_scale_factor
     } else {
         (view_objective - d_t * unscaled_primal[state.theta]) * ctx.cost_scale_factor
     };
-    let rec = &mut worker_records[local_m * num_stages + t.0];
+    let rec = &mut worker_records[local_m * training_ctx.horizon.num_stages() + t.0];
     // rec.primal/dual stay empty: only state and node_id feed downstream
     // consumers (the backward pass reads state; node_id tags the visit for
     // per-node output) — simulation reads primal/dual directly from the solver.
@@ -186,20 +177,13 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
     rec.node_id = node_id;
 
     // Save incoming lag values before overwriting state with primal.
-    let lag_start = state.inflow_lags.start;
-    let lag_len = state.hydro_count * state.max_par_order;
     ws.scratch.lag_matrix_buf.clear();
     ws.scratch
         .lag_matrix_buf
-        .extend_from_slice(&ws.current_state[lag_start..lag_start + lag_len]);
+        .extend_from_slice(&ws.current_state[state.inflow_lags.clone()]);
 
     let stage_lag = resolve_stage_lag_transition(ctx.stage_lag_transitions, t.0);
-    let downstream_par_order = ws
-        .scratch
-        .downstream_completed_lags
-        .len()
-        .checked_div(ws.scratch.lag_accumulator.len())
-        .unwrap_or(0);
+    let downstream_par_order = training_ctx.study_dims.downstream_par_order;
     assemble_outgoing_state(
         &mut ws.current_state,
         &unscaled_primal,

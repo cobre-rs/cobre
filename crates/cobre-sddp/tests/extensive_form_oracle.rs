@@ -141,7 +141,7 @@ fn assert_reachable_prefixes_match(graph: &NodeGraph) {
 /// `enumerated` to convergence, and assert both `final_lb` and `final_ub` close to
 /// the LP optimum within [`REL_TOL`]/[`ABS_TOL`].
 fn assert_closes_to_extensive_form(mut setup: StudySetup, fixture: &str) {
-    assert_reachable_prefixes_match(&setup.node_graph);
+    assert_reachable_prefixes_match(&setup.inputs.node_graph);
     let optimum = extensive_form_optimum(&setup);
     let (lb, ub) = train_bounds(&mut setup);
     assert!(
@@ -238,7 +238,7 @@ fn reachable_prefix_cross_check_panics_on_recombination_join() {
 #[test]
 fn two_stage_chain_extensive_form_matches_deficit_closed_form() {
     let setup = single_path_enumerated_setup(30);
-    assert_reachable_prefixes_match(&setup.node_graph);
+    assert_reachable_prefixes_match(&setup.inputs.node_graph);
     let optimum = extensive_form_optimum(&setup);
     let closed_form = 500.0 * 80.0 * 744.0 * 2.0;
     assert!(

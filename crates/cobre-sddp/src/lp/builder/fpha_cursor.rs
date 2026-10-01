@@ -23,7 +23,7 @@ pub(super) struct FphaVisit {
 /// LP row, in plant -> cell -> block -> plane nesting order.
 ///
 /// The single owner of the FPHA row-cursor arithmetic: both the bounds fill
-/// ([`super::rows::fill_fpha_rows`]) and the coefficient fill
+/// (`rows::fill_fpha_rows`) and the coefficient fill
 /// ([`super::entries::fill_fpha_entries`]) drive off this walker, so a one-sided
 /// edit that lands the bounds and the coefficients on different rows is impossible.
 ///
@@ -47,10 +47,10 @@ pub(super) fn for_each_fpha_plane<F>(
 ) where
     F: FnMut(FphaVisit, &FphaPlane),
 {
-    let n_blks = layout.n_blks;
+    let n_blks = layout.clock.n_blks();
     let grid = layout.block_grid();
-    let mut fpha_block_start = layout.row_fpha_start();
-    for (local_idx, &h) in layout.fpha_hydro_indices.iter().enumerate() {
+    let mut fpha_block_start = layout.geometry.fpha.start;
+    for (local_idx, &h) in layout.geometry.fpha_hydro_indices.iter().enumerate() {
         let planes = match ctx.production_models.model(h.get(), stage_idx) {
             ResolvedProductionModel::Fpha { planes, .. } => planes,
             ResolvedProductionModel::ConstantProductivity { .. } => {
@@ -63,12 +63,6 @@ pub(super) fn for_each_fpha_plane<F>(
             }
         };
         let n_planes = planes.len();
-        debug_assert_eq!(
-            n_planes,
-            layout.fpha_planes_per_hydro[local_idx],
-            "plane count mismatch for FPHA hydro {} at stage {stage_idx}",
-            h.get()
-        );
         let local_idx = FphaLocal::new(local_idx);
         let cell_base = layout.fpha_cell_local_start[local_idx.get()];
         for (offset, c) in ctx.hydro_cell_index.cells_of(h).enumerate() {

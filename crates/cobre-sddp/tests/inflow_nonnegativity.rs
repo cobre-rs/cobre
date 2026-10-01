@@ -40,20 +40,22 @@ use cobre_core::{
 };
 use cobre_sddp::{
     Phase, ResolvedParameters, SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet,
-    TrainingConfig,
+    TrainingConfig, build_stage_templates_resolving_layout,
     config::{CutManagementConfig, EventConfig, LoopConfig},
-    context::{StageContext, TrainingContext},
+    context::TrainingContext,
     cut::FutureCostFunction,
     energy_conversion::{EnergyConversion, EnergyConversionSet},
     horizon_mode::HorizonMode,
     hydro_models::PrepareHydroModelsResult,
-    indexer::{CutStateProjection, StateSpace, StudyDimensions},
+    indexer::{AnticipatedPlants, CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
-    lp::builder::{PatchBuffer, StageGeometry, StateBox, build_stage_templates_resolving_layout},
+    lead_time::AnticipatedResolution,
+    lp::builder::{PatchBuffer, StageGeometry, StateBox},
     risk_measure::RiskMeasure,
     setup::node_graph::Traversal,
     simulate,
     simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
+    test_support::permissive_state_boxes,
     train,
     workspace::{SolverWorkspace, WorkspaceSizing},
 };
@@ -73,34 +75,24 @@ fn state_layout_for(hydro_count: usize, max_par_order: usize) -> StateSpace {
     StateSpace::new(
         hydro_count,
         max_par_order,
-        0,
         Vec::new(),
-        0,
-        0,
         vec![],
+        AnticipatedResolution::default(),
         &vec![max_par_order; hydro_count],
     )
 }
 
 /// External test crate cannot see `test-support`; sets fields directly.
-fn study_dims_for(
-    n_thermals: usize,
-    n_lines: usize,
-    n_buses: usize,
-    hydro_count: usize,
-    has_inflow_penalty: bool,
-) -> StudyDimensions {
+fn study_dims_for(has_inflow_penalty: bool) -> StudyDimensions {
     StudyDimensions {
-        n_thermals,
-        n_lines,
-        n_buses,
         max_deficit_segments: 1,
-        has_ncs: false,
-        has_inflow_penalty,
-        has_withdrawal: hydro_count > 0,
-        has_operational_violations: hydro_count != 0,
-        anticipated_thermal_indices: vec![],
-        n_pumping: 0,
+        inflow_method: if has_inflow_penalty {
+            InflowNonNegativityMethod::Penalty
+        } else {
+            InflowNonNegativityMethod::None
+        },
+        anticipated_plants: AnticipatedPlants::default(),
+        downstream_par_order: 0,
     }
 }
 
@@ -418,22 +410,17 @@ fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixtur
     let stochastic = build_stochastic();
 
     let n_stages = stage_templates.templates.len();
-    let first_tmpl = stage_templates.templates.first().expect("at least 1 stage");
-    let has_inflow_penalty = inflow_method.has_slack_columns() && first_tmpl.n_hydro > 0;
-    let study_dims = study_dims_for(
-        system.thermals().len(),
-        system.lines().len(),
-        system.buses().len(),
-        first_tmpl.n_hydro,
-        has_inflow_penalty,
-    );
+    let n_h = system.hydros().len();
+    let max_par_order = par_lp.max_order();
+    let has_inflow_penalty = inflow_method.has_slack_columns() && n_h > 0;
+    let study_dims = study_dims_for(has_inflow_penalty);
     let geometry = stage_templates
         .geometry_per_stage
         .first()
         .expect("at least 1 stage geometry")
         .clone();
 
-    let state = state_layout_for(first_tmpl.n_hydro, first_tmpl.max_par_order);
+    let state = state_layout_for(n_h, max_par_order);
     let initial_state = vec![0.0_f64; state.n_state];
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -469,49 +456,14 @@ fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixtur
 // Shared test helpers
 // ===========================================================================
 
-/// A fully-permissive `(-inf, inf)` box per stage, for fixtures driving
-/// `train`/`simulate` through the seam without exercising the clamp.
-fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
-    vec![
-        StateBox {
-            lower: vec![f64::NEG_INFINITY; n_state],
-            upper: vec![f64::INFINITY; n_state],
-        };
-        n_stages
-    ]
-}
-
 fn base_stage_context<'a>(
     fx: &'a Fixture,
-    block_counts: &'a [usize],
     state_boxes: &'a [StateBox],
-) -> StageContext<'a> {
-    StageContext {
+) -> cobre_sddp::test_support::StageContextFixture<'a> {
+    cobre_sddp::test_support::StageContextFixture::from_stage_templates(
+        &fx.stage_templates,
         state_boxes,
-        geometry_per_stage: &[],
-        templates: &fx.stage_templates.templates,
-        base_rows: &fx.stage_templates.base_rows,
-        noise_scale: &fx.stage_templates.noise_scale,
-        n_hydros: fx.stage_templates.n_hydros,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: fx.stage_templates.n_load_buses,
-        load_balance_row_starts: &fx.stage_templates.load_balance_row_starts,
-        load_bus_indices: &fx.stage_templates.load_bus_indices,
-        block_counts_per_stage: block_counts,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    }
+    )
 }
 
 fn train_fixture(
@@ -523,16 +475,9 @@ fn train_fixture(
     let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
     let comm = StubComm;
 
-    let block_counts: Vec<usize> = fx
-        .stage_templates
-        .block_hours_per_stage
-        .iter()
-        .map(Vec::len)
-        .collect();
-    let max_blocks = block_counts.iter().copied().max().unwrap_or(1);
-
     let state_boxes = permissive_state_boxes(fx.state.n_state, n_stages);
-    let stage_ctx = base_stage_context(fx, &block_counts, &state_boxes);
+    let stage_ctx_fixture = base_stage_context(fx, &state_boxes);
+    let stage_ctx = stage_ctx_fixture.ctx();
     train(
         &mut solver,
         TrainingConfig {
@@ -542,7 +487,6 @@ fn train_fixture(
                 max_iterations: 10,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks,
                 stopping_rules: StoppingRuleSet {
                     rules: vec![StoppingRule::IterationLimit { limit: iterations }],
                     mode: StoppingMode::Any,
@@ -605,29 +549,40 @@ fn simulate_fixture(
         all_results
     });
 
+    let sim_training_ctx = TrainingContext {
+        node_graph: &cobre_sddp::test_support::chain_node_graph(&fx.stochastic),
+        horizon: &fx.horizon,
+        state: &fx.state,
+        cut_state_layouts: &all_enabled_cut_state_layouts(&fx.state, N_STAGES),
+        study_dims: &fx.study_dims,
+        inflow_method: &fx.inflow_method,
+        stochastic: &fx.stochastic,
+        initial_state: &fx.initial_state,
+        inflow_scheme: SamplingScheme::InSample,
+        load_scheme: SamplingScheme::InSample,
+        ncs_scheme: SamplingScheme::InSample,
+        historical_library: None,
+        external_inflow_library: None,
+        external_load_library: None,
+        external_ncs_library: None,
+        stages: &[],
+        lag_accum_seed: &[],
+        lag_weight_seed: &[],
+        dcs: None,
+    };
+    let state_boxes_sim = permissive_state_boxes(fx.state.n_state, N_STAGES);
+    let stage_ctx_fixture_sim = base_stage_context(fx, &state_boxes_sim);
+    let stage_ctx_sim = stage_ctx_fixture_sim.ctx();
     let mut sim_workspaces = vec![SolverWorkspace::new(
         0,
         0,
         ActiveSolver::new().expect("ActiveSolver::new must succeed"),
-        PatchBuffer::new(fx.state.hydro_count, fx.state.max_par_order, 0, 0, 0, 0, 0),
-        fx.state.n_state,
-        WorkspaceSizing {
-            hydro_count: fx.state.hydro_count,
-            max_par_order: fx.state.max_par_order,
-            n_load_buses: 0,
-            max_blocks: 0,
-            downstream_par_order: 0,
-            ..WorkspaceSizing::default()
-        },
+        PatchBuffer::new(&fx.state, &[], &[]),
+        &sim_training_ctx,
+        &stage_ctx_sim,
+        WorkspaceSizing::default(),
     )];
     let comm = StubComm;
-
-    let block_counts_sim: Vec<usize> = fx
-        .stage_templates
-        .block_hours_per_stage
-        .iter()
-        .map(Vec::len)
-        .collect();
 
     let zero_ec = EnergyConversion {
         equivalent_productivity_mw_per_m3s: 0.0,
@@ -637,39 +592,15 @@ fn simulate_fixture(
     let ec = EnergyConversionSet::new(
         vec![vec![zero_ec; N_STAGES]; N_HYDROS],
         vec![vec![0.0_f64; N_STAGES]; N_HYDROS],
-        N_HYDROS,
+        &cobre_sddp::test_support::minimal_hydros(N_HYDROS),
         N_STAGES,
     );
 
-    let state_boxes_sim = permissive_state_boxes(fx.state.n_state, N_STAGES);
     simulate(
         &mut sim_workspaces,
-        &base_stage_context(fx, &block_counts_sim, &state_boxes_sim),
+        &stage_ctx_sim,
         fcf,
-        &TrainingContext {
-            node_graph: &cobre_sddp::test_support::chain_node_graph(&fx.stochastic),
-            horizon: &fx.horizon,
-            state: &fx.state,
-            cut_state_layouts: &all_enabled_cut_state_layouts(
-                &fx.state,
-                fx.stage_templates.templates.len(),
-            ),
-            study_dims: &fx.study_dims,
-            inflow_method: &fx.inflow_method,
-            stochastic: &fx.stochastic,
-            initial_state: &fx.initial_state,
-            inflow_scheme: SamplingScheme::InSample,
-            load_scheme: SamplingScheme::InSample,
-            ncs_scheme: SamplingScheme::InSample,
-            historical_library: None,
-            external_inflow_library: None,
-            external_load_library: None,
-            external_ncs_library: None,
-            stages: &[],
-            lag_accum_seed: &[],
-            lag_weight_seed: &[],
-            dcs: None,
-        },
+        &sim_training_ctx,
         &SimulationConfig {
             n_scenarios: 20,
             io_channel_capacity: 32,
@@ -677,20 +608,13 @@ fn simulate_fixture(
         },
         SimulationOutputSpec {
             result_tx: &result_tx,
-            zeta_per_stage: &fx.stage_templates.zeta_per_stage,
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &fx.stage_templates.block_hours_per_stage,
             entity_counts: &fx.entity_counts,
-            generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            pumping_col_starts: &[],
-            n_pumping: 0,
-            geometry_per_stage: &fx.stage_templates.geometry_per_stage,
+            generic_constraint_row_entries: &fx.stage_templates.generic_constraint_row_entries,
             pumping_consumption_mw_per_m3s: &[],
-            contract_prices_per_stage: &[],
-            contract_is_import: &[],
-            ncs_entity_ids_per_stage: &[],
+            contract_prices_per_stage: &vec![Vec::new(); N_STAGES],
+            contract_slots: &[],
             diversion_upstream: &HashMap::new(),
             hydro_productivities_per_stage: &fx.stage_templates.hydro_productivities_per_stage,
             energy_conversion: &ec,
@@ -755,10 +679,8 @@ fn test_penalty_slack_value_matches_negative_inflow() {
     train_fixture(&fx, 3).expect("training must succeed before simulation");
     let scenario_results = simulate_fixture(&fx, &fcf).expect("simulate must succeed");
 
-    let found_nonzero_slack = has_nonzero_slack(&scenario_results);
-
     assert!(
-        found_nonzero_slack,
+        has_nonzero_slack(&scenario_results),
         "at least one hydro must have inflow_nonnegativity_slack_m3s > 0.0 across 20 scenarios \
          with mean_m3s=0 and std_m3s=30; none found"
     );
@@ -786,10 +708,8 @@ fn test_simulation_slack_output_populated() {
         scenario_results.len()
     );
 
-    let any_nonzero = has_nonzero_slack(&scenario_results);
-
     assert!(
-        any_nonzero,
+        has_nonzero_slack(&scenario_results),
         "inflow_nonnegativity_slack_m3s must be > 0.0 in at least one hydro stage result"
     );
 }

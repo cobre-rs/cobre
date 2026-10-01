@@ -545,12 +545,13 @@ fn run_root_exports(
         let mut provenance = build_provenance_report(
             path,
             root_estimation_report,
-            setup.stochastic.provenance(),
-            system.hydros().len(),
+            setup.inputs.stochastic.provenance(),
+            system.hydros(),
             &setup.hydro_models.provenance,
         );
         // Stale-library detection compares this digest on later runs.
         provenance.inflow.historical_library_seed_digest = setup
+            .inputs
             .scenario_libraries
             .training
             .historical
@@ -578,7 +579,7 @@ fn run_root_exports(
         };
         export_stochastic_artifacts(
             &ctx.output_dir,
-            &setup.stochastic,
+            &setup.inputs.stochastic,
             system,
             root_estimation_report,
             &mut on_warning,
@@ -586,7 +587,7 @@ fn run_root_exports(
     }
 
     let scaling_path = ctx.output_dir.join("training/scaling_report.json");
-    write_scaling_report(&scaling_path, &setup.stage_data.scaling_report).map_err(|e| {
+    write_scaling_report(&scaling_path, &setup.inputs.stage_data.scaling_report).map_err(|e| {
         CliError::Internal {
             message: format!("failed to write scaling report: {e}"),
         }
@@ -597,14 +598,27 @@ fn run_root_exports(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
     use console::Term;
+    use serde::Serialize;
+    use serde::de::DeserializeOwned;
 
+    use cobre_core::ScalarParameter;
+    use cobre_io::BroadcastScalarParameter;
+    use cobre_sddp::PrepareStochasticResult;
+    use cobre_sddp::prepare_hydro_models;
     use cobre_sddp::setup::study_stage_noise_group_ids;
+    use cobre_sddp::test_support::decks::{Deck, SLOW_DECKS, committed_decks};
+    use cobre_sddp::test_support::template_fact_groups;
+    use cobre_stochastic::context::OpeningTree;
+    use cobre_stochastic::provenance::ComponentProvenance;
 
-    use super::{load_case_and_config, reconstruct_stochastic_context_non_root};
+    use super::{build_study_setup, load_case_and_config, reconstruct_stochastic_context_non_root};
+    use crate::commands::broadcast::BroadcastOpeningTree;
     use crate::commands::run::{CommBackendArg, RunArgs};
+    use crate::error::CliError;
 
     fn d29_case_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -661,6 +675,163 @@ mod tests {
             non_root_tree.dim(),
             rank0_tree.dim(),
             "non-root opening tree dim must match rank 0's under shared noise groups"
+        );
+    }
+
+    /// Rank 0's own `broadcast_value` returns its input undecoded, so this is
+    /// the actual wire a non-root rank exercises, not `broadcast_value` over a
+    /// single-rank communicator.
+    fn broadcast_round_trip<T: Serialize + DeserializeOwned>(value: &T) -> Result<T, CliError> {
+        let bytes = postcard::to_allocvec(value).map_err(|e| CliError::Internal {
+            message: format!("serialization error: {e}"),
+        })?;
+        postcard::from_bytes(&bytes).map_err(|e| CliError::Internal {
+            message: format!("deserialization error: {e}"),
+        })
+    }
+
+    /// A non-root rank rebuilds the stochastic context and hydro models from
+    /// the case directory instead of rank 0's broadcast/artifact path, and
+    /// this must produce byte-identical stage-LP template facts on every
+    /// committed deck.
+    #[test]
+    fn non_root_rebuild_matches_rank_0_template_facts_on_every_committed_deck() {
+        let build_both = |deck: &Deck| -> Result<[BTreeMap<&'static str, Vec<u8>>; 2], CliError> {
+            let args = RunArgs {
+                case_dir: deck.dir.clone(),
+                output: None,
+                quiet: true,
+                threads: None,
+                comm_backend: CommBackendArg::Local,
+            };
+            let (prepared, hydro_models, mut bcast, _config, scalars, _timings) =
+                load_case_and_config(&args, true, &Term::stderr())?;
+
+            let bcast_tree = if prepared.stochastic.provenance().opening_tree
+                == ComponentProvenance::UserSupplied
+            {
+                let t = prepared.stochastic.opening_tree();
+                Some(BroadcastOpeningTree {
+                    data: t.data().to_vec(),
+                    openings_per_stage: t.openings_per_stage_slice().to_vec(),
+                    dim: t.dim(),
+                })
+            } else {
+                None
+            };
+            let bcast_params: Vec<BroadcastScalarParameter> =
+                scalars.iter().map(BroadcastScalarParameter::from).collect();
+
+            let PrepareStochasticResult {
+                system, stochastic, ..
+            } = prepared;
+
+            // Encode/decode every payload before rank 0's build_study_setup
+            // takes fields from bcast and consumes stochastic.
+            let non_root_system = broadcast_round_trip(&system)?;
+            let mut non_root_bcast = broadcast_round_trip(&bcast)?;
+            let non_root_tree: Option<BroadcastOpeningTree> = broadcast_round_trip(&bcast_tree)?;
+            let non_root_params: Vec<BroadcastScalarParameter> =
+                broadcast_round_trip(&bcast_params)?;
+
+            let user_tree: Option<OpeningTree> = non_root_tree
+                .map(|bt| OpeningTree::from_parts(bt.data, bt.openings_per_stage, bt.dim));
+            let non_root_stochastic = reconstruct_stochastic_context_non_root(
+                &non_root_system,
+                &non_root_bcast,
+                user_tree,
+                non_root_bcast.seed,
+                &deck.dir,
+            )?;
+            let non_root_hydro_models = prepare_hydro_models(&non_root_system, &deck.dir, false)
+                .map_err(|e| CliError::Internal {
+                    message: format!("hydro model preprocessing error on non-root rank: {e}"),
+                })?;
+            let non_root_scalars: Vec<ScalarParameter> = non_root_params
+                .into_iter()
+                .map(ScalarParameter::from)
+                .collect();
+            let non_root_setup = build_study_setup(
+                &non_root_system,
+                &mut non_root_bcast,
+                non_root_stochastic,
+                non_root_hydro_models,
+                non_root_scalars,
+            )?;
+
+            let rank0_scalars: Vec<ScalarParameter> = bcast_params
+                .into_iter()
+                .map(ScalarParameter::from)
+                .collect();
+            let rank0_setup =
+                build_study_setup(&system, &mut bcast, stochastic, hydro_models, rank0_scalars)?;
+
+            Ok([
+                template_fact_groups(&rank0_setup),
+                template_fact_groups(&non_root_setup),
+            ])
+        };
+
+        let slow_tests_enabled = cfg!(feature = "slow-tests");
+        let mut failures: Vec<String> = Vec::new();
+        let mut compared = 0_usize;
+        let mut skipped = 0_usize;
+
+        for deck in committed_decks() {
+            if !slow_tests_enabled && SLOW_DECKS.contains(&deck.key.as_str()) {
+                skipped += 1;
+                continue;
+            }
+            let deck_key = deck.key.as_str();
+            match build_both(&deck) {
+                Err(e) => failures.push(format!("{deck_key}: {e}")),
+                Ok([rank_0, non_root]) => {
+                    compared += 1;
+                    if rank_0.is_empty() {
+                        failures.push(format!("{deck_key}: rank 0 has no template fact groups"));
+                    }
+                    for (group, bytes0) in &rank_0 {
+                        match non_root.get(group) {
+                            None => failures
+                                .push(format!("{deck_key}: fact group `{group}` only on rank 0")),
+                            Some(bytes1) => {
+                                if bytes0 != bytes1 {
+                                    let first_diff = bytes0
+                                        .iter()
+                                        .zip(bytes1.iter())
+                                        .position(|(a, b)| a != b)
+                                        .unwrap_or_else(|| bytes0.len().min(bytes1.len()));
+                                    failures.push(format!(
+                                        "{deck_key}: fact group `{group}` differs (rank 0 {} bytes, non-root {} bytes, first difference at byte {first_diff})",
+                                        bytes0.len(),
+                                        bytes1.len()
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    for group in non_root.keys() {
+                        if !rank_0.contains_key(group) {
+                            failures.push(format!(
+                                "{deck_key}: fact group `{group}` only on the non-root rank"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(compared > 0, "no committed deck was compared");
+        assert_eq!(
+            compared,
+            committed_decks().len() - skipped,
+            "every committed deck (minus SLOW_DECKS skips) must be compared"
+        );
+        assert!(
+            failures.is_empty(),
+            "non-root setup diverges from rank 0 on {} item(s):\n{}",
+            failures.len(),
+            failures.join("\n")
         );
     }
 }

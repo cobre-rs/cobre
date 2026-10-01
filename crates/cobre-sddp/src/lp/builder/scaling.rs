@@ -2,20 +2,19 @@
 //! stage templates for numerical conditioning (`D_r * A * D_c` form), plus the
 //! noise pre-scaling helper. Invoked from `setup/template_postprocess::postprocess_templates`.
 
-use cobre_core::commissioning::{Phase, filling_phase};
-use cobre_core::{Hydro, Stage};
+use cobre_core::Stage;
 use cobre_solver::StageTemplate;
-use cobre_stochastic::par::precompute::PrecomputedPar;
 
 use crate::indexer::StateSpace;
-
-use super::M3S_TO_HM3;
 
 /// Per-column geometric-mean scaling factors from a CSC matrix:
 /// `1 / sqrt(max|A_ij| * min|A_ij|)` over nonzeros, `1.0` for an empty column.
 /// Length `num_cols`.
 #[must_use]
-#[allow(clippy::cast_sign_loss)] // col_starts are non-negative by CSC construction
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "CSC column starts are non-negative by construction"
+)]
 pub(crate) fn compute_col_scale(num_cols: usize, col_starts: &[i32], values: &[f64]) -> Vec<f64> {
     let mut scale = vec![1.0_f64; num_cols];
     for j in 0..num_cols {
@@ -47,8 +46,11 @@ pub(crate) fn apply_col_scale(template: &mut StageTemplate, col_scale: &[f64]) {
     let num_cols = template.num_cols;
     debug_assert_eq!(col_scale.len(), num_cols);
 
-    #[allow(clippy::needless_range_loop, clippy::cast_sign_loss)]
-    // j+1 access; col_starts non-negative by construction
+    #[expect(
+        clippy::needless_range_loop,
+        clippy::cast_sign_loss,
+        reason = "the loop reads col_starts[j + 1], and CSC offsets are non-negative by construction"
+    )]
     for j in 0..num_cols {
         let start = template.col_starts[j] as usize;
         let end = template.col_starts[j + 1] as usize;
@@ -70,38 +72,6 @@ pub(crate) fn apply_col_scale(template: &mut StageTemplate, col_scale: &[f64]) {
     {
         *lo /= d;
         *hi /= d;
-    }
-}
-
-/// Override the matrix-derived empty-column default (`1.0`) on travel-time
-/// bucket columns with the corresponding downstream plant's already-computed
-/// storage scale — buckets are volumes (hm³), the same unit as storage, and
-/// `transit_bucket_column_order[b] = (plant_canonical_idx, _lag)` IS that plant's
-/// `storage` column offset, so REUSE it rather than re-deriving a bucket scale
-/// from row/column entries the LP fill has not wired yet. Every lag for the
-/// same plant shares that one scale — they measure the same reservoir's
-/// incoming volume, not independent quantities. No-op when `n_buckets == 0`.
-///
-/// # Panics (debug builds only)
-///
-/// Panics if `col_scale` does not cover every state column including `theta` —
-/// the `col_scale.len() > theta_col` contract every render/patch call site
-/// relies on.
-// Voice 4: no production call site wires this in yet — `postprocess_templates`
-// activates it once the travel-time bucket LP fill gives bucket columns real
-// row/column entries. The `#[allow(dead_code)]` refires once that reader lands.
-#[allow(dead_code)]
-pub(crate) fn apply_bucket_col_scale(col_scale: &mut [f64], state_layout: &StateSpace) {
-    debug_assert!(
-        col_scale.len() > state_layout.theta,
-        "col_scale must cover every state column including theta ({}); got len {}",
-        state_layout.theta,
-        col_scale.len()
-    );
-    for (b, &(plant_idx, _lag)) in state_layout.transit_bucket_column_order.iter().enumerate() {
-        let d = col_scale[state_layout.storage.start + plant_idx];
-        col_scale[state_layout.transit_buckets_out.start + b] = d;
-        col_scale[state_layout.transit_buckets_in.start + b] = d;
     }
 }
 
@@ -146,7 +116,10 @@ pub(crate) fn apply_commitment_hold_col_scale_unscale(
 /// MUST be called on the ALREADY column-scaled matrix to obtain the standard
 /// `D_r * A * D_c` form (column scaling before row scaling).
 #[must_use]
-#[allow(clippy::cast_sign_loss)] // col_starts and row_indices are non-negative by CSC construction
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "CSC column starts and row indices are non-negative by construction"
+)]
 pub(crate) fn compute_row_scale(
     num_rows: usize,
     num_cols: usize,
@@ -157,7 +130,6 @@ pub(crate) fn compute_row_scale(
     let mut row_max = vec![0.0_f64; num_rows];
     let mut row_min = vec![f64::INFINITY; num_rows];
 
-    #[allow(clippy::needless_range_loop)] // j+1 access on col_starts requires index
     for j in 0..num_cols {
         let start = col_starts[j] as usize;
         let end = col_starts[j + 1] as usize;
@@ -188,8 +160,10 @@ pub(crate) fn apply_row_scale(template: &mut StageTemplate, row_scale: &[f64]) {
     debug_assert_eq!(row_scale.len(), num_rows);
 
     let num_cols = template.num_cols;
-    #[allow(clippy::needless_range_loop, clippy::cast_sign_loss)]
-    // j+1 access; values non-negative by construction
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "CSC row indices are non-negative by construction"
+    )]
     for j in 0..num_cols {
         let start = template.col_starts[j] as usize;
         let end = template.col_starts[j + 1] as usize;
@@ -210,67 +184,18 @@ pub(crate) fn apply_row_scale(template: &mut StageTemplate, row_scale: &[f64]) {
     }
 }
 
-/// Pre-compute `ζ * σ` per `(stage, hydro)` for noise transformation, returning
-/// `(noise_scale, zeta_per_stage, block_hours_per_stage)`. `noise_scale` is flat,
-/// `[s_idx * n_hydros + h_idx]`, so the forward pass indexes it without branching.
-///
-/// A `PreFilling` hydro gets `noise_scale = 0`: its water-balance row is the
-/// frozen-storage identity `v_h − v_h_in = 0`, so leaving `noise_scale` nonzero
-/// would patch `noise_scale·eta` onto that RHS and unfreeze the storage column. This
-/// is the ONLY noise channel touched — the `z_inflow` RHS is NOT zeroed, so realized
-/// inflow `z_h` still flows downstream in the `PreFilling` cascade short-circuit. A
-/// non-filling hydro is `Operating` at every stage (parity-neutral).
-pub(super) fn compute_noise_scale(
-    study_stages: &[&Stage],
-    hydros: &[Hydro],
-    n_hydros: usize,
-    par_lp: &PrecomputedPar,
-) -> (Vec<f64>, Vec<f64>, Vec<Vec<f64>>) {
-    let n = study_stages.len();
-    let mut noise_scale = vec![0.0_f64; n * n_hydros];
-    let mut zeta_per_stage = Vec::with_capacity(n);
-    let mut block_hours_per_stage = Vec::with_capacity(n);
-
-    for (s_idx, stage) in study_stages.iter().enumerate() {
-        let total_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
-        let zeta_s = total_hours * M3S_TO_HM3;
-        zeta_per_stage.push(zeta_s);
-        block_hours_per_stage.push(stage.blocks.iter().map(|b| b.duration_hours).collect());
-        for h_idx in 0..n_hydros {
-            // `hydros` shorter than `n_hydros` (a direct-construction test path)
-            // defaults missing entries to `Operating` via `.get()`, never a panic.
-            let is_prefilling = hydros.get(h_idx).is_some_and(|hydro| {
-                matches!(
-                    filling_phase(
-                        hydro.filling.as_ref(),
-                        hydro.entry_stage_id,
-                        hydro.exit_stage_id,
-                        stage.id,
-                    ),
-                    Phase::PreFilling
-                )
-            });
-            let sigma = if !is_prefilling && par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros
-            {
-                par_lp.sigma(s_idx, h_idx)
-            } else {
-                0.0
-            };
-            noise_scale[s_idx * n_hydros + h_idx] = zeta_s * sigma;
-        }
-    }
-
-    (noise_scale, zeta_per_stage, block_hours_per_stage)
+/// Pre-compute the per-stage block-hours table.
+pub(super) fn compute_stage_hours(study_stages: &[&Stage]) -> Vec<Vec<f64>> {
+    study_stages
+        .iter()
+        .map(|stage| stage.blocks.iter().map(|b| b.duration_hours).collect())
+        .collect()
 }
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::doc_markdown,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
-    clippy::float_cmp,
-    clippy::unwrap_used,
-    clippy::expect_used
+    reason = "test docs name LP symbols that are not code identifiers"
 )]
 mod tests {
     use cobre_solver::StageTemplate;
@@ -305,10 +230,6 @@ mod tests {
             objective: vec![0.0; num_cols],
             row_lower,
             row_upper,
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
             n_state: 0,
@@ -462,64 +383,9 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // Bucket column scale tests
-    // =========================================================================
-
     use crate::indexer::StateSpace;
-
-    /// `N=2` hydros, `L=0` (no lags), `B=3` buckets: hydro 0 feeds two lags
-    /// (depth 2), hydro 1 feeds one lag (depth 1). Each bucket's in/out scale
-    /// must equal ITS downstream plant's storage scale, and every lag of the
-    /// same plant must share that one value.
-    #[test]
-    fn apply_bucket_col_scale_reuses_storage_scale_per_plant() {
-        let state_layout =
-            StateSpace::new(2, 0, 3, vec![(0, 1), (0, 2), (1, 1)], 0, 0, vec![], &[0, 0]);
-
-        assert_eq!(state_layout.storage, 0..2);
-        assert_eq!(state_layout.transit_buckets_out, 2..5);
-        assert_eq!(state_layout.transit_buckets_in, 9..12);
-        assert_eq!(state_layout.theta, 12);
-
-        let mut col_scale = vec![1.0_f64; state_layout.theta + 1];
-        col_scale[state_layout.storage.start] = 2.0; // hydro 0
-        col_scale[state_layout.storage.start + 1] = 5.0; // hydro 1
-
-        super::apply_bucket_col_scale(&mut col_scale, &state_layout);
-
-        assert!(col_scale.len() > state_layout.theta);
-        for (b, &(plant_idx, _lag)) in state_layout.transit_bucket_column_order.iter().enumerate() {
-            let expected = col_scale[state_layout.storage.start + plant_idx];
-            let out = col_scale[state_layout.transit_buckets_out.start + b];
-            let in_ = col_scale[state_layout.transit_buckets_in.start + b];
-            assert!(out.is_finite() && out == expected, "bucket {b} out scale");
-            assert!(in_.is_finite() && in_ == expected, "bucket {b} in scale");
-        }
-        // Hydro 0's two lags (buckets 0, 1) share hydro 0's scale.
-        assert_eq!(col_scale[state_layout.transit_buckets_out.start], 2.0);
-        assert_eq!(col_scale[state_layout.transit_buckets_out.start + 1], 2.0);
-        // Hydro 1's one lag (bucket 2) gets hydro 1's scale.
-        assert_eq!(col_scale[state_layout.transit_buckets_out.start + 2], 5.0);
-    }
-
-    /// `B == 0`: `transit_bucket_column_order` is empty, so the override loop touches
-    /// no column — `col_scale` is left exactly as the generic computation
-    /// produced it.
-    #[test]
-    fn apply_bucket_col_scale_is_noop_when_b_zero() {
-        let state_layout = StateSpace::new(2, 0, 0, vec![], 0, 0, vec![], &[0, 0]);
-        let mut col_scale = vec![1.0_f64; state_layout.theta + 1];
-        col_scale[0] = 3.0;
-
-        let before = col_scale.clone();
-        super::apply_bucket_col_scale(&mut col_scale, &state_layout);
-
-        assert_eq!(
-            col_scale, before,
-            "n_buckets == 0 must leave col_scale untouched"
-        );
-    }
+    use crate::lead_time::AnticipatedResolution;
+    use crate::test_support::constant_lead_resolution;
 
     // =========================================================================
     // Commitment-hold col_scale=1.0 override
@@ -531,7 +397,8 @@ mod tests {
     /// while leaving every other index byte-identical to its seed.
     #[test]
     fn apply_commitment_hold_col_scale_unscale_forces_hold_to_one() {
-        let state_layout = StateSpace::new(2, 0, 0, vec![], 1, 2, vec![2], &[0, 0]);
+        let resolution = constant_lead_resolution(&[2], 4);
+        let state_layout = StateSpace::new(2, 0, vec![], vec![2], resolution, &[0, 0]);
 
         assert_eq!(state_layout.commit_out, 2..4);
         assert_eq!(state_layout.commit_in, 8..10);
@@ -562,7 +429,14 @@ mod tests {
     /// exactly as the generic computation produced it.
     #[test]
     fn apply_commitment_hold_col_scale_unscale_is_noop_when_empty() {
-        let state_layout = StateSpace::new(2, 0, 0, vec![], 0, 0, vec![], &[0, 0]);
+        let state_layout = StateSpace::new(
+            2,
+            0,
+            vec![],
+            vec![],
+            AnticipatedResolution::default(),
+            &[0, 0],
+        );
         let mut col_scale = vec![1.0_f64; state_layout.theta + 1];
         col_scale[0] = 3.0;
 
@@ -572,199 +446,6 @@ mod tests {
         assert_eq!(
             col_scale, before,
             "an empty CommitmentHold region must leave col_scale untouched"
-        );
-    }
-
-    // =========================================================================
-    // PreFilling noise-scale zeroing
-    // =========================================================================
-
-    use chrono::NaiveDate;
-    use cobre_core::scenario::InflowModel;
-    use cobre_core::{
-        Block, BlockMode, EntityId, FillingConfig, Hydro, HydroGenerationModel, HydroPenalties,
-        NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig, StageStateConfig,
-    };
-    use cobre_stochastic::par::precompute::PrecomputedPar;
-
-    fn zero_hydro_penalties() -> HydroPenalties {
-        HydroPenalties {
-            spillage_cost: 0.0,
-            diversion_cost: 0.0,
-            turbined_cost: 0.0,
-            storage_violation_below_cost: 0.0,
-            filling_target_violation_cost: 0.0,
-            turbined_violation_below_cost: 0.0,
-            outflow_violation_below_cost: 0.0,
-            outflow_violation_above_cost: 0.0,
-            generation_violation_below_cost: 0.0,
-            evaporation_violation_cost: 0.0,
-            water_withdrawal_violation_cost: 0.0,
-            water_withdrawal_violation_pos_cost: 0.0,
-            water_withdrawal_violation_neg_cost: 0.0,
-            evaporation_violation_pos_cost: 0.0,
-            evaporation_violation_neg_cost: 0.0,
-            inflow_nonnegativity_cost: 0.0,
-        }
-    }
-
-    /// A constant-productivity hydro with optional filling at `start_stage_id = 2`,
-    /// `entry_stage_id = 4`. With `filling = true` a stage id `< 2` is PreFilling.
-    fn noise_hydro(id: i32, filling: bool) -> Hydro {
-        let mut hydro = Hydro {
-            unit_groups: Vec::new(),
-            id: EntityId(id),
-            name: format!("H{id}"),
-            operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            downstream_id: None,
-            travel_time_hours: None,
-            entry_stage_id: filling.then_some(4),
-            exit_stage_id: None,
-            min_storage_hm3: 0.0,
-            max_storage_hm3: 100.0,
-            min_outflow_m3s: 0.0,
-            max_outflow_m3s: None,
-            generation_model: HydroGenerationModel::ConstantProductivity,
-            min_turbined_m3s: 0.0,
-            max_turbined_m3s: 50.0,
-            specific_productivity_mw_per_m3s_per_m: None,
-            min_generation_mw: 0.0,
-            max_generation_mw: 45.0,
-            tailrace: None,
-            hydraulic_losses: None,
-            efficiency: None,
-            evaporation_coefficients_mm: None,
-            evaporation_reference_volumes_hm3: None,
-            diversion: None,
-            filling: filling.then_some(FillingConfig {
-                start_stage_id: 2,
-                filling_min_rate_m3s: 0.0,
-            }),
-            penalties: zero_hydro_penalties(),
-        };
-        hydro.declare_mirror_unit_group(EntityId(1));
-        hydro
-    }
-
-    fn one_block_stage(id: i32) -> Stage {
-        Stage {
-            index: usize::try_from(id).unwrap(),
-            id,
-            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-            season_id: Some(0),
-            blocks: vec![Block {
-                index: 0,
-                name: "BLK0".to_string(),
-                duration_hours: 744.0,
-            }],
-            block_mode: BlockMode::Parallel,
-            state_config: StageStateConfig {
-                storage: false,
-                inflow_lags: false,
-            },
-            risk_config: StageRiskConfig::Expectation,
-            scenario_config: ScenarioSourceConfig {
-                branching_factor: 1,
-                noise_method: NoiseMethod::Saa,
-            },
-        }
-    }
-
-    fn white_noise_model(id: i32, stage_id: i32, std: f64) -> InflowModel {
-        InflowModel {
-            hydro_id: EntityId(id),
-            stage_id,
-            mean_m3s: 50.0,
-            std_m3s: std,
-            ar_coefficients: vec![],
-            residual_std_ratio: 1.0,
-            annual: None,
-        }
-    }
-
-    /// A PreFilling hydro's water-balance `noise_scale` is zeroed for that
-    /// `(stage, hydro)`, while an Operating hydro at the same stage (with σ > 0)
-    /// keeps its `ζ·σ` value. The forbidden alternative — leaving the PreFilling
-    /// noise_scale nonzero — would patch `noise_scale·eta ≠ 0` onto the
-    /// frozen-storage-identity row and unfreeze the storage column.
-    #[test]
-    fn prefilling_water_noise_scale_is_zeroed_operating_is_not() {
-        // H1 (id 1): non-filling (Operating). H2 (id 2): filling, PreFilling at id 0.
-        let hydros = vec![noise_hydro(1, false), noise_hydro(2, true)];
-        let n_hydros = 2;
-        let std = 4.0_f64;
-        let stage = one_block_stage(0); // id 0 < start_stage_id 2 ⇒ H2 PreFilling.
-        let inflow_models = vec![white_noise_model(1, 0, std), white_noise_model(2, 0, std)];
-        let par_lp = PrecomputedPar::build(
-            &inflow_models,
-            std::slice::from_ref(&stage),
-            &[EntityId(1), EntityId(2)],
-            None,
-        )
-        .expect("white-noise PrecomputedPar build must succeed");
-
-        let study_stages = [&stage];
-        let (noise_scale, zeta_per_stage, _bh) =
-            super::compute_noise_scale(&study_stages, &hydros, n_hydros, &par_lp);
-
-        let zeta = zeta_per_stage[0];
-        let h1_op = 0; // id 1 → system index 0 (Operating).
-        let h2_pf = 1; // id 2 → system index 1 (PreFilling at stage id 0).
-
-        // Operating H1 keeps ζ·σ (σ = std > 0 for white noise).
-        assert_eq!(
-            noise_scale[h1_op],
-            zeta * par_lp.sigma(0, h1_op),
-            "Operating hydro's noise_scale is the standard ζ·σ"
-        );
-        assert!(
-            noise_scale[h1_op] > 0.0,
-            "control precondition: Operating σ > 0 so the contrast is real"
-        );
-
-        // PreFilling H2 is zeroed despite σ > 0.
-        assert!(
-            par_lp.sigma(0, h2_pf) > 0.0,
-            "precondition: H2 has σ > 0, so the zeroing is not vacuous"
-        );
-        assert_eq!(
-            noise_scale[h2_pf], 0.0,
-            "PreFilling hydro's water-balance noise_scale is zeroed (frozen-identity freeze)"
-        );
-    }
-
-    /// At a Filling stage (id == start_stage_id), the filling hydro is NOT
-    /// PreFilling, so its noise_scale is NOT zeroed — the freeze is PreFilling-only.
-    /// (Filling keeps PAR/noise per the retention design.)
-    #[test]
-    fn filling_stage_noise_scale_is_not_zeroed() {
-        let hydros = vec![noise_hydro(2, true)];
-        let n_hydros = 1;
-        let std = 4.0_f64;
-        // Stage id 2 == start_stage_id ⇒ Filling (not PreFilling).
-        let stage = one_block_stage(2);
-        let inflow_models = vec![white_noise_model(2, 2, std)];
-        let par_lp = PrecomputedPar::build(
-            &inflow_models,
-            std::slice::from_ref(&stage),
-            &[EntityId(2)],
-            None,
-        )
-        .expect("build");
-
-        let study_stages = [&stage];
-        let (noise_scale, zeta_per_stage, _bh) =
-            super::compute_noise_scale(&study_stages, &hydros, n_hydros, &par_lp);
-
-        assert_eq!(
-            noise_scale[0],
-            zeta_per_stage[0] * par_lp.sigma(0, 0),
-            "Filling-stage noise_scale keeps ζ·σ (only PreFilling is zeroed)"
-        );
-        assert!(
-            noise_scale[0] > 0.0,
-            "Filling stage keeps a nonzero noise_scale"
         );
     }
 }

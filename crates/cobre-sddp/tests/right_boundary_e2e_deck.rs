@@ -41,14 +41,14 @@ mod deck_independent_fanout {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Stages(2)],
             DeliveryAxis {
-                stage_lengths_hours: &stage_lengths_hours,
-                n_decision: stage_lengths_hours.len(),
-                n_delivery: stage_lengths_hours.len(),
+                study_stage_hours: &stage_lengths_hours,
+                post_study_stage_hours: &[],
             },
         );
 
         assert_eq!(
-            resolution.max_fanout, 1,
+            resolution.max_fanout(),
+            1,
             "a uniform weekly calendar with a two-stage lead must resolve to the \
              independent-slot fan-out width"
         );
@@ -63,17 +63,16 @@ mod deck_independent_fanout {
         let resolution = AnticipatedResolution::resolve(
             &[LeadTime::Time(720.0)],
             DeliveryAxis {
-                stage_lengths_hours: &stage_lengths_hours,
-                n_decision: stage_lengths_hours.len(),
-                n_delivery: stage_lengths_hours.len(),
+                study_stage_hours: &stage_lengths_hours,
+                post_study_stage_hours: &[],
             },
         );
 
         assert!(
-            resolution.max_fanout > 1,
+            resolution.max_fanout() > 1,
             "a coarse-then-fine calendar must fan out beyond the independent-slot width; \
              got {}",
-            resolution.max_fanout
+            resolution.max_fanout()
         );
     }
 }
@@ -148,7 +147,7 @@ mod deck_smoke {
             vec![Vec::new(); setup.fcf.pools.len()];
         let stage_cuts = build_stage_cuts_payloads(
             &setup.fcf,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &study_stage_ids,
             &study_stage_end_dates,
             1_000_000.0,

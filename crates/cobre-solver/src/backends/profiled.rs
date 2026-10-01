@@ -53,8 +53,7 @@ impl<S: SolverInterface> ProfiledSolver<S> {
         if *profile == self.current_profile {
             return;
         }
-        self.inner.apply_profile(profile);
-        self.current_profile = *profile;
+        self.apply_profile(profile);
     }
 
     /// The currently applied profile.
@@ -250,10 +249,6 @@ mod tests {
             row_lower: vec![],
             row_upper: vec![],
             n_state: 0,
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
             col_scale: vec![],
             row_scale: vec![],
         }

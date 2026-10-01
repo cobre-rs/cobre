@@ -40,6 +40,7 @@ use cobre_sddp::{
     setup::{StudyParams, prepare_stochastic},
 };
 use sha2::{Digest, Sha256};
+use std::fmt::Write;
 
 use super::StubComm;
 use super::permute::permute_case;
@@ -118,7 +119,13 @@ pub fn compute_parity_hash(
         }
     }
 
-    format!("{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -239,15 +246,12 @@ pub fn case_dir(label: &str) -> PathBuf {
         .join(suffix)
 }
 
-/// Run the full train + simulate pipeline for the case at `dir` under the
-/// given LP solver and return its parity hash.
-///
-/// Generic over the solver so [`compute_golden_case_hash`],
-/// [`compute_permuted_case_hash`], and every backend `parity_hash_*`/
-/// `parity_regen_*`/`shuffle_matrix_*` test share one body; `make_solver`
-/// supplies fresh worker solvers exactly as the production
-/// training/simulation paths do.
-fn compute_case_hash_at_dir<S, F>(dir: &Path, make_solver: F) -> String
+/// Train and simulate the case at `dir` under the given LP solver, returning
+/// the built [`StudySetup`] and its (unsorted) simulation scenario results.
+pub fn train_and_simulate_at_dir<S, F>(
+    dir: &Path,
+    make_solver: F,
+) -> (StudySetup, Vec<SimulationScenarioResult>)
 where
     S: cobre_solver::SolverInterface<Profile = cobre_solver::ActiveProfile> + Send,
     F: Fn() -> Result<S, cobre_solver::SolverError> + Copy,
@@ -339,6 +343,23 @@ where
     )
     .expect("aggregate_simulation must succeed");
 
+    (setup, scenario_results)
+}
+
+/// Run the full train + simulate pipeline for the case at `dir` under the
+/// given LP solver and return its parity hash.
+///
+/// Generic over the solver so [`compute_golden_case_hash`],
+/// [`compute_permuted_case_hash`], and every backend `parity_hash_*`/
+/// `parity_regen_*`/`shuffle_matrix_*` test share one body; `make_solver`
+/// supplies fresh worker solvers exactly as the production
+/// training/simulation paths do.
+fn compute_case_hash_at_dir<S, F>(dir: &Path, make_solver: F) -> String
+where
+    S: cobre_solver::SolverInterface<Profile = cobre_solver::ActiveProfile> + Send,
+    F: Fn() -> Result<S, cobre_solver::SolverError> + Copy,
+{
+    let (setup, scenario_results) = train_and_simulate_at_dir::<S, F>(dir, make_solver);
     compute_parity_hash(&setup, scenario_results)
 }
 

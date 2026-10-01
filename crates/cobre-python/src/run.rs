@@ -38,9 +38,9 @@ use crate::errors::{
     BOUNDARY_CUT_ERROR_PREFIX, CONFIG_OVERRIDE_ERROR_PREFIX, CONFIG_PARSE_ERROR_PREFIX,
     CONFIG_READ_ERROR_PREFIX, ErrorSource, HYDRO_MODEL_PREPROCESSING_ERROR_PREFIX,
     INTERNAL_ERROR_PREFIX, OUTPUT_WRITE_ERROR_PREFIX, POLICY_CHECKPOINT_ERROR_PREFIX,
-    POLICY_VALIDATION_ERROR_PREFIX, SCENARIO_SOURCE_ERROR_PREFIX, SIMULATION_ERROR_PREFIX,
-    SIMULATION_WRITER_INIT_ERROR_PREFIX, STOCHASTIC_PREPROCESSING_ERROR_PREFIX,
-    TRAINING_ERROR_PREFIX, convert_error,
+    POLICY_VALIDATION_ERROR_PREFIX, SCENARIO_SOURCE_ERROR_PREFIX, SETUP_VALIDATION_ERROR_PREFIX,
+    SIMULATION_ERROR_PREFIX, SIMULATION_WRITER_INIT_ERROR_PREFIX,
+    STOCHASTIC_PREPROCESSING_ERROR_PREFIX, TRAINING_ERROR_PREFIX, convert_error,
 };
 use cobre_io::LoadError;
 
@@ -855,6 +855,34 @@ fn load_effective_config(
     }
 }
 
+/// Adds [`SETUP_VALIDATION_ERROR_PREFIX`] only for `SddpError::Validation`;
+/// every other setup-phase error keeps today's message and class.
+#[allow(clippy::needless_pass_by_value)]
+fn setup_error_message(err: SddpError, phase_prefix: Option<&str>) -> String {
+    let body = match phase_prefix {
+        Some(prefix) => format!("{prefix}: {err}"),
+        None => err.to_string(),
+    };
+    if matches!(err, SddpError::Validation(_)) {
+        format!("{SETUP_VALIDATION_ERROR_PREFIX}: {body}")
+    } else {
+        body
+    }
+}
+
+/// Maps a boundary-cut load error to its message prefix: [`SddpError::PolicyVersionMismatch`]
+/// gets [`POLICY_VALIDATION_ERROR_PREFIX`] (so it raises `PolicyIncompatibleError`), every
+/// other boundary-load error keeps [`BOUNDARY_CUT_ERROR_PREFIX`].
+#[allow(clippy::needless_pass_by_value)]
+fn boundary_cut_error_message(err: SddpError) -> String {
+    let prefix = if matches!(err, SddpError::PolicyVersionMismatch { .. }) {
+        POLICY_VALIDATION_ERROR_PREFIX
+    } else {
+        BOUNDARY_CUT_ERROR_PREFIX
+    };
+    format!("{prefix}: {err}")
+}
+
 /// Everything the front half of the solve lifecycle produces: the live
 /// [`StudySetup`] plus the adjacent immutable state that `run_via_study` and the
 /// `Study` pyclass both consume. [`build_study_setup`] is the sole producer (the
@@ -924,8 +952,8 @@ pub(crate) fn build_study_setup(
     // Resolve the boundary-derived state requirements once; carried onto the
     // construction config below so both the layout and the boundary-load reject
     // see them. Mirrors the CLI run path.
-    let boundary_requirements =
-        resolve_boundary_state_requirements(case_dir, &config).map_err(|e| e.to_string())?;
+    let boundary_requirements = resolve_boundary_state_requirements(case_dir, &config)
+        .map_err(|e| setup_error_message(e, None))?;
 
     let seed = config
         .training
@@ -945,7 +973,7 @@ pub(crate) fn build_study_setup(
         &training_source,
         boundary_requirements.inflow_lag_depth(),
     )
-    .map_err(|e| format!("{STOCHASTIC_PREPROCESSING_ERROR_PREFIX}: {e}"))?;
+    .map_err(|e| setup_error_message(e, Some(STOCHASTIC_PREPROCESSING_ERROR_PREFIX)))?;
     timings.stochastic_fit_seconds = stochastic_start.elapsed().as_secs_f64();
     let system = result.system;
     let estimation_report = result.estimation_report;
@@ -958,7 +986,7 @@ pub(crate) fn build_study_setup(
         config.exports.fpha_deviation_points,
         Some(&mut hydro_timings),
     )
-    .map_err(|e| format!("{HYDRO_MODEL_PREPROCESSING_ERROR_PREFIX}: {e}"))?;
+    .map_err(|e| setup_error_message(e, Some(HYDRO_MODEL_PREPROCESSING_ERROR_PREFIX)))?;
     timings.production_fit_seconds = hydro_timings.production_fit_seconds;
     timings.evaporation_fit_seconds = hydro_timings.evaporation_fit_seconds;
 
@@ -966,7 +994,7 @@ pub(crate) fn build_study_setup(
         .simulation_scenario_source(&case_dir.join("config.json"))
         .map_err(|e| format!("{SCENARIO_SOURCE_ERROR_PREFIX}: {e}"))?;
     let mut construction =
-        StudyParams::from_config(&config, Vec::new()).map_err(|e| e.to_string())?;
+        StudyParams::from_config(&config, Vec::new()).map_err(|e| setup_error_message(e, None))?;
     construction.boundary = boundary_requirements;
     construction.scalar_parameters = artifacts.scalar_parameters;
     let setup = StudySetup::from_broadcast_params(
@@ -977,18 +1005,19 @@ pub(crate) fn build_study_setup(
         &training_source,
         &simulation_source,
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| setup_error_message(e, None))?;
 
     let mut provenance_report = build_provenance_report(
         estimation_path,
         estimation_report.as_ref(),
-        setup.stochastic.provenance(),
-        system.hydros().len(),
+        setup.inputs.stochastic.provenance(),
+        system.hydros(),
         &setup.hydro_models.provenance,
     );
     // Fingerprint the derived lag seed (training-side library only) so
     // stale-library detection can compare against a fresh digest on later runs.
     provenance_report.inflow.historical_library_seed_digest = setup
+        .inputs
         .scenario_libraries
         .training
         .historical
@@ -1001,7 +1030,7 @@ pub(crate) fn build_study_setup(
         };
         export_stochastic_artifacts(
             output_dir,
-            &setup.stochastic,
+            &setup.inputs.stochastic,
             &system,
             estimation_report.as_ref(),
             &mut on_warning,
@@ -1009,7 +1038,7 @@ pub(crate) fn build_study_setup(
     }
 
     let scaling_path = output_dir.join("training/scaling_report.json");
-    write_scaling_report(&scaling_path, &setup.stage_data.scaling_report)
+    write_scaling_report(&scaling_path, &setup.inputs.stage_data.scaling_report)
         .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write scaling report: {e}"))?;
 
     let provenance_path = output_dir.join("training/model_provenance.json");
@@ -1018,7 +1047,7 @@ pub(crate) fn build_study_setup(
     })?;
 
     let stochastic_summary =
-        build_stochastic_summary(&system, &setup.stochastic, estimation_report.as_ref(), seed);
+        build_stochastic_summary(&system, &setup.inputs.stochastic, estimation_report.as_ref(), seed);
     let hydro_models_summary = build_hydro_model_summary(&setup.hydro_models, &system);
 
     let hydro_models_path = output_dir.join("training/hydro_models.json");
@@ -1055,7 +1084,8 @@ pub(crate) fn build_study_setup(
 /// # Errors
 ///
 /// Returns `Err(String)` formatted as `"policy validation error: {e}"` on a
-/// `state_dimension`, `num_stages`, or entity-manifest mismatch.
+/// version mismatch, or on a `state_dimension`, `num_stages`, or
+/// entity-manifest mismatch.
 fn validate_loaded_policy(
     checkpoint: &mut cobre_io::PolicyCheckpoint,
     system: &System,
@@ -1066,7 +1096,7 @@ fn validate_loaded_policy(
     rescale_checkpoint_cuts_for_load(
         &mut checkpoint.stage_cuts,
         Some(source_cost_scale_factor),
-        setup.stage_data.stage_templates.cost_scale_factor,
+        setup.inputs.stage_data.stage_templates.cost_scale_factor,
     );
 
     #[allow(clippy::cast_possible_truncation)]
@@ -1100,7 +1130,7 @@ fn validate_loaded_policy(
         slots: &current_manifest,
         graph: &current_graph,
     };
-    let proof = validate_policy_load::<FullFcf>(&source, &current)
+    let proof = validate_policy_load::<FullFcf>(&checkpoint.metadata.cobre_version, &source, &current)
         .map_err(|e| format!("{POLICY_VALIDATION_ERROR_PREFIX}: {e}"))?;
 
     for msg in &proof.warnings {
@@ -1145,16 +1175,17 @@ fn build_warm_start_fcf(
 /// Seed `setup`'s warm-start basis cache from a loaded checkpoint's stage bases.
 /// Empty bases (a checkpoint written without `store_basis`) leave iteration 1 to
 /// cold-start.
-fn seed_warm_start_basis_cache(setup: &mut StudySetup, checkpoint: &cobre_io::PolicyCheckpoint) {
+fn seed_warm_start_basis_cache(
+    setup: &mut StudySetup,
+    checkpoint: &cobre_io::PolicyCheckpoint,
+) -> Result<(), String> {
     if !checkpoint.stage_bases.is_empty() {
-        let basis_cache = build_basis_cache_from_checkpoint(
-            &checkpoint.stage_bases,
-            &checkpoint.stage_cuts,
-            &setup.node_graph.node_ids,
-            &setup.node_graph.node_pool_ids(),
-        );
+        let basis_cache =
+            build_basis_cache_from_checkpoint(&checkpoint.stage_bases, &checkpoint.stage_cuts, setup)
+                .map_err(|e| format!("{POLICY_VALIDATION_ERROR_PREFIX}: {e}"))?;
         setup.set_warm_start_basis_cache(basis_cache);
     }
+    Ok(())
 }
 
 pub(crate) struct BoundaryReconciliation {
@@ -1195,7 +1226,7 @@ pub(crate) fn reconcile_boundary_policy(
             boundary_date,
             state_dim,
             &current_manifest,
-            setup.stage_data.stage_templates.cost_scale_factor,
+            setup.inputs.stage_data.stage_templates.cost_scale_factor,
         )
         .with_fixed_windows(&fixed_windows)
         .with_inflow_lag_depth(setup.boundary_requirements().inflow_lag_depth())
@@ -1246,7 +1277,7 @@ pub(crate) fn apply_training_policy_mode(
 
         let warm_fcf = build_warm_start_fcf(setup, &proof, &checkpoint, "warm-start")?;
         setup.replace_fcf(warm_fcf);
-        seed_warm_start_basis_cache(setup, &checkpoint);
+        seed_warm_start_basis_cache(setup, &checkpoint)?;
     } else if config.policy.mode == Resume {
         let policy_dir = output_dir.join(&setup.policy_path);
         if !policy_dir.exists() {
@@ -1266,7 +1297,7 @@ pub(crate) fn apply_training_policy_mode(
         let warm_fcf = build_warm_start_fcf(setup, &proof, &checkpoint, "resume")?;
         setup.replace_fcf(warm_fcf);
         setup.set_start_iteration(completed);
-        seed_warm_start_basis_cache(setup, &checkpoint);
+        seed_warm_start_basis_cache(setup, &checkpoint)?;
     }
 
     // Boundary cuts run AFTER warm-start/resume so the two compose: warm-start
@@ -1274,8 +1305,8 @@ pub(crate) fn apply_training_policy_mode(
     // terminal pool.
     if let Some(ref bp) = config.policy.boundary {
         let recon = reconcile_boundary_policy(setup, system, bp, case_dir)
-            .map_err(|e| format!("{BOUNDARY_CUT_ERROR_PREFIX}: {e}"))?;
-        inject_boundary_cuts(setup, &recon.cuts);
+            .map_err(boundary_cut_error_message)?;
+        inject_boundary_cuts(setup, &recon.cuts).map_err(boundary_cut_error_message)?;
         let cut_count = recon.cuts.len();
         eprintln!(
             "cobre-python: boundary cuts: {cut_count} loaded from {} (priced at {})",
@@ -1307,9 +1338,9 @@ pub(crate) fn apply_training_policy_mode(
 ///
 /// Returns a descriptive `Err(String)` when `policy_dir` does not exist (the
 /// `"Policy directory not found: ..."` message), when the checkpoint cannot be
-/// read, when policy validation fails, or when FCF reconstruction fails. The
-/// caller maps the message to a Python exception type via
-/// [`crate::errors::convert_error`].
+/// read, when policy validation fails, when FCF reconstruction fails, or when a
+/// stored basis does not match the study's LP. The caller maps the message to
+/// a Python exception type via [`crate::errors::convert_error`].
 pub(crate) fn reconstruct_policy_from_checkpoint(
     setup: &StudySetup,
     system: &System,
@@ -1336,12 +1367,9 @@ pub(crate) fn reconstruct_policy_from_checkpoint(
     )
     .map_err(|e| format!("FCF reconstruction error: {e}"))?;
 
-    let basis_cache = build_basis_cache_from_checkpoint(
-        &checkpoint.stage_bases,
-        &checkpoint.stage_cuts,
-        &setup.node_graph.node_ids,
-        &setup.node_graph.node_pool_ids(),
-    );
+    let basis_cache =
+        build_basis_cache_from_checkpoint(&checkpoint.stage_bases, &checkpoint.stage_cuts, setup)
+            .map_err(|e| format!("{POLICY_VALIDATION_ERROR_PREFIX}: {e}"))?;
 
     let training_result = TrainingResult::new(
         checkpoint.metadata.producer.final_lower_bound,
@@ -1391,6 +1419,11 @@ pub(crate) fn run_via_study(
     let mut study = Study::new_native(case_dir, Some(output_dir.clone()), threads, overrides)?;
 
     let should_simulate = study.simulation_enabled();
+    // Fixed at Study construction and never mutated by train_native/simulate_native
+    // (only `setup` is), so it is safe to read once regardless of which arm runs.
+    let stochastic = Some(study.stochastic_summary().clone());
+    let hydro_models = Some(study.hydro_models_summary().clone());
+    let provenance = Some(study.provenance().clone());
 
     match RunPhasePlan::resolve(study.training_enabled(), should_simulate) {
         RunPhasePlan::TrainedThenSimulated => {
@@ -1412,9 +1445,9 @@ pub(crate) fn run_via_study(
                 total_time_ms: result.total_time_ms,
                 output_dir,
                 simulation,
-                stochastic: Some(study.stochastic_summary().clone()),
-                hydro_models: Some(study.hydro_models_summary().clone()),
-                provenance: Some(study.provenance().clone()),
+                stochastic,
+                hydro_models,
+                provenance,
             })
         }
         RunPhasePlan::SimulateFromPolicy => {
@@ -1435,9 +1468,9 @@ pub(crate) fn run_via_study(
                 total_time_ms: 0,
                 output_dir,
                 simulation,
-                stochastic: Some(study.stochastic_summary().clone()),
-                hydro_models: Some(study.hydro_models_summary().clone()),
-                provenance: Some(study.provenance().clone()),
+                stochastic,
+                hydro_models,
+                provenance,
             })
         }
         RunPhasePlan::Nothing => Ok(RunSummary {
@@ -1449,9 +1482,9 @@ pub(crate) fn run_via_study(
             total_time_ms: 0,
             output_dir,
             simulation: None,
-            stochastic: Some(study.stochastic_summary().clone()),
-            hydro_models: Some(study.hydro_models_summary().clone()),
-            provenance: Some(study.provenance().clone()),
+            stochastic,
+            hydro_models,
+            provenance,
         }),
     }
 }
@@ -1750,6 +1783,7 @@ pub fn run(
 )]
 mod tests {
     use std::path::Path;
+    use std::path::PathBuf;
 
     use cobre_sddp::setup::prepare_stochastic;
     use cobre_sddp::{SolverStatsDelta, SolverStatsLogEntry, aggregate_solver_stats_log};
@@ -1765,6 +1799,15 @@ mod tests {
         run_via_study,
     };
 
+    fn example_case_dir(relative: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("cobre-python parent")
+            .parent()
+            .expect("crates parent")
+            .join(relative)
+    }
+
     /// `build_study_setup` is Python-free, so its happy path can be exercised
     /// without a GIL token. It must load `examples/1dtoy`, resolve the effective
     /// config, build a fully prepared `StudySetup`, and return populated
@@ -1772,12 +1815,7 @@ mod tests {
     /// rely on.
     #[test]
     fn build_study_setup_succeeds_for_1dtoy() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/1dtoy");
+        let case_dir = example_case_dir("examples/1dtoy");
 
         let output_dir =
             std::env::temp_dir().join(format!("cobre_py_build_study_{}", std::process::id()));
@@ -1812,12 +1850,7 @@ mod tests {
     /// with no binding change in this crate.
     #[test]
     fn build_study_setup_succeeds_for_d56_external_authoritative() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/deterministic/d56-external-authoritative");
+        let case_dir = example_case_dir("examples/deterministic/d56-external-authoritative");
 
         let output_dir =
             std::env::temp_dir().join(format!("cobre_py_build_study_d56_{}", std::process::id()));
@@ -1840,12 +1873,7 @@ mod tests {
     /// No GIL token is required (no `Python::initialize()`).
     #[test]
     fn apply_training_policy_mode_default_mode_is_noop() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/1dtoy");
+        let case_dir = example_case_dir("examples/1dtoy");
 
         let output_dir =
             std::env::temp_dir().join(format!("cobre_py_policy_mode_noop_{}", std::process::id()));
@@ -2028,12 +2056,7 @@ mod tests {
 
     #[test]
     fn prepare_stochastic_succeeds_for_d01_case_via_python_path() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/deterministic/d01-thermal-dispatch");
+        let case_dir = example_case_dir("examples/deterministic/d01-thermal-dispatch");
 
         let system = cobre_io::load_case(&case_dir).expect("load_case must succeed for D01");
         let config = cobre_io::parse_config(&case_dir.join("config.json"))
@@ -2066,12 +2089,7 @@ mod tests {
     /// populate the carriers.
     #[test]
     fn python_run_1dtoy_metadata_matches_cli_golden_values() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/1dtoy");
+        let case_dir = example_case_dir("examples/1dtoy");
 
         let output_dir =
             std::env::temp_dir().join(format!("cobre_py_parity_{}", std::process::id()));
@@ -2216,12 +2234,7 @@ mod tests {
     /// whose runtime this mirrors (one 1dtoy train+simulate per path).
     #[test]
     fn override_path_equals_edited_config_for_1dtoy() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/1dtoy");
+        let case_dir = example_case_dir("examples/1dtoy");
 
         let base =
             std::env::temp_dir().join(format!("cobre_py_override_parity_{}", std::process::id()));
@@ -2297,12 +2310,7 @@ mod tests {
     /// the study's freshly built FCF. No GIL token (no `Python::initialize()`).
     #[test]
     fn reconstruct_policy_from_checkpoint_roundtrips_for_1dtoy() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/1dtoy");
+        let case_dir = example_case_dir("examples/1dtoy");
 
         let output_dir =
             std::env::temp_dir().join(format!("cobre_py_reconstruct_{}", std::process::id()));
@@ -2377,12 +2385,7 @@ mod tests {
     )]
     #[test]
     fn python_simulation_only_metadata_matches_train_then_simulate() {
-        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("cobre-python parent")
-            .parent()
-            .expect("crates parent")
-            .join("examples/1dtoy");
+        let case_dir = example_case_dir("examples/1dtoy");
 
         let output_dir =
             std::env::temp_dir().join(format!("cobre_py_simonly_parity_{}", std::process::id()));

@@ -44,8 +44,9 @@ impl BlockGrid {
     /// Construct a [`BlockGrid`] from its two stride constants.
     ///
     /// Source `n_blks` from the per-stage block count the LP was built with
-    /// (`StageLayout` / `block_counts_per_stage[t]`), never a study-global value,
-    /// so the grid cannot disagree with the LP it addresses.
+    /// (`StageLayout` / [`StageGeometry::n_blks`](crate::lp::builder::StageGeometry::n_blks)),
+    /// never a study-global value, so the grid cannot disagree with the LP it
+    /// addresses.
     #[inline]
     #[must_use]
     pub fn new(n_blks: usize, max_deficit_segments: usize) -> Self {
@@ -85,11 +86,6 @@ impl BlockGrid {
     /// Block OUTER (stride `n_planes`), plane INNER — the OPPOSITE nesting of
     /// [`flat`](Self::flat). Advance the base with
     /// [`advance_fpha_base`](Self::advance_fpha_base) after each cell.
-    // Rationale: `self` is unused because this shape's stride is the per-hydro
-    // `n_planes` (passed in), not a grid constant. It stays an instance method,
-    // not an associated fn, so all three shapes share the uniform `grid.shape(..)`
-    // call form.
-    #[allow(clippy::unused_self)]
     #[inline]
     #[must_use]
     pub fn fpha_plane(

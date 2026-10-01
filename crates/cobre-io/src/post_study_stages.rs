@@ -73,7 +73,7 @@ pub(crate) struct RawPostStudyStagesFile {
 struct RawPostStudyStage {
     /// Stage start date (inclusive), as an ISO 8601 date (YYYY-MM-DD).
     start_date: String,
-    /// Stage duration [h]. Must be finite and `> 0.0`.
+    /// Stage duration \[h\]. Must be finite and `> 0.0`.
     duration_hours: f64,
 }
 

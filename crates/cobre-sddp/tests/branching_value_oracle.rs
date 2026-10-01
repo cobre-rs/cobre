@@ -167,7 +167,7 @@ fn train_backward_basis_signal(setup: &mut StudySetup) -> (f64, u64, u64) {
 /// equals the graph's leaf count. A fixture that violated `|Ω| = 1` or introduced
 /// a recombination join would break these and make one-copy-per-node wrong.
 fn assert_expander_self_consistent(setup: &StudySetup) {
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let n = g.nodes.len();
 
     let prefix_counts = node_prefix_counts(g).expect("node prefix counts must not overflow");
@@ -234,7 +234,7 @@ fn terminal_generated_fan_control_matches_extensive_form_and_ub() {
     let mut setup = terminal_generated_fan_setup(k, 30);
 
     // Power self-check: interchangeable leaves share ONE pool.
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let leaf_pools: Vec<usize> = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| g.successors[pos].is_empty())
@@ -275,7 +275,7 @@ fn interior_sibling_generated_fan_value_matches_oracle() {
     let mut fixture = k_fan_setup(k, 6, 25);
 
     // Power self-check: the fan children own DISTINCT pools.
-    let g = &fixture.setup.node_graph;
+    let g = &fixture.setup.inputs.node_graph;
     let fan_pools: Vec<usize> = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| !g.successors[pos].is_empty() && g.nodes[pos].stage == StageIdx(1))
@@ -310,7 +310,7 @@ fn dcs_arm_generated_fan_value_matches_oracle() {
     let mut fixture = dcs_k_fan_setup(k, 6, 25);
 
     // Power self-check: the target fan node has pool_id != stage.
-    let g = &fixture.setup.node_graph;
+    let g = &fixture.setup.inputs.node_graph;
     let mismatched = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| !g.successors[pos].is_empty())
@@ -361,7 +361,7 @@ fn dcs_arm_generated_fan_value_matches_oracle() {
 
 /// The fan's terminal leaves each pin a DISTINCT external scenario column.
 fn assert_distinct_external_leaf_columns(setup: &StudySetup) {
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let mut cols: Vec<usize> = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| g.successors[pos].is_empty())
@@ -401,7 +401,7 @@ fn external_root_fan_trains_with_nonzero_root_column() {
     let mut setup = external_root_fan_setup(3, 30);
     assert_distinct_external_leaf_columns(&setup);
 
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let roots: Vec<NodePos> = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| g.nodes[pos].stage == StageIdx(0))
@@ -466,7 +466,7 @@ fn water_binding_external_fan_final_lb_matches_extensive_form() {
     // η = 0 — reproduces training's demand exactly. A stochastic (std > 0) or external
     // load would make the two disagree on demand and contaminate the value gap.
     assert_eq!(
-        setup.stage_ctx().n_load_buses,
+        setup.stage_ctx().load_bus_indices.len(),
         0,
         "water-binding fan load must be deterministic (std = 0) so oracle == training on demand"
     );
@@ -586,7 +586,7 @@ fn interior_sibling_generated_fan_by_node_matches_oracle() {
 
     // Power self-check: the fan children own DISTINCT pools, so the by-node root
     // backward genuinely fans over more than one child LP.
-    let g = &fixture.setup.node_graph;
+    let g = &fixture.setup.inputs.node_graph;
     let fan_pools: Vec<usize> = (0..g.nodes.len())
         .map(NodePos)
         .filter(|&pos| !g.successors[pos].is_empty() && g.nodes[pos].stage == StageIdx(1))
@@ -671,7 +671,7 @@ fn external_distinct_fan_heterogeneous_cut_state_matches_extensive_form() {
     // Power self-check: this fixture's whole point is that a leaf's own
     // terminal pool and its cut-generating parent's pool project DIFFERENT
     // cut-state dimensions — the coverage gap the other fixtures above lack.
-    let g = &setup.node_graph;
+    let g = &setup.inputs.node_graph;
     let root_pool = (0..g.nodes.len())
         .map(NodePos)
         .find(|&pos| g.nodes[pos].stage == StageIdx(0))
@@ -829,7 +829,11 @@ fn assert_fixed_no_boundary_shape(shape: TerminalPoolShape) {
 #[ignore = "trains a wide terminal fan; run with `-- --ignored`"]
 fn terminal_generated_fan_pool_stays_fixed_and_single_materialized() {
     let mut setup = terminal_generated_fan_setup(WIDE_FAN_K, MAX_ITERATIONS);
-    let terminal_idx = setup.fcf.pools.len() - 1;
+    let terminal_idx = setup
+        .inputs
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .unwrap();
 
     let before = TerminalPoolShape::capture(&setup.fcf.pools[terminal_idx]);
     assert_fixed_no_boundary_shape(before);
@@ -854,7 +858,11 @@ fn terminal_generated_fan_pool_stays_fixed_and_single_materialized() {
 #[ignore = "trains a wide terminal fan; run with `-- --ignored`"]
 fn external_distinct_fan_terminal_pool_stays_fixed_and_single_materialized() {
     let mut setup = external_distinct_fan_setup(DISTINCT_FAN_K, MAX_ITERATIONS);
-    let terminal_idx = setup.fcf.pools.len() - 1;
+    let terminal_idx = setup
+        .inputs
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .unwrap();
 
     let before = TerminalPoolShape::capture(&setup.fcf.pools[terminal_idx]);
     assert_fixed_no_boundary_shape(before);
@@ -886,10 +894,14 @@ const TERMINAL_BOUNDARY_INTERCEPT: f64 = 100.0;
 /// existing fixture exercised. Mirrors `inject_boundary_cuts`, building the fixed
 /// warm-start pool directly from a hand-constructed record (the validated
 /// file-load path is unnecessary for a synthetic fixture).
-fn inject_constant_terminal_boundary_fcf(setup: &mut StudySetup, intercept: f64) {
+fn inject_constant_terminal_boundary_fcf(setup: &mut StudySetup, intercept: f64, is_active: bool) {
+    let terminal = setup
+        .inputs
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .unwrap();
     let state_dim = setup.fcf.state_dimension;
     let forward_passes = setup.fcf.forward_passes;
-    let terminal = setup.fcf.pools.len() - 1;
     let record = cobre_io::OwnedPolicyCutRecord {
         cut_id: 0,
         slot_index: 0,
@@ -897,7 +909,7 @@ fn inject_constant_terminal_boundary_fcf(setup: &mut StudySetup, intercept: f64)
         intercept,
         iteration: 0,
         forward_pass_index: 0,
-        is_active: true,
+        is_active,
     };
     setup.fcf.pools[terminal] =
         CutPool::new_with_warm_start(state_dim, forward_passes, 0, &[record]);
@@ -920,7 +932,7 @@ fn terminal_boundary_fcf_training_gap_is_consistent() {
     );
 
     let mut boundary = oracle_chain_setup(30);
-    inject_constant_terminal_boundary_fcf(&mut boundary, TERMINAL_BOUNDARY_INTERCEPT);
+    inject_constant_terminal_boundary_fcf(&mut boundary, TERMINAL_BOUNDARY_INTERCEPT, true);
     let (lb_b, ub_b) = train_bounds(&mut boundary);
 
     assert!(
@@ -959,7 +971,7 @@ fn terminal_boundary_fcf_simulation_cost_includes_post_horizon() {
     let mean_plain = mean_scenario_total_cost(&run_simulation(&mut plain, 1));
 
     let mut boundary = try_k_fan_simulation_enumerated(2).expect("simulate-enabled fixture builds");
-    inject_constant_terminal_boundary_fcf(&mut boundary, TERMINAL_BOUNDARY_INTERCEPT);
+    inject_constant_terminal_boundary_fcf(&mut boundary, TERMINAL_BOUNDARY_INTERCEPT, true);
     let mean_boundary = mean_scenario_total_cost(&run_simulation(&mut boundary, 1));
 
     assert!(
@@ -971,6 +983,99 @@ fn terminal_boundary_fcf_simulation_cost_includes_post_horizon() {
         mean_boundary > mean_plain,
         "the post-horizon FCF (a positive value-to-go) must strictly raise the reported \
          simulation cost: boundary mean {mean_boundary} must exceed plain mean {mean_plain}"
+    );
+}
+
+/// Asserts an injected `is_active: false` terminal boundary record still
+/// counts as warm-started but contributes no active cut, and that training
+/// closes to the plain fixture's own bounds regardless — the shared body of
+/// the chain and fan variants below. `topology` names the fixture in the
+/// bound-mismatch panic message.
+fn assert_inactive_boundary_record_leaves_bounds_unchanged(
+    inactive: &StudySetup,
+    lb_inactive: f64,
+    ub_inactive: f64,
+    lb_plain: f64,
+    ub_plain: f64,
+    topology: &str,
+) {
+    let terminal = inactive
+        .inputs
+        .node_graph
+        .terminal_pool(inactive.num_stages())
+        .unwrap();
+    assert_eq!(
+        inactive.fcf.pools[terminal].active_count(),
+        0,
+        "the injected record is inactive"
+    );
+    assert_eq!(
+        inactive.fcf.pools[terminal].warm_start_count, 1,
+        "the injected record still counts as a warm-started slot"
+    );
+    assert!(
+        inactive.fcf.pools[terminal].has_warm_start_cuts(),
+        "the owner must still read the pool as boundary-loaded despite the inactive record"
+    );
+
+    assert!(
+        close(lb_inactive, lb_plain),
+        "an inactive boundary record must not move the {topology}'s lower bound: \
+         {lb_inactive} vs {lb_plain}"
+    );
+    assert!(
+        close(ub_inactive, ub_plain),
+        "an inactive boundary record must not move the {topology}'s upper bound: \
+         {ub_inactive} vs {ub_plain}"
+    );
+}
+
+/// The one input where the terminal-boundary flag's two formulas disagree
+/// (`CutPool::active_count() > 0` vs `warm_start_count > 0`): a terminal pool
+/// whose only boundary record is `is_active: false`. Both leave terminal θ at
+/// 0 — the inactive record contributes no active LP row either way, and θ's
+/// own lower bound is `0.0` — so training must close to the plain chain's
+/// bounds regardless of which formula the engine reads.
+#[test]
+fn terminal_boundary_records_all_inactive_leave_the_plain_chain_bounds() {
+    let mut plain = oracle_chain_setup(30);
+    let (lb_plain, ub_plain) = train_bounds(&mut plain);
+
+    let mut inactive = oracle_chain_setup(30);
+    inject_constant_terminal_boundary_fcf(&mut inactive, TERMINAL_BOUNDARY_INTERCEPT, false);
+    let (lb_inactive, ub_inactive) = train_bounds(&mut inactive);
+
+    assert_inactive_boundary_record_leaves_bounds_unchanged(
+        &inactive,
+        lb_inactive,
+        ub_inactive,
+        lb_plain,
+        ub_plain,
+        "chain",
+    );
+}
+
+/// The chain disagreement case above, on a terminal fan — the branching
+/// topology [`terminal_boundary_fcf_training_gap_is_consistent`]'s chain
+/// control does not cover. No existing fan fixture in this file takes an
+/// injected boundary record through training, so this test builds its own
+/// small fan directly from `test_support::terminal_generated_fan_setup`.
+#[test]
+fn terminal_boundary_records_all_inactive_leave_the_plain_fan_bounds() {
+    let mut plain = terminal_generated_fan_setup(2, MAX_ITERATIONS);
+    let (lb_plain, ub_plain) = train_bounds(&mut plain);
+
+    let mut inactive = terminal_generated_fan_setup(2, MAX_ITERATIONS);
+    inject_constant_terminal_boundary_fcf(&mut inactive, TERMINAL_BOUNDARY_INTERCEPT, false);
+    let (lb_inactive, ub_inactive) = train_bounds(&mut inactive);
+
+    assert_inactive_boundary_record_leaves_bounds_unchanged(
+        &inactive,
+        lb_inactive,
+        ub_inactive,
+        lb_plain,
+        ub_plain,
+        "fan",
     );
 }
 
@@ -1109,7 +1214,7 @@ mod terminal_fusion {
         let out_col = state.lp_column_for_state(StateDim::new(0)).get();
         let in_col = state.state_to_lp_incoming_column(StateDim::new(0)).get();
 
-        let g = &setup.node_graph;
+        let g = &setup.inputs.node_graph;
         let root_pos = (0..g.nodes.len())
             .map(NodePos)
             .find(|&pos| g.nodes[pos].stage == StageIdx(0))

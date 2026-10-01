@@ -87,7 +87,7 @@ pub(crate) struct RawBus {
 pub(crate) struct RawDeficitSegment {
     /// MW depth of this segment. `null` means unbounded (last segment only).
     depth_mw: Option<f64>,
-    /// Cost per `MWh` of deficit in this segment [$/`MWh`].
+    /// Cost per `MWh` of deficit in this segment \[$/`MWh`\].
     cost: f64,
 }
 

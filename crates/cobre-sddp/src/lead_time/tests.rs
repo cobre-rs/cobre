@@ -365,9 +365,8 @@ fn test_pmo_end_anchored_delivery_resolution() {
     let resolution = resolve_point(
         LeadTime::Time(720.0),
         DeliveryAxis {
-            stage_lengths_hours: &stage_lengths_hours,
-            n_decision: 7,
-            n_delivery: 7,
+            study_stage_hours: &stage_lengths_hours,
+            post_study_stage_hours: &[],
         },
     );
 
@@ -391,9 +390,8 @@ fn test_sub_stage_lead_k0_degeneracy() {
     let resolution = resolve_point(
         LeadTime::Time(720.0),
         DeliveryAxis {
-            stage_lengths_hours: &stage_lengths_hours,
-            n_decision: 2,
-            n_delivery: 2,
+            study_stage_hours: &stage_lengths_hours,
+            post_study_stage_hours: &[],
         },
     );
 
@@ -414,9 +412,8 @@ fn test_stage_count_mode_unequal_monthly_hours() {
     let resolution = resolve_point(
         LeadTime::Stages(2),
         DeliveryAxis {
-            stage_lengths_hours: &stage_lengths_hours,
-            n_decision: 8,
-            n_delivery: 8,
+            study_stage_hours: &stage_lengths_hours,
+            post_study_stage_hours: &[],
         },
     );
 
@@ -444,9 +441,8 @@ fn test_ic_boundary_decider_is_none() {
     let resolution = resolve_point(
         LeadTime::Time(1000.0),
         DeliveryAxis {
-            stage_lengths_hours: &stage_lengths_hours,
-            n_decision: 1,
-            n_delivery: 1,
+            study_stage_hours: &stage_lengths_hours,
+            post_study_stage_hours: &[],
         },
     );
 
@@ -466,9 +462,8 @@ fn test_coarse_decision_fans_out_over_fine_delivery_stages() {
     let resolution = resolve_point(
         LeadTime::Time(750.0),
         DeliveryAxis {
-            stage_lengths_hours: &stage_lengths_hours,
-            n_decision: 5,
-            n_delivery: 5,
+            study_stage_hours: &stage_lengths_hours,
+            post_study_stage_hours: &[],
         },
     );
 
@@ -495,16 +490,15 @@ fn test_anticipated_resolution_k_max_is_global_depth_max() {
     let resolution = AnticipatedResolution::resolve(
         &leads,
         DeliveryAxis {
-            stage_lengths_hours: &stage_lengths_hours,
-            n_decision: 8,
-            n_delivery: 8,
+            study_stage_hours: &stage_lengths_hours,
+            post_study_stage_hours: &[],
         },
     );
 
     assert_eq!(resolution.per_plant.len(), 2);
     assert_eq!(resolution.per_plant[0].depth.iter().copied().max(), Some(2));
     assert_eq!(resolution.per_plant[1].depth.iter().copied().max(), Some(4));
-    assert_eq!(resolution.k_max, 4);
+    assert_eq!(resolution.anchored_depth(), 4);
 }
 
 #[test]
@@ -512,13 +506,12 @@ fn test_anticipated_resolution_empty_is_zero_depth() {
     let resolution = AnticipatedResolution::resolve(
         &[],
         DeliveryAxis {
-            stage_lengths_hours: &[720.0; 4],
-            n_decision: 4,
-            n_delivery: 4,
+            study_stage_hours: &[720.0; 4],
+            post_study_stage_hours: &[],
         },
     );
     assert!(resolution.per_plant.is_empty());
-    assert_eq!(resolution.k_max, 0);
+    assert_eq!(resolution.anchored_depth(), 0);
 }
 
 // Fan-out `[720,168,168,168,168,168]` h `LeadTime(720)` — the exact calendar
@@ -531,9 +524,8 @@ fn test_genuine_decisions_at_matches_fanout_hand_derivation() {
     let resolution = AnticipatedResolution::resolve(
         &[LeadTime::Time(720.0)],
         DeliveryAxis {
-            stage_lengths_hours: &stage_lengths_hours,
-            n_decision: stage_lengths_hours.len(),
-            n_delivery: stage_lengths_hours.len(),
+            study_stage_hours: &stage_lengths_hours,
+            post_study_stage_hours: &[],
         },
     );
     let point = &resolution.per_plant[0];
@@ -544,7 +536,7 @@ fn test_genuine_decisions_at_matches_fanout_hand_derivation() {
         vec![1, 2, 3, 4],
         "no self-delivery here, so genuine == decision_sets exactly"
     );
-    assert_eq!(resolution.max_fanout, 4);
+    assert_eq!(resolution.max_fanout(), 4);
     assert!(point.self_delivered_stages().next().is_none());
 }
 
@@ -559,16 +551,15 @@ fn test_k0_uniform_calendar_self_delivers_every_stage() {
     let resolution = AnticipatedResolution::resolve(
         &[LeadTime::Time(720.0)],
         DeliveryAxis {
-            stage_lengths_hours: &stage_lengths_hours,
-            n_decision: stage_lengths_hours.len(),
-            n_delivery: stage_lengths_hours.len(),
+            study_stage_hours: &stage_lengths_hours,
+            post_study_stage_hours: &[],
         },
     );
     let point = &resolution.per_plant[0];
 
     assert_eq!(point.depth, vec![0, 0, 0, 0]);
-    assert_eq!(resolution.k_max, 0);
-    assert_eq!(resolution.max_fanout, 0);
+    assert_eq!(resolution.anchored_depth(), 0);
+    assert_eq!(resolution.max_fanout(), 0);
     assert_eq!(
         point.self_delivered_stages().collect::<Vec<_>>(),
         vec![0, 1, 2, 3]
@@ -594,9 +585,8 @@ fn test_is_ready_at_monotonic_prefix_for_constant_lead() {
     let resolution = AnticipatedResolution::resolve(
         &[LeadTime::Stages(2)],
         DeliveryAxis {
-            stage_lengths_hours: &stage_lengths_hours,
-            n_decision: 6,
-            n_delivery: 6,
+            study_stage_hours: &stage_lengths_hours,
+            post_study_stage_hours: &[],
         },
     );
     let point = &resolution.per_plant[0];
@@ -683,9 +673,8 @@ fn migration_equivalence_point_pmo_end_anchored() {
     let resolution = resolve_point(
         LeadTime::Time(720.0),
         DeliveryAxis {
-            stage_lengths_hours: &[168.0, 168.0, 168.0, 168.0, 720.0, 720.0, 720.0],
-            n_decision: 7,
-            n_delivery: 7,
+            study_stage_hours: &[168.0, 168.0, 168.0, 168.0, 720.0, 720.0, 720.0],
+            post_study_stage_hours: &[],
         },
     );
     assert_eq!(
@@ -704,9 +693,8 @@ fn migration_equivalence_point_k0_degeneracy() {
     let resolution = resolve_point(
         LeadTime::Time(720.0),
         DeliveryAxis {
-            stage_lengths_hours: &[700.0, 744.0],
-            n_decision: 2,
-            n_delivery: 2,
+            study_stage_hours: &[700.0, 744.0],
+            post_study_stage_hours: &[],
         },
     );
     assert_eq!(
@@ -730,9 +718,8 @@ fn test_in_study_path_byte_identity_regression() {
     let resolution = resolve_point(
         LeadTime::Time(720.0),
         DeliveryAxis {
-            stage_lengths_hours: &stage_lengths_hours,
-            n_decision: 7,
-            n_delivery: 7,
+            study_stage_hours: &stage_lengths_hours,
+            post_study_stage_hours: &[],
         },
     );
     assert_eq!(
@@ -749,18 +736,19 @@ fn test_in_study_path_byte_identity_regression() {
     let anticipated = AnticipatedResolution::resolve(
         &[LeadTime::Time(720.0), LeadTime::Stages(2)],
         DeliveryAxis {
-            stage_lengths_hours: &stage_lengths_hours,
-            n_decision: 7,
-            n_delivery: 7,
+            study_stage_hours: &stage_lengths_hours,
+            post_study_stage_hours: &[],
         },
     );
     assert_eq!(
-        anticipated.k_max, 4,
+        anticipated.anchored_depth(),
+        4,
         "k_max derives from ring_depth: plant 0's leading None-run (4) exceeds its \
          occupancy max (3), so the ring grows to hold every simultaneous seed"
     );
     assert_eq!(
-        anticipated.max_fanout, 1,
+        anticipated.max_fanout(),
+        1,
         "max_fanout must stay byte-identical"
     );
     assert_eq!(
@@ -775,9 +763,8 @@ fn migration_equivalence_point_stage_count() {
     let resolution = resolve_point(
         LeadTime::Stages(2),
         DeliveryAxis {
-            stage_lengths_hours: &[672.0, 700.0, 744.0, 720.0, 672.0, 744.0, 700.0, 744.0],
-            n_decision: 8,
-            n_delivery: 8,
+            study_stage_hours: &[672.0, 700.0, 744.0, 720.0, 672.0, 744.0, 700.0, 744.0],
+            post_study_stage_hours: &[],
         },
     );
     assert_eq!(
@@ -815,9 +802,8 @@ fn migration_equivalence_point_stage_count() {
 #[test]
 fn test_delivery_axis_equal_domains_matches_pre_split() {
     let axis = DeliveryAxis {
-        stage_lengths_hours: &[100.0; 4],
-        n_decision: 4,
-        n_delivery: 4,
+        study_stage_hours: &[100.0; 4],
+        post_study_stage_hours: &[],
     };
     let resolution = resolve_point(LeadTime::Time(350.0), axis);
 
@@ -839,9 +825,8 @@ fn test_delivery_axis_equal_domains_matches_pre_split() {
 #[test]
 fn test_delivery_axis_wider_than_decision_stages_mode() {
     let axis = DeliveryAxis {
-        stage_lengths_hours: &[],
-        n_decision: 3,
-        n_delivery: 6,
+        study_stage_hours: &[720.0; 3],
+        post_study_stage_hours: &[720.0; 3],
     };
     let resolution = resolve_point(LeadTime::Stages(3), axis);
 
@@ -861,9 +846,8 @@ fn test_delivery_axis_wider_than_decision_stages_mode() {
 #[test]
 fn test_post_study_decided_delivery_absent_from_decision_domain() {
     let axis = DeliveryAxis {
-        stage_lengths_hours: &[],
-        n_decision: 3,
-        n_delivery: 6,
+        study_stage_hours: &[720.0; 3],
+        post_study_stage_hours: &[720.0; 3],
     };
     let resolution = resolve_point(LeadTime::Stages(1), axis);
 
@@ -890,16 +874,15 @@ fn test_occupancy_full_in_flight_pre_study_prefix() {
     let resolution = AnticipatedResolution::resolve(
         &[LeadTime::Time(350.0)],
         DeliveryAxis {
-            stage_lengths_hours: &[100.0; 4],
-            n_decision: 4,
-            n_delivery: 4,
+            study_stage_hours: &[100.0; 4],
+            post_study_stage_hours: &[],
         },
     );
     let point = &resolution.per_plant[0];
 
     assert_eq!(point.occupancy, vec![3, 2, 1, 0]);
     assert_eq!(point.depth, vec![1, 1, 1, 0]);
-    assert_eq!(resolution.k_max, 3);
+    assert_eq!(resolution.anchored_depth(), 3);
 }
 
 // The DECOMP shape — `LeadStages(6)` over an empty calendar with a delivery
@@ -910,16 +893,15 @@ fn test_occupancy_decomp_shape_full_ring_every_stage() {
     let resolution = AnticipatedResolution::resolve(
         &[LeadTime::Stages(6)],
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision: 6,
-            n_delivery: 12,
+            study_stage_hours: &[720.0; 6],
+            post_study_stage_hours: &[720.0; 6],
         },
     );
     let point = &resolution.per_plant[0];
 
     assert_eq!(point.occupancy, vec![6, 6, 6, 6, 6, 6]);
-    assert_eq!(resolution.k_max, 6);
-    assert_eq!(resolution.max_fanout, 1);
+    assert_eq!(resolution.anchored_depth(), 6);
+    assert_eq!(resolution.max_fanout(), 1);
 }
 
 // Byte-identity floor: on a well-behaved uniform calendar whose leading None-run
@@ -931,9 +913,8 @@ fn test_occupancy_equals_depth_on_short_uniform_lead() {
     let resolution = resolve_point(
         LeadTime::Time(720.0),
         DeliveryAxis {
-            stage_lengths_hours: &[720.0; 5],
-            n_decision: 5,
-            n_delivery: 5,
+            study_stage_hours: &[720.0; 5],
+            post_study_stage_hours: &[],
         },
     );
 
@@ -953,9 +934,8 @@ fn test_occupancy_depth_identity_hand_computed() {
     let resolution = resolve_point(
         LeadTime::Time(350.0),
         DeliveryAxis {
-            stage_lengths_hours: &[100.0; 4],
-            n_decision: 4,
-            n_delivery: 4,
+            study_stage_hours: &[100.0; 4],
+            post_study_stage_hours: &[],
         },
     );
 
@@ -986,9 +966,8 @@ fn test_occupancy_excludes_none_decider_post_study_target() {
     let resolution = resolve_point(
         LeadTime::Stages(4),
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision: 3,
-            n_delivery: 6,
+            study_stage_hours: &[720.0; 3],
+            post_study_stage_hours: &[720.0; 3],
         },
     );
 
@@ -1011,9 +990,8 @@ fn ring_depth_covers_every_simultaneous_pre_study_seed() {
     let resolution = resolve_point(
         LeadTime::Time(1160.0),
         DeliveryAxis {
-            stage_lengths_hours: &[168.0, 168.0, 168.0, 648.0, 648.0],
-            n_decision: 4,
-            n_delivery: 5,
+            study_stage_hours: &[168.0, 168.0, 168.0, 648.0, 648.0][..4],
+            post_study_stage_hours: &[168.0, 168.0, 168.0, 648.0, 648.0][4..],
         },
     );
 
@@ -1031,9 +1009,8 @@ fn ring_depth_equals_the_occupancy_max_when_no_seed_overflows() {
     let resolution = resolve_point(
         LeadTime::Stages(2),
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision: 5,
-            n_delivery: 5,
+            study_stage_hours: &[720.0; 5],
+            post_study_stage_hours: &[],
         },
     );
 
@@ -1055,9 +1032,8 @@ fn ring_depth_ignores_post_study_none_deciders() {
     let resolution = resolve_point(
         LeadTime::Stages(6),
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision: 3,
-            n_delivery: 8,
+            study_stage_hours: &[720.0; 3],
+            post_study_stage_hours: &[720.0; 5],
         },
     );
 
@@ -1083,15 +1059,37 @@ fn resolve_sizes_k_max_from_the_deepest_plant_ring_depth() {
     let resolution = AnticipatedResolution::resolve(
         &[LeadTime::Time(1160.0), LeadTime::Stages(2)],
         DeliveryAxis {
-            stage_lengths_hours: &[168.0, 168.0, 168.0, 648.0, 648.0],
-            n_decision: 4,
-            n_delivery: 5,
+            study_stage_hours: &[168.0, 168.0, 168.0, 648.0, 648.0][..4],
+            post_study_stage_hours: &[168.0, 168.0, 168.0, 648.0, 648.0][4..],
         },
     );
 
     assert_eq!(resolution.per_plant[0].ring_depth(), 4);
     assert_eq!(resolution.per_plant[1].ring_depth(), 2);
-    assert_eq!(resolution.k_max, 4);
+    assert_eq!(resolution.anchored_depth(), 4);
+}
+
+#[test]
+fn ring_size_widens_resolution_depth_to_the_deepest_lead_stage() {
+    let resolution = AnticipatedResolution::resolve(
+        &[LeadTime::Stages(3)],
+        DeliveryAxis {
+            study_stage_hours: &[720.0; 3],
+            post_study_stage_hours: &[],
+        },
+    );
+
+    assert_eq!(
+        resolution.ring_size(&[1, 2]),
+        3,
+        "resolution depth dominant"
+    );
+    assert_eq!(resolution.ring_size(&[1, 5]), 5, "lead dominant");
+    assert_eq!(
+        resolution.ring_size(&[]),
+        3,
+        "empty lead list returns k_max"
+    );
 }
 
 /// The carried in-flight set at decision stage `t` as the ring actually sweeps
@@ -1184,14 +1182,13 @@ fn decomp_mirror_shape_resolves_full_depth_ring() {
     let anticipated = AnticipatedResolution::resolve(
         &[LeadTime::Stages(6)],
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision: 6,
-            n_delivery: 12,
+            study_stage_hours: &[720.0; 6],
+            post_study_stage_hours: &[720.0; 6],
         },
     );
 
-    assert_eq!(anticipated.k_max, 6);
-    assert_eq!(anticipated.max_fanout, 1);
+    assert_eq!(anticipated.anchored_depth(), 6);
+    assert_eq!(anticipated.max_fanout(), 1);
 
     let point = &anticipated.per_plant[0];
     assert_eq!(point.occupancy, vec![6; 6]);
@@ -1204,7 +1201,7 @@ fn decomp_mirror_shape_resolves_full_depth_ring() {
         );
     }
     assert_eq!(
-        ring_window_carried(point, 0, anticipated.k_max, 12),
+        ring_window_carried(point, 0, anticipated.anchored_depth(), 12),
         vec![1, 2, 3, 4, 5, 6],
         "the full-depth ring at t=0 carries the contiguous run 1..=6"
     );
@@ -1223,12 +1220,11 @@ proptest! {
         let anticipated = AnticipatedResolution::resolve(
             &[lead],
             DeliveryAxis {
-                stage_lengths_hours: &durations,
-                n_decision,
-                n_delivery,
+                study_stage_hours: &durations[..n_decision],
+                post_study_stage_hours: &durations[n_decision..],
             },
         );
-        let k_max = anticipated.k_max;
+        let k_max = anticipated.anchored_depth();
         if k_max == 0 {
             return Ok(());
         }
@@ -1260,12 +1256,11 @@ proptest! {
         let anticipated = AnticipatedResolution::resolve(
             &[lead],
             DeliveryAxis {
-                stage_lengths_hours: &durations,
-                n_decision,
-                n_delivery,
+                study_stage_hours: &durations[..n_decision],
+                post_study_stage_hours: &durations[n_decision..],
             },
         );
-        let k_max = anticipated.k_max;
+        let k_max = anticipated.anchored_depth();
         if k_max == 0 {
             return Ok(());
         }
@@ -1303,12 +1298,13 @@ proptest! {
 fn pre_study_decider_with_post_study_target_has_no_carrier() {
     let n_decision = 3;
     let n_delivery = 6;
+    let study_stage_hours = vec![720.0; n_decision];
+    let post_study_stage_hours = vec![720.0; n_delivery - n_decision];
     let resolution = resolve_point(
         LeadTime::Stages(4),
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision,
-            n_delivery,
+            study_stage_hours: &study_stage_hours,
+            post_study_stage_hours: &post_study_stage_hours,
         },
     );
 
@@ -1458,12 +1454,13 @@ fn fixed_post_horizon_width_rejects_a_non_contiguous_none_run() {
 fn post_study_decider_is_not_a_decision() {
     let n_decision = 3;
     let n_delivery = 6;
+    let study_stage_hours = vec![720.0; n_decision];
+    let post_study_stage_hours = vec![720.0; n_delivery - n_decision];
     let resolution = resolve_point(
         LeadTime::Stages(1),
         DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision,
-            n_delivery,
+            study_stage_hours: &study_stage_hours,
+            post_study_stage_hours: &post_study_stage_hours,
         },
     );
 

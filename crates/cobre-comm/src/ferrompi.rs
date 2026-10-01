@@ -191,7 +191,6 @@ fn convert_slurm_info(_topo: &ferrompi::TopologyInfo) -> Option<SlurmJobInfo> {
     None
 }
 
-#[cfg(feature = "mpi")]
 impl crate::TopologyProvider for FerrompiBackend {
     /// Returns the cached execution topology (non-collective, allocation-free).
     fn topology(&self) -> &ExecutionTopology {
@@ -277,7 +276,6 @@ impl crate::SharedMemoryProvider for FerrompiBackend {
 
 /// Convert a `ferrompi::Error` to the most specific `CommError` variant,
 /// following the classification in spec backend-ferrompi.md SS5.2.
-#[cfg(feature = "mpi")]
 fn map_ferrompi_error(e: &ferrompi::Error, operation: &'static str) -> CommError {
     match e {
         ferrompi::Error::Mpi {
@@ -311,8 +309,9 @@ fn map_ferrompi_error(e: &ferrompi::Error, operation: &'static str) -> CommError
             expected: 0,
             actual: 0,
         },
-        ferrompi::Error::AlreadyInitialized => InvalidCommunicator,
-        // NotSupported / Internal carry no MPI error code; use -1.
+        ferrompi::Error::AlreadyInitialized | ferrompi::Error::Finalized => InvalidCommunicator,
+        // ThreadLevelViolation / NotSupported / Internal and any future variant
+        // (`Error` is #[non_exhaustive]) carry no MPI error code; use -1.
         _ => CollectiveFailed {
             operation,
             mpi_error_code: -1,
@@ -324,7 +323,6 @@ fn map_ferrompi_error(e: &ferrompi::Error, operation: &'static str) -> CommError
 /// Map a `cobre_comm::ReduceOp` to the corresponding `ferrompi::ReduceOp`.
 ///
 /// `ferrompi::ReduceOp::Prod` is not exposed in the Cobre trait.
-#[cfg(feature = "mpi")]
 fn map_reduce_op(op: ReduceOp) -> ferrompi::ReduceOp {
     match op {
         Sum => ferrompi::ReduceOp::Sum,
@@ -341,7 +339,6 @@ fn map_reduce_op(op: ReduceOp) -> ferrompi::ReduceOp {
 ///
 /// Returns [`crate::CommError::InvalidBufferSize`] if any element in `values`
 /// exceeds `i32::MAX`.
-#[cfg(feature = "mpi")]
 fn to_i32_vec(values: &[usize], operation: &'static str) -> Result<Vec<i32>, CommError> {
     values
         .iter()
@@ -355,7 +352,6 @@ fn to_i32_vec(values: &[usize], operation: &'static str) -> Result<Vec<i32>, Com
         .collect()
 }
 
-#[cfg(feature = "mpi")]
 impl crate::Communicator for FerrompiBackend {
     /// Gather variable-length data from all ranks into all ranks.
     ///
@@ -428,9 +424,8 @@ impl crate::Communicator for FerrompiBackend {
             });
         }
 
-        let mpi_op = map_reduce_op(op);
         self.world
-            .allreduce(send, recv, mpi_op)
+            .allreduce(send, recv, map_reduce_op(op))
             .map_err(|e| map_ferrompi_error(&e, "allreduce"))
     }
 
@@ -525,7 +520,6 @@ mod tests {
         assert_send_sync::<super::FerrompiLocalComm>();
     }
 
-    #[cfg(feature = "mpi")]
     mod mpi_helpers {
         use super::super::{map_ferrompi_error, map_reduce_op, to_i32_vec};
         use crate::{CommError, ReduceOp};
@@ -599,6 +593,31 @@ mod tests {
             let err = map_ferrompi_error(&ferrompi::Error::AlreadyInitialized, "barrier");
             assert!(
                 matches!(err, CommError::InvalidCommunicator),
+                "unexpected error: {err:?}"
+            );
+        }
+
+        #[test]
+        fn test_map_ferrompi_error_finalized() {
+            let err = map_ferrompi_error(&ferrompi::Error::Finalized, "barrier");
+            assert!(
+                matches!(err, CommError::InvalidCommunicator),
+                "unexpected error: {err:?}"
+            );
+        }
+
+        #[test]
+        fn test_map_ferrompi_error_thread_level_violation() {
+            let err = map_ferrompi_error(&ferrompi::Error::ThreadLevelViolation, "allreduce");
+            assert!(
+                matches!(
+                    err,
+                    CommError::CollectiveFailed {
+                        operation: "allreduce",
+                        mpi_error_code: -1,
+                        ..
+                    }
+                ),
                 "unexpected error: {err:?}"
             );
         }

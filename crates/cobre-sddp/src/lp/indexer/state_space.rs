@@ -15,9 +15,11 @@
 
 use std::ops::Range;
 
-use super::{InCol, OutCol, RangeCursor, StateDim};
+use super::{HydroSys, InCol, OutCol, RangeCursor, StateDim, for_each_live_commitment_slot};
+use crate::bucket_topology::TransitBucketTopology;
 use crate::lead_time::AnticipatedResolution;
 
+use cobre_core::Hydro;
 use cobre_core::temporal::StageStateConfig;
 
 /// Stage-invariant state-vector layout for one SDDP stage subproblem.
@@ -103,34 +105,28 @@ pub struct StateSpace {
     /// uniform lag stride.
     pub max_par_order: usize,
 
-    /// Global travel-time bucket count `B` (`Σ_j per_plant_depth[j]`), `0` when
-    /// no arc is declared.
+    /// Global travel-time bucket count `B`, the sum of every plant's own run
+    /// in [`Self::transit_bucket_plants`], `0` when no arc is declared.
     pub n_buckets: usize,
 
-    /// Number of anticipated thermals (plants with
-    /// `anticipated_config.is_some()`).
+    /// Number of anticipated thermals — [`super::AnticipatedPlants::len`].
     pub n_anticipated: usize,
 
     /// Maximum `lead_stages` across the anticipated thermals (`K_max`).
     pub k_max: usize,
-
-    /// Backing store for [`Self::delivery_stage_count`]; `0` until
-    /// [`Self::set_anticipated_resolution`] attaches a resolution with at
-    /// least one plant.
-    n_delivery: usize,
 
     /// Per-plant `lead_stages` (`K_i`), indexed by anticipated-local position;
     /// length [`Self::n_anticipated`].
     pub anticipated_lead_stages: Vec<usize>,
 
     /// Delivery-anchored point-commitment resolution per anticipated plant
-    /// (anticipated-local order); default-empty until
-    /// [`Self::set_anticipated_resolution`] attaches it.
+    /// (anticipated-local order), attached at construction.
     pub(crate) anticipated_resolution: AnticipatedResolution,
 
-    /// Canonical `(plant_canonical_idx, lag)` pair per bucket state-vector
-    /// dimension, in [`Self::transit_buckets_out`] order.
-    pub transit_bucket_column_order: Vec<(usize, usize)>,
+    /// Canonical `(plant, lag)` pair per bucket state-vector dimension,
+    /// plant named by its `HydroSys` position, in
+    /// [`Self::transit_buckets_out`] order.
+    pub transit_bucket_column_order: Vec<(HydroSys, usize)>,
 
     /// State dimensions whose cut coefficients can be nonzero (padded lag/ring
     /// slots excluded); computed by [`Self::set_nonzero_mask`].
@@ -190,40 +186,109 @@ impl StateRegion {
     }
 }
 
+/// `0..0` when `n == 0`, never `cursor.alloc(0)`'s `pos..pos` — the sentinel
+/// an empty bucket/commitment-hold block must carry byte-identically.
+fn alloc_or_empty(cursor: &mut RangeCursor, n: usize) -> Range<usize> {
+    if n > 0 { cursor.alloc(n) } else { 0..0 }
+}
+
 impl StateSpace {
-    /// Construct a finalized [`StateSpace`] from the state dimensions and the
-    /// per-hydro effective lag-slot counts.
-    ///
-    /// `effective_lag_count` must have length `hydro_count`; each entry is
-    /// `PrecomputedPar::effective_lag_count(h)` — the count of lag slots that
-    /// may carry non-zero cut coefficients (see [`Self::set_nonzero_mask`] for
-    /// why `order(h)` is wrong). `transit_bucket_column_order` is the buckets'
-    /// canonical `(plant, lag)` order (`len() == n_buckets`); `n_buckets == 0`
-    /// reproduces the pre-bucket layout byte-for-byte.
-    ///
-    /// # Panics (debug builds only)
-    ///
-    /// Inherits the [`Self::set_nonzero_mask`] and
-    /// [`Self::finalize_state_column_map`] debug assertions:
-    /// `transit_bucket_column_order.len() == n_buckets`,
-    /// `effective_lag_count.len() == hydro_count`,
-    /// `anticipated_lead_stages.len() == n_anticipated`, lag/lead bounds, and
-    /// `state_to_lp_column_map.len() == n_state`.
+    /// Construct the production [`StateSpace`] from the system's hydros, the
+    /// resolved travel-time topology, and the anticipated leads/resolution —
+    /// see [`Self::assemble`] for the shared construction contract and
+    /// panics.
+    #[must_use]
+    pub(crate) fn build(
+        hydros: &[Hydro],
+        max_par_order: usize,
+        effective_lag_counts: &[usize],
+        topology: &TransitBucketTopology,
+        anticipated_lead_stages: Vec<usize>,
+        anticipated_resolution: AnticipatedResolution,
+    ) -> Self {
+        Self::assemble(
+            hydros.len(),
+            max_par_order,
+            topology.column_order.clone(),
+            anticipated_lead_stages,
+            anticipated_resolution,
+            effective_lag_counts,
+        )
+    }
+
+    /// Loose constructor for benches, doctests, and tests with no
+    /// [`TransitBucketTopology`] to build from — see [`Self::assemble`] for
+    /// the shared construction contract and panics. Production code calls
+    /// [`Self::build`].
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn new(
         hydro_count: usize,
         max_par_order: usize,
-        n_buckets: usize,
-        transit_bucket_column_order: Vec<(usize, usize)>,
-        n_anticipated: usize,
-        k_max: usize,
+        transit_bucket_column_order: Vec<(HydroSys, usize)>,
         anticipated_lead_stages: Vec<usize>,
+        anticipated_resolution: AnticipatedResolution,
         effective_lag_count: &[usize],
     ) -> Self {
+        Self::assemble(
+            hydro_count,
+            max_par_order,
+            transit_bucket_column_order,
+            anticipated_lead_stages,
+            anticipated_resolution,
+            effective_lag_count,
+        )
+    }
+
+    /// Assemble a finalized [`StateSpace`] from the state dimensions, the
+    /// per-plant anticipated resolution, and the per-hydro effective lag-slot
+    /// counts — the shared body [`Self::build`] and [`Self::new`] both
+    /// delegate to. `n_buckets` is `transit_bucket_column_order.len()`; `0`
+    /// reproduces the pre-bucket layout byte-for-byte.
+    ///
+    /// `n_anticipated` is `anticipated_lead_stages.len()`; `k_max` is
+    /// `anticipated_resolution.ring_size(&anticipated_lead_stages)` — the
+    /// single ring-size owner. `effective_lag_count` must have length
+    /// `hydro_count`; each entry is `PrecomputedPar::effective_lag_count(h)` —
+    /// the count of lag slots that may carry non-zero cut coefficients (see
+    /// [`Self::set_nonzero_mask`] for why `order(h)` is wrong).
+    ///
+    /// # Panics (debug builds only)
+    ///
+    /// `anticipated_resolution.per_plant.len() == anticipated_lead_stages.len()`,
+    /// with every plant's `decider` sharing one per-study delivery-stage
+    /// count. Inherits the [`Self::set_nonzero_mask`] and
+    /// [`Self::finalize_state_column_map`] debug assertions:
+    /// `effective_lag_count.len() == hydro_count`, lag bounds, and
+    /// `state_to_lp_column_map.len() == n_state`.
+    fn assemble(
+        hydro_count: usize,
+        max_par_order: usize,
+        transit_bucket_column_order: Vec<(HydroSys, usize)>,
+        anticipated_lead_stages: Vec<usize>,
+        anticipated_resolution: AnticipatedResolution,
+        effective_lag_count: &[usize],
+    ) -> Self {
+        let n_buckets = transit_bucket_column_order.len();
         debug_assert_eq!(
-            transit_bucket_column_order.len(),
-            n_buckets,
-            "transit_bucket_column_order must have exactly n_buckets entries"
+            anticipated_resolution.per_plant.len(),
+            anticipated_lead_stages.len(),
+            "resolution must carry one PointResolution per anticipated plant"
+        );
+
+        let n_anticipated = anticipated_lead_stages.len();
+        let k_max = anticipated_resolution.ring_size(&anticipated_lead_stages);
+        let n_delivery = anticipated_resolution
+            .per_plant
+            .first()
+            .map_or(0, |plant| plant.decider.len());
+        debug_assert!(
+            anticipated_resolution
+                .per_plant
+                .iter()
+                .all(|plant| plant.decider.len() == n_delivery),
+            "every plant's decider must share one per-study delivery-stage count \
+             (the delivery axis is per-study, not per-plant)"
         );
 
         let n = hydro_count;
@@ -233,28 +298,12 @@ impl StateSpace {
         let mut cursor = RangeCursor::new(0);
         let storage = cursor.alloc(n);
         let inflow_lags = cursor.alloc(n * l);
-        let transit_buckets_out = if n_buckets > 0 {
-            cursor.alloc(n_buckets)
-        } else {
-            0..0
-        };
-        let commit_out = if n_ant_state > 0 {
-            cursor.alloc(n_ant_state)
-        } else {
-            0..0
-        };
+        let transit_buckets_out = alloc_or_empty(&mut cursor, n_buckets);
+        let commit_out = alloc_or_empty(&mut cursor, n_ant_state);
         let z_inflow = cursor.alloc(n);
         let storage_in = cursor.alloc(n);
-        let transit_buckets_in = if n_buckets > 0 {
-            cursor.alloc(n_buckets)
-        } else {
-            0..0
-        };
-        let commit_in = if n_ant_state > 0 {
-            cursor.alloc(n_ant_state)
-        } else {
-            0..0
-        };
+        let transit_buckets_in = alloc_or_empty(&mut cursor, n_buckets);
+        let commit_in = alloc_or_empty(&mut cursor, n_ant_state);
 
         let theta = cursor.pos();
 
@@ -288,52 +337,16 @@ impl StateSpace {
             n_buckets,
             n_anticipated,
             k_max,
-            n_delivery: 0,
             anticipated_lead_stages,
-            anticipated_resolution: AnticipatedResolution::default(),
+            anticipated_resolution,
             transit_bucket_column_order,
             nonzero_state_indices: Vec::new(),
             state_to_lp_column_map: Vec::new(),
         };
 
-        let anticipated_k = layout.anticipated_lead_stages.clone();
-        layout.set_nonzero_mask(effective_lag_count, &anticipated_k);
+        layout.set_nonzero_mask(effective_lag_count);
         layout.finalize_state_column_map();
         layout
-    }
-
-    /// Attach the setup-computed [`AnticipatedResolution`].
-    ///
-    /// # Panics (debug builds only)
-    ///
-    /// Panics if the delivery-anchored ring depth exceeds the sized `k_max`, or
-    /// the resolution does not carry exactly one `PointResolution` per plant.
-    pub(crate) fn set_anticipated_resolution(&mut self, resolution: AnticipatedResolution) {
-        debug_assert!(
-            resolution.k_max <= self.k_max,
-            "delivery-anchored ring depth {} exceeds the sized k_max {}",
-            resolution.k_max,
-            self.k_max
-        );
-        debug_assert_eq!(
-            resolution.per_plant.len(),
-            self.n_anticipated,
-            "resolution must carry one PointResolution per anticipated plant"
-        );
-        let n_delivery = resolution
-            .per_plant
-            .first()
-            .map_or(0, |plant| plant.decider.len());
-        debug_assert!(
-            resolution
-                .per_plant
-                .iter()
-                .all(|plant| plant.decider.len() == n_delivery),
-            "every plant's decider must share one per-study delivery-stage count \
-             (the delivery axis is per-study, not per-plant)"
-        );
-        self.n_delivery = n_delivery;
-        self.anticipated_resolution = resolution;
     }
 
     /// First column of the control region (`theta + 1`): the state region
@@ -432,8 +445,8 @@ impl StateSpace {
     /// lag arithmetic runs, then resolves through an exhaustive match:
     /// storage, `transit_buckets_out`, and `commit_out` map by identity. Lag
     /// indices remap to the outgoing state after `shift_lag_state`: lag 0 is
-    /// realised inflow → `z_inflow.start + h`; lag `l ≥ 1` is the previous
-    /// stage's lag `l − 1` → `inflow_lags.start + (l − 1)·N + h`. Classifying
+    /// realised inflow → [`Self::z_inflow_col`]; lag `l ≥ 1` is the previous
+    /// stage's lag `l − 1` → [`Self::lag_incoming_col`]. Classifying
     /// first — rather than falling through an `if`/`else` chain — is what
     /// keeps buckets/commitment-hold from ever reaching the lag decode.
     ///
@@ -443,8 +456,9 @@ impl StateSpace {
     /// ```compile_fail
     /// use cobre_sddp::indexer::StateSpace;
     ///
-    /// let state = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);
-    /// let _col = state.state_to_lp_column(0); // bare usize handed where StateDim is required
+    /// fn misuse(state: &StateSpace) {
+    ///     let _col = state.state_to_lp_column(0); // bare usize handed where StateDim is required
+    /// }
     /// ```
     ///
     /// Nor can an already-resolved [`OutCol`] re-enter as the unresolved
@@ -453,9 +467,10 @@ impl StateSpace {
     /// ```compile_fail
     /// use cobre_sddp::indexer::{StateDim, StateSpace};
     ///
-    /// let state = StateSpace::new(1, 0, 0, Vec::new(), 0, 0, Vec::new(), &[0]);
-    /// let col = state.state_to_lp_column(StateDim::new(0));
-    /// let _reentered = state.state_to_lp_column(col); // OutCol handed where StateDim is required
+    /// fn misuse(state: &StateSpace) {
+    ///     let col = state.state_to_lp_column(StateDim::new(0));
+    ///     let _reentered = state.state_to_lp_column(col); // OutCol handed where StateDim is required
+    /// }
     /// ```
     #[inline]
     #[must_use]
@@ -469,9 +484,9 @@ impl StateSpace {
                 let h = offset % n;
                 let lag = offset / n;
                 if lag == 0 {
-                    self.z_inflow.start + h
+                    self.z_inflow_col(HydroSys::new(h)).get()
                 } else {
-                    n + (lag - 1) * n + h
+                    self.lag_incoming_col(lag - 1, HydroSys::new(h)).get()
                 }
             }
         })
@@ -491,19 +506,18 @@ impl StateSpace {
     }
 
     /// Read the precomputed `state_to_lp_column(j)` from
-    /// [`Self::state_to_lp_column_map`], which [`StateSpace::new`] always
+    /// [`Self::state_to_lp_column_map`], which [`Self::build`] always
     /// finalizes to `n_state` length (indexed read is in range for
     /// `j ∈ [0, n_state)`).
     #[inline]
     #[must_use]
     pub fn lp_column_for_state(&self, j: StateDim) -> OutCol {
-        let j = j.get();
         debug_assert_eq!(
             self.state_to_lp_column_map.len(),
             self.n_state,
             "state_to_lp_column_map must be finalized to n_state length"
         );
-        self.state_to_lp_column_map[j]
+        self.state_to_lp_column_map[j.get()]
     }
 
     /// Map a state-vector index to its **incoming-state** LP column — the column
@@ -585,29 +599,43 @@ impl StateSpace {
         (r % self.k_max) * self.n_anticipated + plant
     }
 
-    fn storage_state_dim(&self, h: usize) -> StateDim {
-        debug_assert!(h < self.hydro_count);
-        StateDim::new(self.state_dim_storage_range().start + h)
+    /// The storage state dimension for hydro `h` (`state_dim_storage_range().start + h`).
+    #[inline]
+    #[must_use]
+    pub(crate) fn storage_state_dim(&self, h: HydroSys) -> StateDim {
+        debug_assert!(h.get() < self.hydro_count);
+        StateDim::new(self.state_dim_storage_range().start + h.get())
     }
 
     /// Incoming (stage-initial) storage column of hydro `h`.
+    #[inline]
     #[must_use]
-    pub(crate) fn storage_incoming_col(&self, h: usize) -> InCol {
+    pub(crate) fn storage_incoming_col(&self, h: HydroSys) -> InCol {
         self.state_to_lp_incoming_column(self.storage_state_dim(h))
     }
 
     /// Outgoing (stage-final) storage column of hydro `h`.
+    #[inline]
     #[must_use]
-    pub(crate) fn storage_outgoing_col(&self, h: usize) -> OutCol {
+    pub(crate) fn storage_outgoing_col(&self, h: HydroSys) -> OutCol {
         self.state_to_lp_column(self.storage_state_dim(h))
     }
 
-    /// Incoming pinned lag column of hydro `h` at `lag` (lag-major block).
+    /// The lag-major state dimension for hydro `h` at `lag`
+    /// (`state_dim_lag_range().start + lag * hydro_count + h`).
+    #[inline]
     #[must_use]
-    pub(crate) fn lag_incoming_col(&self, lag: usize, h: usize) -> InCol {
-        debug_assert!(lag < self.max_par_order && h < self.hydro_count);
-        let start = self.state_dim_lag_range().start;
-        self.state_to_lp_incoming_column(StateDim::new(start + lag * self.hydro_count + h))
+    pub(crate) fn lag_state_dim(&self, lag: usize, h: HydroSys) -> StateDim {
+        debug_assert!(lag < self.max_par_order && h.get() < self.hydro_count);
+        StateDim::new(self.state_dim_lag_range().start + lag * self.hydro_count + h.get())
+    }
+
+    /// Incoming pinned lag column of hydro `h` at `lag` (lag-major block).
+    #[inline]
+    #[must_use]
+    pub(crate) fn lag_incoming_col(&self, lag: usize, h: HydroSys) -> InCol {
+        debug_assert!(lag < self.max_par_order && h.get() < self.hydro_count);
+        self.state_to_lp_incoming_column(self.lag_state_dim(lag, h))
     }
 
     /// Incoming pinned bucket column of bucket `b`
@@ -623,6 +651,41 @@ impl StateSpace {
     pub(crate) fn bucket_outgoing_col(&self, b: usize) -> OutCol {
         debug_assert!(b < self.n_buckets);
         self.state_to_lp_column(StateDim::new(self.state_dim_bucket_range().start + b))
+    }
+
+    /// Outgoing-bucket column block for the sub-range `local` (relative to
+    /// [`Self::transit_buckets_out`]'s own start).
+    #[inline]
+    #[must_use]
+    pub(crate) fn bucket_outgoing_block(&self, local: Range<usize>) -> Range<usize> {
+        debug_assert!(local.end <= self.n_buckets);
+        self.transit_buckets_out.start + local.start..self.transit_buckets_out.start + local.end
+    }
+
+    /// Incoming-bucket column block for the sub-range `local`; see
+    /// [`Self::bucket_outgoing_block`].
+    #[inline]
+    #[must_use]
+    pub(crate) fn bucket_incoming_block(&self, local: Range<usize>) -> Range<usize> {
+        debug_assert!(local.end <= self.n_buckets);
+        self.transit_buckets_in.start + local.start..self.transit_buckets_in.start + local.end
+    }
+
+    /// Each plant's contiguous run within [`Self::transit_bucket_column_order`],
+    /// as a local sub-range relative to [`Self::transit_buckets_out`]/
+    /// [`Self::transit_buckets_in`]'s own start. The run's length is that
+    /// plant's own bucket depth.
+    pub(crate) fn transit_bucket_plants(
+        &self,
+    ) -> impl Iterator<Item = (HydroSys, Range<usize>)> + '_ {
+        let mut start = 0;
+        self.transit_bucket_column_order
+            .chunk_by(|a, b| a.0 == b.0)
+            .map(move |run| {
+                let local = start..start + run.len();
+                start = local.end;
+                (run[0].0, local)
+            })
     }
 
     fn commitment_hold_state_dim(&self, plant: usize, m: usize) -> StateDim {
@@ -646,19 +709,21 @@ impl StateSpace {
         self.state_to_lp_column(self.commitment_hold_state_dim(plant, m))
     }
 
-    /// The delivery-axis stage count: `self.n_delivery`, maxed against
-    /// `n_stages` because a fixture that never attaches a resolution leaves
-    /// `n_delivery == 0`, and such a fixture's delivery axis is the caller's
-    /// `n_stages` — the same fallback `anticipated_resolution_for` applies to
-    /// the resolution itself.
+    /// The delivery-axis stage count: the attached resolution's own decider
+    /// length (`0` with no anticipated plants), read from the first plant —
+    /// every plant shares one per-study delivery axis (constructor
+    /// `debug_assert`).
     #[inline]
     #[must_use]
-    pub(crate) fn delivery_stage_count(&self, n_stages: usize) -> usize {
-        self.n_delivery.max(n_stages)
+    pub(crate) fn n_delivery(&self) -> usize {
+        self.anticipated_resolution
+            .per_plant
+            .first()
+            .map_or(0, |plant| plant.decider.len())
     }
 
     /// Compute and store [`Self::nonzero_state_indices`] from per-hydro
-    /// lag-slot counts and per-plant anticipated lead-stage counts.
+    /// lag-slot counts.
     ///
     /// `lag_counts` must have length `hydro_count`; `lag_counts[h]` is the count
     /// of lag slots that may carry non-zero cut coefficients for hydro `h`. It
@@ -669,37 +734,33 @@ impl StateSpace {
     /// at convergence). Storage `[0, N)` is always included.
     ///
     /// Every travel-time bucket slot is always included — bucket depth is
-    /// already sized as the per-stage reachability union, so (unlike the
-    /// commitment-hold region's slots) there is no padding to exclude.
+    /// already sized as the per-stage reachability union, so there is no
+    /// padding to exclude. The commitment-hold region instead keeps exactly
+    /// the slots [`super::for_each_live_commitment_slot`] visits over every
+    /// decision stage — the union, over `0..n_decision`, of the LP's own
+    /// per-stage latch set — since the resolution is already attached by the
+    /// time this method runs from the constructor.
     ///
-    /// For the commitment-hold region, anticipated plant `i`
-    /// only has slots `0..K_i` included; the trailing `k_max − K_i` are
-    /// padding whose cut coefficients are structurally zero (no decision
-    /// writes them). Including padding over-estimates cut hyperplanes — the
-    /// same failure mode as the lag block above.
-    ///
-    /// The loop iterates lag/slot-first so the emitted indices stay strictly
-    /// ascending (the sortedness the `debug_assert` enforces).
+    /// The loop iterates lag-first, then commitment-hold in ascending offset
+    /// order, so the emitted indices stay strictly ascending (the sortedness
+    /// the `debug_assert` enforces).
     ///
     /// # Panics (debug builds only)
     ///
-    /// Panics if `lag_counts.len() != hydro_count`,
-    /// `anticipated_lead_stages.len() != n_anticipated`, any
-    /// `lag_counts[h] > max_par_order`, or any
-    /// `anticipated_lead_stages[p] > k_max`.
-    pub fn set_nonzero_mask(&mut self, lag_counts: &[usize], anticipated_lead_stages: &[usize]) {
+    /// Panics if `lag_counts.len() != hydro_count` or any
+    /// `lag_counts[h] > max_par_order`.
+    pub fn set_nonzero_mask(&mut self, lag_counts: &[usize]) {
         debug_assert_eq!(lag_counts.len(), self.hydro_count);
-        debug_assert_eq!(anticipated_lead_stages.len(), self.n_anticipated);
 
         let n_lag_active: usize = lag_counts.iter().copied().sum();
-        let n_ant_active: usize = anticipated_lead_stages.iter().copied().sum();
+        let n_ant_state = self.n_anticipated * self.k_max;
         let mut mask =
-            Vec::with_capacity(self.hydro_count + n_lag_active + self.n_buckets + n_ant_active);
+            Vec::with_capacity(self.hydro_count + n_lag_active + self.n_buckets + n_ant_state);
 
         // REGION_ORDER fixes the walk order; storage and buckets have no
-        // padding to exclude and extend their full range, lag and
-        // commitment-hold each keep their own per-region active-slot filter
-        // (padding stays excluded — see the doc comment above).
+        // padding to exclude and extend their full range, lag keeps its own
+        // active-slot filter, and commitment-hold keeps its own live-slot
+        // filter (padding stays excluded — see the doc comment above).
         for region in REGION_ORDER {
             match region {
                 StateRegion::Storage | StateRegion::Buckets => {
@@ -718,14 +779,24 @@ impl StateSpace {
                 }
                 StateRegion::CommitmentHold => {
                     let start = self.state_dim_range(region).start;
-                    for slot in 0..self.k_max {
-                        for (plant, &k_i) in anticipated_lead_stages.iter().enumerate() {
-                            debug_assert!(k_i <= self.k_max);
-                            if slot < k_i {
-                                mask.push(StateDim::new(start + slot * self.n_anticipated + plant));
-                            }
-                        }
+                    let n_anticipated = self.n_anticipated;
+                    let n_decision = self
+                        .anticipated_resolution
+                        .per_plant
+                        .first()
+                        .map_or(0, |plant| plant.decision_sets.len());
+                    let mut live = vec![false; n_ant_state];
+                    for stage_idx in 0..n_decision {
+                        for_each_live_commitment_slot(self, stage_idx, |res, _| {
+                            live[res.slot * n_anticipated + res.plant] = true;
+                        });
                     }
+                    mask.extend(
+                        live.iter()
+                            .enumerate()
+                            .filter(|&(_, &is_live)| is_live)
+                            .map(|(offset, _)| StateDim::new(start + offset)),
+                    );
                 }
             }
         }
@@ -737,57 +808,133 @@ impl StateSpace {
 
         self.nonzero_state_indices = mask;
     }
+
+    /// The z-inflow definition rows: one per hydro, leading every stage's row
+    /// space.
+    #[inline]
+    #[must_use]
+    pub fn z_inflow_rows(&self) -> Range<usize> {
+        0..self.hydro_count
+    }
+
+    /// Hydro `h`'s z-inflow definition row.
+    #[inline]
+    #[must_use]
+    pub fn z_inflow_row(&self, h: HydroSys) -> usize {
+        debug_assert!(h.get() < self.hydro_count);
+        self.z_inflow_rows().start + h.get()
+    }
+
+    /// Hydro `h`'s z-inflow column — the outgoing lag-0 state column.
+    #[inline]
+    #[must_use]
+    pub(crate) fn z_inflow_col(&self, h: HydroSys) -> OutCol {
+        debug_assert!(h.get() < self.hydro_count);
+        OutCol::new(self.z_inflow.start + h.get())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AnticipatedResolution, InCol, OutCol, StateDim, StateSpace};
-    use crate::lead_time::PointResolution;
+    use std::ops::Range;
+
+    use super::{
+        AnticipatedResolution, HydroSys, InCol, OutCol, StateDim, StateSpace,
+        for_each_live_commitment_slot,
+    };
+    use crate::lead_time::{DeliveryAxis, LeadTime, PointResolution};
+    use crate::test_support::constant_lead_resolution;
 
     /// Build a [`StateSpace`] finalized the way production `resolve_state_layout`
     /// does: full `max_par_order` lag stride for every hydro (the coverage the
-    /// dense path emits for test layouts without a PAR model) and the layout's
-    /// own `anticipated_lead_stages`.
-    fn finalized(
+    /// dense path emits for test layouts without a PAR model), the layout's own
+    /// `anticipated_lead_stages`, and an explicit `anticipated_resolution` —
+    /// the single owner every other helper below delegates to.
+    fn finalized_with_transit_buckets_and_resolution(
         hydro_count: usize,
         max_par_order: usize,
-        n_anticipated: usize,
-        k_max: usize,
+        transit_bucket_column_order: Vec<(HydroSys, usize)>,
         anticipated_lead_stages: Vec<usize>,
-    ) -> StateSpace {
-        finalized_with_transit_buckets(
-            hydro_count,
-            max_par_order,
-            0,
-            Vec::new(),
-            n_anticipated,
-            k_max,
-            anticipated_lead_stages,
-        )
-    }
-
-    /// Same as [`finalized`] but with a declared bucket block
-    /// (`n_buckets`/`transit_bucket_column_order`), for the bucket-arm resolver and mask
-    /// tests.
-    fn finalized_with_transit_buckets(
-        hydro_count: usize,
-        max_par_order: usize,
-        n_buckets: usize,
-        transit_bucket_column_order: Vec<(usize, usize)>,
-        n_anticipated: usize,
-        k_max: usize,
-        anticipated_lead_stages: Vec<usize>,
+        anticipated_resolution: AnticipatedResolution,
     ) -> StateSpace {
         let lag_counts = vec![max_par_order; hydro_count];
         StateSpace::new(
             hydro_count,
             max_par_order,
-            n_buckets,
             transit_bucket_column_order,
-            n_anticipated,
-            k_max,
             anticipated_lead_stages,
+            anticipated_resolution,
             &lag_counts,
+        )
+    }
+
+    /// [`finalized_with_transit_buckets_and_resolution`] with no bucket block
+    /// and no anticipated plants.
+    fn finalized(
+        hydro_count: usize,
+        max_par_order: usize,
+        anticipated_lead_stages: Vec<usize>,
+    ) -> StateSpace {
+        finalized_with_transit_buckets_and_resolution(
+            hydro_count,
+            max_par_order,
+            Vec::new(),
+            anticipated_lead_stages,
+            AnticipatedResolution::default(),
+        )
+    }
+
+    /// Same as [`finalized`] but with a declared bucket block
+    /// (`transit_bucket_column_order`), for the bucket-arm resolver and mask
+    /// tests.
+    fn finalized_with_transit_buckets(
+        hydro_count: usize,
+        max_par_order: usize,
+        transit_bucket_column_order: Vec<(HydroSys, usize)>,
+        anticipated_lead_stages: Vec<usize>,
+    ) -> StateSpace {
+        finalized_with_transit_buckets_and_resolution(
+            hydro_count,
+            max_par_order,
+            transit_bucket_column_order,
+            anticipated_lead_stages,
+            AnticipatedResolution::default(),
+        )
+    }
+
+    /// Like [`finalized`] but with a real, saturating
+    /// [`AnticipatedResolution`] attached — the prerequisite the folded
+    /// constructor requires at construction time for every `n_anticipated >
+    /// 0` fixture that does not pin its own custom resolution.
+    fn finalized_resolved(
+        hydro_count: usize,
+        max_par_order: usize,
+        anticipated_lead_stages: Vec<usize>,
+    ) -> StateSpace {
+        finalized_with_transit_buckets_resolved(
+            hydro_count,
+            max_par_order,
+            Vec::new(),
+            anticipated_lead_stages,
+        )
+    }
+
+    /// Like [`finalized_with_transit_buckets`] but with a real, saturating
+    /// [`AnticipatedResolution`] attached (see [`finalized_resolved`]).
+    fn finalized_with_transit_buckets_resolved(
+        hydro_count: usize,
+        max_par_order: usize,
+        transit_bucket_column_order: Vec<(HydroSys, usize)>,
+        anticipated_lead_stages: Vec<usize>,
+    ) -> StateSpace {
+        let n_stages = anticipated_lead_stages.iter().copied().max().unwrap_or(0) + 2;
+        let resolution = constant_lead_resolution(&anticipated_lead_stages, n_stages);
+        finalized_with_transit_buckets_and_resolution(
+            hydro_count,
+            max_par_order,
+            transit_bucket_column_order,
+            anticipated_lead_stages,
+            resolution,
         )
     }
 
@@ -799,7 +946,7 @@ mod tests {
     #[test]
     fn lp_column_map_matches_resolver_with_lags_and_anticipated() {
         // hydro_count=3, max_par_order=2, n_anticipated=2 (K = [1, 2], k_max=2).
-        let idx = finalized(3, 2, 2, 2, vec![1, 2]);
+        let idx = finalized_resolved(3, 2, vec![1, 2]);
 
         assert_eq!(idx.state_to_lp_column_map.len(), idx.n_state);
         for j in 0..idx.n_state {
@@ -819,11 +966,16 @@ mod tests {
     #[test]
     fn lp_column_for_state_map_always_finalized() {
         for idx in [
-            finalized(0, 0, 0, 0, vec![]),     // pure-thermal: n_state == 0
-            finalized(3, 0, 0, 0, vec![]),     // storage-only
-            finalized(2, 3, 0, 0, vec![]),     // storage + lags
-            finalized(3, 2, 2, 2, vec![1, 2]), // storage + lags + anticipated
-            finalized_with_transit_buckets(3, 2, 2, vec![(0, 1), (0, 2)], 2, 2, vec![1, 2]), // storage + lags + buckets + anticipated
+            finalized(0, 0, vec![]),              // pure-thermal: n_state == 0
+            finalized(3, 0, vec![]),              // storage-only
+            finalized(2, 3, vec![]),              // storage + lags
+            finalized_resolved(3, 2, vec![1, 2]), // storage + lags + anticipated
+            finalized_with_transit_buckets_resolved(
+                3,
+                2,
+                vec![(HydroSys::new(0), 1), (HydroSys::new(0), 2)],
+                vec![1, 2],
+            ), // storage + lags + buckets + anticipated
         ] {
             assert_eq!(
                 idx.state_to_lp_column_map.len(),
@@ -844,7 +996,7 @@ mod tests {
     /// dense→sparse bit-identity premise for the unified cut-row loop.
     #[test]
     fn lp_column_map_storage_only_mask_is_full_range() {
-        let idx = finalized(3, 0, 0, 0, vec![]);
+        let idx = finalized(3, 0, vec![]);
 
         assert_eq!(
             idx.nonzero_state_indices,
@@ -869,7 +1021,7 @@ mod tests {
         // N=1, L=0, n_anticipated=1, k_max=2, anticipated_lead_stages=[2].
         // n_state = 1*(1+0) + 1*2 = 3.
         // commit_out = [1, 3); slot 0 at j=1, slot 1 at j=2.
-        let idx = finalized(1, 0, 1, 2, vec![2]);
+        let idx = finalized_resolved(1, 0, vec![2]);
         assert_eq!(idx.commit_out, 1..3);
         // Storage index: identity.
         assert_eq!(idx.state_to_lp_column(StateDim::new(0)), OutCol::new(0));
@@ -887,7 +1039,7 @@ mod tests {
         // N=1, L=1, n_anticipated=1, k_max=2, anticipated_lead_stages=[2].
         // n_state = 1*(1+1) + 1*2 = 4.
         // Layout: j=0 storage, j=1 lag-0, j=2 ant slot-0, j=3 ant slot-1.
-        let idx = finalized(1, 1, 1, 2, vec![2]);
+        let idx = finalized_resolved(1, 1, vec![2]);
         assert_eq!(idx.commit_out, 2..4);
         // Storage: identity.
         assert_eq!(idx.state_to_lp_column(StateDim::new(0)), OutCol::new(0));
@@ -909,7 +1061,7 @@ mod tests {
     fn state_to_lp_column_lag_remap_preserved_no_anticipated() {
         // N=1, L=1, n_anticipated=0 — classic PAR(p) case.
         // n_state = 1*(1+1) = 2. Layout: j=0 storage, j=1 lag-0.
-        let idx = finalized(1, 1, 0, 0, vec![]);
+        let idx = finalized(1, 1, vec![]);
         assert_eq!(idx.n_anticipated, 0);
         // Storage: identity.
         assert_eq!(idx.state_to_lp_column(StateDim::new(0)), OutCol::new(0));
@@ -930,7 +1082,7 @@ mod tests {
         // Two plants: plant 0 has K_p=1 (only slot 0 is in-use), plant 1 has
         // K_p=3 (slots 0, 1, 2 all in-use). k_max=3 so plant 0 has padding
         // at slots 1 and 2.
-        let idx = finalized(0, 0, 2, 3, vec![1, 3]);
+        let idx = finalized_resolved(0, 0, vec![1, 3]);
         assert_eq!(idx.commit_out, 0..6);
         for j in idx.commit_out.clone() {
             assert_eq!(
@@ -947,7 +1099,7 @@ mod tests {
     #[test]
     fn state_to_lp_column_commit_out_resolves_into_state_region() {
         // N=3, L=2, A=2, k_max=3, uniform K_p = 3.
-        let idx = finalized(3, 2, 2, 3, vec![3, 3]);
+        let idx = finalized_resolved(3, 2, vec![3, 3]);
         for j in idx.commit_out.clone() {
             let col = idx.state_to_lp_column(StateDim::new(j)).get();
             assert_eq!(col, j, "identity resolution");
@@ -972,7 +1124,7 @@ mod tests {
     #[test]
     fn state_to_lp_incoming_column_storage_range() {
         // N=3, L=2: storage_in.start = N*(2+L) = 3*4 = 12.
-        let idx = finalized(3, 2, 0, 0, vec![]);
+        let idx = finalized(3, 2, vec![]);
         assert_eq!(idx.storage_in.start, 12);
         for j in 0..3_usize {
             assert_eq!(
@@ -989,7 +1141,7 @@ mod tests {
     #[test]
     fn state_to_lp_incoming_column_lag_range() {
         // N=3, L=2: inflow_lags = 3..9.
-        let idx = finalized(3, 2, 0, 0, vec![]);
+        let idx = finalized(3, 2, vec![]);
         assert_eq!(idx.inflow_lags.start, 3);
         for j in 3..9_usize {
             assert_eq!(
@@ -1011,7 +1163,7 @@ mod tests {
     #[test]
     fn state_to_lp_incoming_column_anticipated_range() {
         // N=0, L=0, A=1, K=2: n_state = 0 + 1*2 = 2.
-        let idx = finalized(0, 0, 1, 2, vec![2]);
+        let idx = finalized_resolved(0, 0, vec![2]);
         assert_eq!(idx.commit_in.start, 2);
         assert_eq!(idx.n_state, 2);
         for j in 0..2_usize {
@@ -1035,7 +1187,7 @@ mod tests {
         //   commit_in.start = storage_in.start + N = 17 (transit_buckets_in
         //     is empty; the relocated incoming block follows storage_in directly).
         //   lag_end = N*(1+L) = 9.
-        let idx = finalized(3, 2, 1, 2, vec![2]);
+        let idx = finalized_resolved(3, 2, vec![2]);
         assert_eq!(idx.n_state, 11);
         // j=0: storage range → storage_in.start + 0.
         assert_eq!(
@@ -1094,7 +1246,7 @@ mod tests {
         // N=2, L=1: storage_in.start = N*(2+L) = 2*3 = 6.
         // state_to_lp_column(0) = 0 (outgoing storage).
         // state_to_lp_incoming_column(0) = storage_in.start + 0 = 6.
-        let idx = finalized(2, 1, 0, 0, vec![]);
+        let idx = finalized(2, 1, vec![]);
         // Storage range: incoming ≠ outgoing.
         assert_ne!(
             idx.state_to_lp_incoming_column(StateDim::new(0)).get(),
@@ -1145,8 +1297,8 @@ mod tests {
         // 4 hydros (N=4), max_par_order=6 (L=6), ar_orders=[0, 1, 3, 6]
         // inflow_lags.start = N = 4
         // Lag-major layout: slot = 4 + lag * N + h
-        let mut idx = finalized(4, 6, 0, 0, vec![]);
-        idx.set_nonzero_mask(&[0, 1, 3, 6], &[]);
+        let mut idx = finalized(4, 6, vec![]);
+        idx.set_nonzero_mask(&[0, 1, 3, 6]);
 
         // Storage: [0, 1, 2, 3]
         // lag0: h1→4+0*4+1=5, h2→6, h3→7
@@ -1177,8 +1329,8 @@ mod tests {
     #[test]
     fn nonzero_mask_zero_par_order() {
         // max_par_order=0: no lags, mask = storage only
-        let mut idx = finalized(3, 0, 0, 0, vec![]);
-        idx.set_nonzero_mask(&[0, 0, 0], &[]);
+        let mut idx = finalized(3, 0, vec![]);
+        idx.set_nonzero_mask(&[0, 0, 0]);
         assert_eq!(idx.nonzero_state_indices.len(), 3);
         assert_eq!(&idx.nonzero_state_indices, &[0, 1, 2].map(StateDim::new));
     }
@@ -1186,8 +1338,8 @@ mod tests {
     #[test]
     fn nonzero_mask_all_full_order() {
         // All hydros at max AR order: mask covers all n_state indices
-        let mut idx = finalized(2, 3, 0, 0, vec![]);
-        idx.set_nonzero_mask(&[3, 3], &[]);
+        let mut idx = finalized(2, 3, vec![]);
+        idx.set_nonzero_mask(&[3, 3]);
         // n_state = 2*(1+3) = 8, mask should have 2 + 2*3 = 8
         assert_eq!(idx.nonzero_state_indices.len(), 8);
         assert_eq!(idx.nonzero_state_indices.len(), idx.n_state);
@@ -1209,8 +1361,8 @@ mod tests {
         // Two hydros: hydro 0 has classical AR(4); hydro 1 has PAR(4)-A and
         // therefore uses all 12 lag slots. max_par_order = 12 (widened by
         // PrecomputedPar when any model has an annual component).
-        let mut idx = finalized(2, 12, 0, 0, vec![]);
-        idx.set_nonzero_mask(&[4, 12], &[]);
+        let mut idx = finalized(2, 12, vec![]);
+        idx.set_nonzero_mask(&[4, 12]);
 
         // n_state = 2 * (1 + 12) = 26.
         // Mask = [storage 0..2] + [lag * 2 + h for lag in 0..lag_count[h]]
@@ -1247,94 +1399,11 @@ mod tests {
 
     // ── Commitment-hold in-study nonzero mask tests ────────────────────────
 
-    /// Every anticipated plant uses every slot (`K_i == k_max`): all
-    /// `n_anticipated * k_max` anticipated indices are included in the mask.
-    #[test]
-    fn nonzero_mask_commitment_hold_in_study_full_kmax() {
-        // 2 anticipated plants, k_max = 3, no hydros, no lags.
-        // commit_out.start = 0 (no storage, no lag block).
-        // Layout: start + slot * n_anticipated + plant.
-        let mut idx = finalized(0, 0, 2, 3, vec![3, 3]);
-
-        assert_eq!(idx.commit_out.start, 0);
-        assert_eq!(idx.n_anticipated, 2);
-        assert_eq!(idx.k_max, 3);
-
-        idx.set_nonzero_mask(&[], &[3, 3]);
-
-        // Every slot is occupied, so all 6 indices appear.
-        // slot=0: 0, 1; slot=1: 2, 3; slot=2: 4, 5.
-        assert_eq!(
-            idx.nonzero_state_indices,
-            [0, 1, 2, 3, 4, 5].map(StateDim::new)
-        );
-    }
-
-    /// `K_i < k_max` for some plants: padded slots are excluded.
-    /// Configuration: `n_anticipated = 2`, `k_max = 3`,
-    /// `anticipated_lead_stages = [3, 1]`.
-    #[test]
-    fn nonzero_mask_commitment_hold_in_study_partial_padding() {
-        // 3 hydros, max_par_order = 2, 2 anticipated plants, k_max = 3.
-        // inflow_lags = [3, 9), commit_out.start = 9.
-        let mut idx = finalized(3, 2, 2, 3, vec![3, 1]);
-
-        assert_eq!(idx.commit_out.start, 9);
-        idx.set_nonzero_mask(&[2, 2, 2], &[3, 1]);
-
-        // Storage [0, 1, 2] + lag (h0,h1,h2 full = 6 slots) +
-        // anticipated: slot=0 plant=0 → 9, plant=1 → 10 (K_1=1 so slot 0 included);
-        //              slot=1 plant=0 → 11 (K_0=3); plant=1 → padded (slot 1 >= 1).
-        //              slot=2 plant=0 → 13 (K_0=3); plant=1 → padded.
-        // The anticipated portion expected: [9, 10, 11, 13].
-        let mask = &idx.nonzero_state_indices;
-        let ant_portion: Vec<usize> = mask.iter().map(|d| d.get()).filter(|&i| i >= 9).collect();
-        assert_eq!(ant_portion, vec![9, 10, 11, 13]);
-        // Padded slots NOT present.
-        assert!(!mask.contains(&StateDim::new(12)));
-        assert!(!mask.contains(&StateDim::new(14)));
-    }
-
-    /// Anticipated-only: no hydros, no lags, only anticipated state.
-    #[test]
-    fn nonzero_mask_commitment_hold_in_study_only_no_hydros() {
-        let mut idx = finalized(0, 0, 1, 2, vec![2]);
-
-        assert_eq!(idx.hydro_count, 0);
-        assert_eq!(idx.commit_out.start, 0);
-
-        idx.set_nonzero_mask(&[], &[2]);
-
-        // Only anticipated indices: slot=0 plant=0 → 0; slot=1 plant=0 → 1.
-        assert_eq!(idx.nonzero_state_indices, [0, 1].map(StateDim::new));
-    }
-
-    /// Heterogeneous `K_i` across plants, including a plant with `K_i = k_max`
-    /// and another with `K_i < k_max`.
-    #[test]
-    fn nonzero_mask_commitment_hold_in_study_mixed_k_values() {
-        // n_anticipated = 3, k_max = 4. Lead stages = [4, 2, 1].
-        // commit_out.start = 0 (no hydros).
-        let mut idx = finalized(0, 0, 3, 4, vec![4, 2, 1]);
-
-        idx.set_nonzero_mask(&[], &[4, 2, 1]);
-
-        // slot=0 plant=0→0, plant=1→1, plant=2→2 (all K_i > 0).
-        // slot=1 plant=0→3, plant=1→4 (K_1=2). plant=2 padded.
-        // slot=2 plant=0→6 (K_0=4). plant=1 padded. plant=2 padded.
-        // slot=3 plant=0→9 (K_0=4). Others padded.
-        // Expected: [0, 1, 2, 3, 4, 6, 9].
-        assert_eq!(
-            idx.nonzero_state_indices,
-            [0, 1, 2, 3, 4, 6, 9].map(StateDim::new)
-        );
-    }
-
     /// `n_anticipated == 0` reproduces the pre-anticipated behaviour exactly.
     #[test]
     fn nonzero_mask_commitment_hold_in_study_zero_anticipated_matches_existing() {
-        let mut idx_with = finalized(4, 6, 0, 0, vec![]);
-        idx_with.set_nonzero_mask(&[0, 1, 3, 6], &[]);
+        let mut idx_with = finalized(4, 6, vec![]);
+        idx_with.set_nonzero_mask(&[0, 1, 3, 6]);
 
         // Same expected mask as `nonzero_mask_mixed_ar_orders`:
         // [0,1,2,3] (storage) + [5,6,7,10,11,14,15,19,23,27] (lags).
@@ -1350,9 +1419,9 @@ mod tests {
         // Mixed configuration: 3 hydros with mixed lag_counts + 2 anticipated
         // plants with mixed K_i. The slot-major iteration over anticipated
         // must keep the global mask sorted.
-        let mut idx = finalized(3, 2, 2, 3, vec![2, 3]);
+        let mut idx = finalized_resolved(3, 2, vec![2, 3]);
 
-        idx.set_nonzero_mask(&[1, 2, 0], &[2, 3]);
+        idx.set_nonzero_mask(&[1, 2, 0]);
 
         assert!(
             idx.nonzero_state_indices.windows(2).all(|w| w[0] < w[1]),
@@ -1361,32 +1430,89 @@ mod tests {
         );
     }
 
-    /// Plant with `K_i == k_max` (boundary, no padding): all its slots are
-    /// included.
+    /// The constructor's `CommitmentHold` mask tail matches an independent
+    /// `for_each_live_commitment_slot` sweep over every decision stage — the
+    /// same union `set_nonzero_mask`'s own `CommitmentHold` arm computes,
+    /// proved against a two-plant mixed-lead resolution rather than against
+    /// the code under test.
     #[test]
-    fn nonzero_mask_commitment_hold_in_study_boundary_k_eq_kmax() {
-        // 1 anticipated plant, K_0 = k_max = 3, no hydros.
-        let mut idx = finalized(0, 0, 1, 3, vec![3]);
+    fn state_space_mask_matches_live_commitment_slots() {
+        let leads = vec![1, 3];
+        let n_anticipated = leads.len();
+        let n_stages = leads.iter().copied().max().unwrap_or(0) + 2;
+        let resolution = constant_lead_resolution(&leads, n_stages);
+        let state =
+            finalized_with_transit_buckets_and_resolution(0, 0, Vec::new(), leads, resolution);
 
-        idx.set_nonzero_mask(&[], &[3]);
+        let start = state.commit_out.start;
+        let n_decision = state.anticipated_resolution.per_plant[0]
+            .decision_sets
+            .len();
+        let mut live = vec![false; n_anticipated * state.k_max];
+        for stage_idx in 0..n_decision {
+            for_each_live_commitment_slot(&state, stage_idx, |res, _| {
+                live[res.slot * n_anticipated + res.plant] = true;
+            });
+        }
+        let expected: Vec<StateDim> = live
+            .iter()
+            .enumerate()
+            .filter(|&(_, &is_live)| is_live)
+            .map(|(offset, _)| StateDim::new(start + offset))
+            .collect();
 
-        // All k_max slots included: slot 0,1,2 → indices 0,1,2.
-        assert_eq!(idx.nonzero_state_indices, [0, 1, 2].map(StateDim::new));
+        let mask_tail: Vec<StateDim> = state
+            .nonzero_state_indices
+            .iter()
+            .copied()
+            .filter(|d| d.get() >= start)
+            .collect();
+
+        assert_eq!(mask_tail, expected);
     }
 
-    /// `K_i == 0` excludes all slots for that plant (defensive — the parse
-    /// layer rejects `K_i == 0`, but the helper must remain robust if
-    /// invoked with zero).
+    /// A single shared lead across every plant: over `n_decision = 4` stages
+    /// `(>= k_max = 2)`, each plant cycles through every residue, so the
+    /// commitment-hold tail of the mask is the whole region.
     #[test]
-    fn nonzero_mask_commitment_hold_in_study_boundary_k_zero_excluded() {
-        // 2 anticipated plants, k_max = 2. Lead stages = [2, 0].
-        let mut idx = finalized(0, 0, 2, 2, vec![2, 0]);
+    fn single_lead_nonzero_mask_keeps_the_whole_commitment_region() {
+        let resolution = AnticipatedResolution::resolve(
+            &[LeadTime::Stages(2), LeadTime::Stages(2)],
+            DeliveryAxis {
+                study_stage_hours: &[720.0; 4],
+                post_study_stage_hours: &[],
+            },
+        );
+        let idx =
+            finalized_with_transit_buckets_and_resolution(0, 0, Vec::new(), vec![2, 2], resolution);
 
-        idx.set_nonzero_mask(&[], &[2, 0]);
+        assert_eq!(idx.nonzero_state_indices, [0, 1, 2, 3].map(StateDim::new));
+    }
 
-        // Plant 0 (K_0=2) emits slot=0→0, slot=1→2. Plant 1 (K_1=0) emits
-        // nothing. Expected mask: [0, 2].
-        assert_eq!(idx.nonzero_state_indices, [0, 2].map(StateDim::new));
+    /// Accepted edge case: a single-lead study shorter than its own lead. The
+    /// plant's lead (`K = 3`) exceeds the study's own delivery axis
+    /// (`n_decision = n_delivery = 2`), so every window's ring-axis target
+    /// `r >= n_delivery` is skipped except `r = 1` (the only in-window index
+    /// below `n_delivery`, reachable only from `stage_idx = 0`, `depth = 0`).
+    /// Residues 0 and 2 are never latched at any stage. Hand-derived against
+    /// the ring's own addressing formula, never against
+    /// `for_each_live_commitment_slot` — the oracle this test pins is
+    /// independent of the code under test.
+    #[test]
+    fn single_lead_shorter_than_its_own_lead_mask_omits_the_never_latched_slots() {
+        let point = PointResolution {
+            decider: vec![None, None],
+            decision_sets: vec![Vec::new(), Vec::new()],
+            depth: vec![0, 0],
+            occupancy: vec![1, 0],
+        };
+        let resolution = AnticipatedResolution {
+            per_plant: vec![point],
+        };
+        let idx =
+            finalized_with_transit_buckets_and_resolution(0, 0, Vec::new(), vec![3], resolution);
+
+        assert_eq!(idx.nonzero_state_indices, [1].map(StateDim::new));
     }
 
     // ── Bucket block tests ─────────────────────────────────────────────────
@@ -1398,8 +1524,16 @@ mod tests {
     #[test]
     fn state_to_lp_column_transit_bucket_arm_is_identity() {
         // N=2, L=2 (lags present), B=3, no anticipated.
-        let idx =
-            finalized_with_transit_buckets(2, 2, 3, vec![(0, 1), (0, 2), (1, 1)], 0, 0, vec![]);
+        let idx = finalized_with_transit_buckets(
+            2,
+            2,
+            vec![
+                (HydroSys::new(0), 1),
+                (HydroSys::new(0), 2),
+                (HydroSys::new(1), 1),
+            ],
+            vec![],
+        );
 
         assert_eq!(idx.transit_buckets_out, 6..9);
         for j in idx.transit_buckets_out.clone() {
@@ -1422,7 +1556,12 @@ mod tests {
     #[test]
     fn state_to_lp_incoming_column_transit_bucket_arm_is_pinned_not_anticipated() {
         // N=2, L=1, B=2, A=1 (k_max=2, K=[2]).
-        let idx = finalized_with_transit_buckets(2, 1, 2, vec![(0, 1), (0, 2)], 1, 2, vec![2]);
+        let idx = finalized_with_transit_buckets_resolved(
+            2,
+            1,
+            vec![(HydroSys::new(0), 1), (HydroSys::new(0), 2)],
+            vec![2],
+        );
 
         assert_eq!(idx.transit_buckets_in, 12..14);
         assert_eq!(idx.commit_in.start, 14);
@@ -1455,8 +1594,16 @@ mod tests {
     /// other blocks.
     #[test]
     fn state_to_lp_column_map_length_matches_n_state_with_transit_buckets_only() {
-        let idx =
-            finalized_with_transit_buckets(0, 0, 3, vec![(0, 1), (0, 2), (0, 3)], 0, 0, vec![]);
+        let idx = finalized_with_transit_buckets(
+            0,
+            0,
+            vec![
+                (HydroSys::new(0), 1),
+                (HydroSys::new(0), 2),
+                (HydroSys::new(0), 3),
+            ],
+            vec![],
+        );
 
         assert_eq!(idx.n_state, 3);
         assert_eq!(idx.state_to_lp_column_map.len(), idx.n_state);
@@ -1477,9 +1624,14 @@ mod tests {
     fn nonzero_mask_transit_bucket_block_full_range_with_masked_lag_slot() {
         // N=2, L=2, B=2 (single plant, depth 2), no anticipated. Hydro 0 has
         // lag_count=1 (lag slot 1 masked out); hydro 1 has lag_count=2 (full).
-        let mut idx = finalized_with_transit_buckets(2, 2, 2, vec![(0, 1), (0, 2)], 0, 0, vec![]);
+        let mut idx = finalized_with_transit_buckets(
+            2,
+            2,
+            vec![(HydroSys::new(0), 1), (HydroSys::new(0), 2)],
+            vec![],
+        );
 
-        idx.set_nonzero_mask(&[1, 2], &[]);
+        idx.set_nonzero_mask(&[1, 2]);
 
         assert_eq!(idx.transit_buckets_out, 6..8);
         assert_eq!(
@@ -1500,7 +1652,7 @@ mod tests {
     /// sequential-offset chain would move one of these off its hardcoded value.
     #[test]
     fn state_layout_b_zero_is_byte_identical_to_pre_transit_bucket_layout() {
-        let idx = finalized(3, 2, 2, 2, vec![1, 2]);
+        let idx = finalized_resolved(3, 2, vec![1, 2]);
 
         assert_eq!(idx.n_buckets, 0);
         assert!(idx.transit_bucket_column_order.is_empty());
@@ -1522,7 +1674,12 @@ mod tests {
     /// byte-for-byte (`N=3, L=2, B=2`).
     #[test]
     fn state_layout_a_zero_collapses_to_pre_anticipated_ring_layout() {
-        let idx = finalized_with_transit_buckets(3, 2, 2, vec![(0, 1), (0, 2)], 0, 0, vec![]);
+        let idx = finalized_with_transit_buckets(
+            3,
+            2,
+            vec![(HydroSys::new(0), 1), (HydroSys::new(0), 2)],
+            vec![],
+        );
 
         assert_eq!(idx.n_anticipated, 0);
         assert_eq!(idx.k_max, 0);
@@ -1547,6 +1704,27 @@ mod tests {
         }
     }
 
+    /// `transit_bucket_plants` groups a two-plant `column_order` into each
+    /// plant's own contiguous local sub-range, and an empty order yields
+    /// nothing.
+    #[test]
+    fn transit_bucket_plants_groups_the_bucket_order_by_plant() {
+        let h1 = HydroSys::new(1);
+        let h3 = HydroSys::new(3);
+        let idx = finalized_with_transit_buckets(
+            4,
+            0,
+            vec![(h1, 1), (h1, 2), (h3, 1), (h3, 2), (h3, 3)],
+            vec![],
+        );
+
+        let groups: Vec<(HydroSys, Range<usize>)> = idx.transit_bucket_plants().collect();
+        assert_eq!(groups, vec![(h1, 0..2), (h3, 2..5)]);
+
+        let empty = finalized(4, 0, vec![]);
+        assert_eq!(empty.transit_bucket_plants().count(), 0);
+    }
+
     // ── In-LP anticipated ring: masking + collapse ─────────────
 
     /// `k_max == 0` collapses the ring to empty even when `n_anticipated > 0`
@@ -1554,8 +1732,22 @@ mod tests {
     /// `n_anticipated` alone), matching the `A * k_max == 0` layout exactly.
     #[test]
     fn anticipated_ring_k_max_zero_collapses_even_with_plants_declared() {
-        let zero_k_max = StateSpace::new(3, 2, 0, Vec::new(), 2, 0, vec![0, 0], &[2, 2, 2]);
-        let no_plants = StateSpace::new(3, 2, 0, Vec::new(), 0, 0, vec![], &[2, 2, 2]);
+        let zero_k_max = StateSpace::new(
+            3,
+            2,
+            Vec::new(),
+            vec![0, 0],
+            constant_lead_resolution(&[0, 0], 2),
+            &[2, 2, 2],
+        );
+        let no_plants = StateSpace::new(
+            3,
+            2,
+            Vec::new(),
+            vec![],
+            AnticipatedResolution::default(),
+            &[2, 2, 2],
+        );
 
         assert_eq!(zero_k_max.commit_out, 0..0);
         assert_eq!(zero_k_max.commit_in, 0..0);
@@ -1575,7 +1767,7 @@ mod tests {
     /// leading in-study block exactly once.
     #[test]
     fn commitment_hold_in_study_offset_is_delivery_target_modular_bijection() {
-        let idx = finalized(0, 0, 3, 4, vec![4, 4, 4]);
+        let idx = finalized_resolved(0, 0, vec![4, 4, 4]);
 
         for plant in 0..idx.n_anticipated {
             for m in 0..idx.k_max {
@@ -1611,7 +1803,6 @@ mod tests {
     fn two_plant_resolution_with_fixed_window(
         n_decision: usize,
         g: usize,
-        k_max: usize,
     ) -> AnticipatedResolution {
         let decider_len = n_decision + g + 1;
         let with_window = PointResolution {
@@ -1632,8 +1823,6 @@ mod tests {
         };
         AnticipatedResolution {
             per_plant: vec![with_window, without_window],
-            k_max,
-            max_fanout: 0,
         }
     }
 
@@ -1641,24 +1830,13 @@ mod tests {
     /// `k_max = 4`; plant 0 has a 3-wide excised fixed post-horizon window
     /// (`n_decision = 4`, `g = 3`); plant 1 has none.
     fn ring_axis_offset_fixture() -> StateSpace {
-        let mut idx = finalized(0, 0, 2, 4, vec![4, 4]);
-        idx.set_anticipated_resolution(two_plant_resolution_with_fixed_window(4, 3, 4));
-        idx
-    }
-
-    /// No resolution attached (`per_plant.get(plant) == None`): the excision
-    /// degrades to identity, matching the pre-excision arithmetic for every
-    /// `m`.
-    #[test]
-    fn commitment_hold_offset_is_identity_without_an_attached_resolution() {
-        let idx = finalized(0, 0, 2, 4, vec![4, 4]);
-        for m in 0..12 {
-            assert_eq!(
-                idx.commitment_hold_in_study_offset(1, m),
-                (m % 4) * 2 + 1,
-                "m={m}: no attached resolution must fall back to the raw-m identity"
-            );
-        }
+        finalized_with_transit_buckets_and_resolution(
+            0,
+            0,
+            Vec::new(),
+            vec![4, 4],
+            two_plant_resolution_with_fixed_window(4, 3),
+        )
     }
 
     /// `3 ≡ 7 mod 4` collide on the raw delivery axis, but plant 0's `g == 3`
@@ -1698,7 +1876,12 @@ mod tests {
     #[test]
     fn state_dim_ranges_partition_n_state_contiguously() {
         // N=3, L=2, B=2, A=2, k_max=2: every region non-empty.
-        let idx = finalized_with_transit_buckets(3, 2, 2, vec![(0, 1), (0, 2)], 2, 2, vec![1, 2]);
+        let idx = finalized_with_transit_buckets_resolved(
+            3,
+            2,
+            vec![(HydroSys::new(0), 1), (HydroSys::new(0), 2)],
+            vec![1, 2],
+        );
 
         let storage = idx.state_dim_storage_range();
         let lag = idx.state_dim_lag_range();
@@ -1737,7 +1920,12 @@ mod tests {
     /// with every region non-empty.
     #[test]
     fn classify_incoming_column_inverts_incoming_resolver() {
-        let idx = finalized_with_transit_buckets(3, 2, 2, vec![(0, 1), (0, 2)], 2, 2, vec![1, 2]);
+        let idx = finalized_with_transit_buckets_resolved(
+            3,
+            2,
+            vec![(HydroSys::new(0), 1), (HydroSys::new(0), 2)],
+            vec![1, 2],
+        );
         for j in 0..idx.n_state {
             let dim = StateDim::new(j);
             let (region, offset) =
@@ -1750,18 +1938,42 @@ mod tests {
         }
     }
 
+    /// `lag_state_dim` is lag-major, right after the storage region.
+    #[test]
+    fn lag_state_dim_is_lag_major_after_storage() {
+        let idx = finalized(3, 2, vec![]);
+        assert_eq!(idx.lag_state_dim(0, HydroSys::new(0)).get(), 3);
+        assert_eq!(idx.lag_state_dim(1, HydroSys::new(2)).get(), 8);
+        for l in 0..idx.max_par_order {
+            for h in 0..idx.hydro_count {
+                assert_eq!(idx.lag_state_dim(l, HydroSys::new(h)).get(), 3 + l * 3 + h);
+            }
+        }
+    }
+
     /// The purpose-named column accessors resolve to the same columns as the
     /// raw range arithmetic they replaced at the extraction and manifest
     /// seams — the byte-neutrality pin for that migration.
     #[test]
     fn typed_state_col_accessors_match_block_layout() {
-        let idx = finalized_with_transit_buckets(3, 2, 2, vec![(0, 1), (0, 2)], 2, 2, vec![1, 2]);
+        let idx = finalized_with_transit_buckets_resolved(
+            3,
+            2,
+            vec![(HydroSys::new(0), 1), (HydroSys::new(0), 2)],
+            vec![1, 2],
+        );
         for h in 0..idx.hydro_count {
-            assert_eq!(idx.storage_incoming_col(h).get(), idx.storage_in.start + h);
-            assert_eq!(idx.storage_outgoing_col(h).get(), idx.storage.start + h);
+            assert_eq!(
+                idx.storage_incoming_col(HydroSys::new(h)).get(),
+                idx.storage_in.start + h
+            );
+            assert_eq!(
+                idx.storage_outgoing_col(HydroSys::new(h)).get(),
+                idx.storage.start + h
+            );
             for lag in 0..idx.max_par_order {
                 assert_eq!(
-                    idx.lag_incoming_col(lag, h).get(),
+                    idx.lag_incoming_col(lag, HydroSys::new(h)).get(),
                     idx.inflow_lags.start + lag * idx.hydro_count + h
                 );
             }
@@ -1778,15 +1990,88 @@ mod tests {
         }
     }
 
+    /// Number of pinned addresses compared per family: `storage` covers both
+    /// storage accessors and the z-inflow lag-0 arm, one per hydro; `lag`
+    /// covers the lag ≥ 1 arm compared against `lag_incoming_col`. A
+    /// degenerate fixture (`hydro_count == 0`) cannot pass the calling test's
+    /// assertions vacuously.
+    fn count_pinned_state_columns(idx: &StateSpace) -> (usize, usize) {
+        let mut storage = 0;
+        let mut lag = 0;
+        for h in 0..idx.hydro_count {
+            assert_eq!(idx.storage_outgoing_col(HydroSys::new(h)).get(), h);
+            assert_eq!(
+                idx.storage_incoming_col(HydroSys::new(h)).get(),
+                idx.storage_in.start + h
+            );
+            assert_eq!(
+                idx.state_to_lp_column(idx.lag_state_dim(0, HydroSys::new(h)))
+                    .get(),
+                idx.z_inflow.start + h
+            );
+            assert_eq!(
+                idx.z_inflow_col(HydroSys::new(h)).get(),
+                idx.z_inflow.start + h
+            );
+            storage += 1;
+            for l in 1..idx.max_par_order {
+                assert_eq!(
+                    idx.state_to_lp_column(idx.lag_state_dim(l, HydroSys::new(h)))
+                        .get(),
+                    idx.lag_incoming_col(l - 1, HydroSys::new(h)).get()
+                );
+                lag += 1;
+            }
+        }
+        (storage, lag)
+    }
+
+    /// The builder's exact storage/z-inflow/AR-lag column spellings — the
+    /// migration pin for routing them through [`StateSpace`]'s own accessors
+    /// instead of hand address arithmetic.
+    #[test]
+    fn builder_state_column_spellings_match_the_state_space() {
+        for idx in [
+            finalized(3, 2, vec![]),
+            finalized_with_transit_buckets_resolved(
+                3,
+                2,
+                vec![(HydroSys::new(0), 1), (HydroSys::new(0), 2)],
+                vec![1, 2],
+            ),
+        ] {
+            let (storage, lag) = count_pinned_state_columns(&idx);
+            assert!(storage > 0 && lag > 0);
+            assert_eq!(
+                idx.inflow_lags,
+                idx.inflow_lags.start..idx.inflow_lags.start + idx.max_par_order * idx.hydro_count
+            );
+            assert_eq!(idx.z_inflow.len(), idx.hydro_count);
+        }
+    }
+
+    #[test]
+    fn z_inflow_rows_lead_the_row_space_one_per_hydro() {
+        let idx = finalized(5, 2, vec![]);
+        assert_eq!(idx.z_inflow_rows(), 0..idx.hydro_count);
+        for h in 0..idx.hydro_count {
+            assert_eq!(idx.z_inflow_row(HydroSys::new(h)), h);
+        }
+    }
+
     /// The two commitment-hold column resolvers resolve to the exact columns the
     /// extraction sites recomposed by hand — `commit_in.start + offset` (incoming,
     /// pinned) and `commit_out.start + offset` (outgoing) — for every ring-member
     /// delivery target, the byte-neutrality pin for that migration.
     #[test]
     fn commitment_hold_col_accessors_match_extraction_recomposition() {
-        let mut idx =
-            finalized_with_transit_buckets(3, 2, 2, vec![(0, 1), (0, 2)], 2, 4, vec![1, 2]);
-        idx.set_anticipated_resolution(two_plant_resolution_with_fixed_window(4, 3, 4));
+        let idx = finalized_with_transit_buckets_and_resolution(
+            3,
+            2,
+            vec![(HydroSys::new(0), 1), (HydroSys::new(0), 2)],
+            vec![1, 2],
+            two_plant_resolution_with_fixed_window(4, 3),
+        );
         for plant in 0..idx.n_anticipated {
             for m in 0..idx.k_max {
                 let offset = idx.commitment_hold_in_study_offset(plant, m);
@@ -1804,12 +2089,12 @@ mod tests {
         }
     }
 
-    // ── delivery_stage_count tests ────────────────────────────────────────
+    // ── n_delivery tests ────────────────────────────────────────
 
     /// Build an [`AnticipatedResolution`] whose single plant's `decider` has
-    /// `decider_len` entries — the only field [`StateSpace::set_anticipated_resolution`]
-    /// reads to derive `n_delivery`.
-    fn single_plant_resolution(decider_len: usize, k_max: usize) -> AnticipatedResolution {
+    /// `decider_len` entries — the only field [`StateSpace::n_delivery`]
+    /// reads.
+    fn single_plant_resolution(decider_len: usize) -> AnticipatedResolution {
         AnticipatedResolution {
             per_plant: vec![PointResolution {
                 decider: vec![None; decider_len],
@@ -1817,45 +2102,42 @@ mod tests {
                 depth: Vec::new(),
                 occupancy: Vec::new(),
             }],
-            k_max,
-            max_fanout: 0,
         }
     }
 
-    /// No resolution attached (`n_delivery == 0`): `delivery_stage_count`
-    /// falls back to the caller's `n_stages`.
+    /// An attached resolution whose single plant's `decider` extends past the
+    /// study horizon: `n_delivery` returns the extended decider length.
     #[test]
-    fn delivery_stage_count_no_resolution_falls_back_to_n_stages() {
-        let idx = StateSpace::new(0, 0, 0, Vec::new(), 1, 2, vec![2], &[]);
-        assert_eq!(idx.delivery_stage_count(5), 5);
+    fn n_delivery_returns_the_attached_resolutions_extended_decider_length() {
+        let idx = finalized_with_transit_buckets_and_resolution(
+            0,
+            0,
+            Vec::new(),
+            vec![2],
+            single_plant_resolution(12),
+        );
+        assert_eq!(idx.n_delivery(), 12);
     }
 
-    /// An attached resolution whose single plant's `decider` is wider than
-    /// `n_stages`: `delivery_stage_count` returns the wider delivery-axis
-    /// width.
+    /// A study-only resolution: `n_delivery` returns exactly the decider
+    /// length.
     #[test]
-    fn delivery_stage_count_extended_resolution_returns_wider_delivery_axis() {
-        let mut idx = finalized(0, 0, 1, 2, vec![2]);
-        idx.set_anticipated_resolution(single_plant_resolution(12, 2));
-        assert_eq!(idx.delivery_stage_count(6), 12);
+    fn n_delivery_returns_the_attached_resolutions_study_only_decider_length() {
+        let idx = finalized_with_transit_buckets_and_resolution(
+            0,
+            0,
+            Vec::new(),
+            vec![2],
+            single_plant_resolution(4),
+        );
+        assert_eq!(idx.n_delivery(), 4);
     }
 
-    /// A study-only resolution whose `decider` length equals `n_stages`:
-    /// `delivery_stage_count` returns exactly the caller's value.
+    /// A zero-anticipated study (empty `per_plant`): `n_delivery` is `0`, and
+    /// the per-plant decider-length-agreement `debug_assert` does not fire.
     #[test]
-    fn delivery_stage_count_study_only_resolution_matches_caller_value() {
-        let mut idx = finalized(0, 0, 1, 2, vec![2]);
-        idx.set_anticipated_resolution(single_plant_resolution(4, 2));
-        assert_eq!(idx.delivery_stage_count(4), 4);
-    }
-
-    /// An attached resolution with no plants (`per_plant` empty):
-    /// `delivery_stage_count` falls back to `n_stages`, and the per-plant
-    /// decider-length-agreement `debug_assert` does not fire.
-    #[test]
-    fn delivery_stage_count_empty_per_plant_falls_back_to_n_stages() {
-        let mut idx = finalized(0, 0, 0, 0, vec![]);
-        idx.set_anticipated_resolution(AnticipatedResolution::default());
-        assert_eq!(idx.delivery_stage_count(3), 3);
+    fn n_delivery_is_zero_without_anticipated_plants() {
+        let idx = finalized(0, 0, vec![]);
+        assert_eq!(idx.n_delivery(), 0);
     }
 }

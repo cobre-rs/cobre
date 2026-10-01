@@ -1,6 +1,18 @@
 //! `fpha_structure` section tests.
 
 use super::*;
+use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
+
+fn empty_cut_batch() -> RowBatch {
+    RowBatch {
+        num_rows: 0,
+        row_starts: vec![0_i32],
+        col_indices: vec![],
+        values: vec![],
+        row_lower: vec![],
+        row_upper: vec![],
+    }
+}
 
 #[test]
 fn fpha_ac1_dimensions_one_fpha_hydro_five_planes() {
@@ -183,7 +195,7 @@ fn fpha_ac5_mixed_system_load_balance_uses_generation_col() {
     );
     assert_eq!(
         tmpl.num_rows, 31,
-        "4-hydro mixed system: num_rows should be 31 (Phase 1: state-fixing rows removed)"
+        "4-hydro mixed system: num_rows should be 31 (no state-fixing rows)"
     );
 
     let row_lb = 8_usize; // N z_inflow(4) + N water balance(4) + bus_blk_idx(0)
@@ -225,8 +237,6 @@ fn fpha_ac5_mixed_system_load_balance_uses_generation_col() {
 
 #[test]
 fn fpha_solve_one_hydro_optimal() {
-    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
-
     let (system, production) = fpha_solve_system();
     let result = build_stage_templates_resolving_layout(
         &system,
@@ -242,16 +252,7 @@ fn fpha_solve_one_hydro_optimal() {
     let template = &result.templates[0];
     let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
     solver.load_model(template);
-
-    let empty_cuts = RowBatch {
-        num_rows: 0,
-        row_starts: vec![0_i32],
-        col_indices: vec![],
-        values: vec![],
-        row_lower: vec![],
-        row_upper: vec![],
-    };
-    solver.add_rows(&empty_cuts);
+    solver.add_rows(&empty_cut_batch());
 
     let v_in = 100.0_f64;
     solver.set_row_bounds(&[0], &[v_in], &[v_in]);
@@ -273,8 +274,6 @@ fn fpha_solve_one_hydro_optimal() {
 /// `v_avg = (v + v_in) / 2`.
 #[test]
 fn fpha_solve_hyperplane_constraints_hold() {
-    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
-
     let (system, production) = fpha_solve_system();
 
     // Extract planes before moving production into build_stage_templates_resolving_layout.
@@ -299,16 +298,7 @@ fn fpha_solve_hyperplane_constraints_hold() {
     let template = &result.templates[0];
     let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
     solver.load_model(template);
-
-    let empty_cuts = RowBatch {
-        num_rows: 0,
-        row_starts: vec![0_i32],
-        col_indices: vec![],
-        values: vec![],
-        row_lower: vec![],
-        row_upper: vec![],
-    };
-    solver.add_rows(&empty_cuts);
+    solver.add_rows(&empty_cut_batch());
 
     let v_in = 100.0_f64;
     solver.set_row_bounds(&[0], &[v_in], &[v_in]);
@@ -344,7 +334,7 @@ fn fpha_solve_hyperplane_constraints_hold() {
     }
 }
 
-/// The storage-fixing dual (reduced cost of the pinned `storage_in` column)
+/// The reduced cost of the pinned `storage_in` column
 /// differs between FPHA and constant productivity. The `-gamma_v/2` FPHA entries
 /// on the `v_in` column propagate through the simplex dual to that reduced cost.
 ///
@@ -360,9 +350,7 @@ fn fpha_solve_hyperplane_constraints_hold() {
 /// lowers cost → FPHA dual < 0. Constant productivity gives `rho`=0
 /// (`default_from_system`), generation is `v_in`-independent → dual = 0.
 #[test]
-fn fpha_solve_storage_fixing_dual_differs_from_constant() {
-    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
-
+fn fpha_solve_incoming_storage_reduced_cost_differs_from_constant() {
     let (system, _) = one_fpha_hydro_system(1);
 
     let tight_planes = vec![FphaPlane {
@@ -375,7 +363,7 @@ fn fpha_solve_storage_fixing_dual_differs_from_constant() {
         vec![vec![ResolvedProductionModel::Fpha {
             planes: tight_planes,
         }]],
-        1,
+        system.hydros(),
         1,
     );
 
@@ -405,15 +393,7 @@ fn fpha_solve_storage_fixing_dual_differs_from_constant() {
     let solve_and_get_storage_dual = |template: &cobre_solver::StageTemplate| -> f64 {
         let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
         solver.load_model(template);
-        let empty_cuts = RowBatch {
-            num_rows: 0,
-            row_starts: vec![0_i32],
-            col_indices: vec![],
-            values: vec![],
-            row_lower: vec![],
-            row_upper: vec![],
-        };
-        solver.add_rows(&empty_cuts);
+        solver.add_rows(&empty_cut_batch());
         // Storage is pinned via column bounds: col 0 = storage_out, 1 = z_inflow, 2 = storage_in.
         let col_storage_in = 2_usize;
         let v_in = 100.0_f64;
@@ -432,22 +412,20 @@ fn fpha_solve_storage_fixing_dual_differs_from_constant() {
 
     assert!(
         fpha_dual.abs() > 1e-6,
-        "FPHA storage-fixing dual must be non-zero (FPHA v_in contribution \
+        "FPHA incoming-storage reduced cost must be non-zero (FPHA v_in contribution \
          must be present), got {fpha_dual}"
     );
 
     assert_ne!(
         (fpha_dual * 1e6).round(),
         (const_dual * 1e6).round(),
-        "storage-fixing dual must differ between FPHA ({fpha_dual}) and \
+        "incoming-storage reduced cost must differ between FPHA ({fpha_dual}) and \
          constant-productivity ({const_dual})"
     );
 }
 
 #[test]
 fn fpha_solve_mixed_system_optimal() {
-    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface};
-
     let (system, production) = four_hydro_mixed_system();
 
     let result = build_stage_templates_resolving_layout(
@@ -464,16 +442,7 @@ fn fpha_solve_mixed_system_optimal() {
     let template = &result.templates[0];
     let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
     solver.load_model(template);
-
-    let empty_cuts = RowBatch {
-        num_rows: 0,
-        row_starts: vec![0_i32],
-        col_indices: vec![],
-        values: vec![],
-        row_lower: vec![],
-        row_upper: vec![],
-    };
-    solver.add_rows(&empty_cuts);
+    solver.add_rows(&empty_cut_batch());
 
     solver.set_row_bounds(
         &[0, 1, 2, 3],

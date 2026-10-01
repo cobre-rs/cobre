@@ -2,12 +2,12 @@
 
 Every policy load (warm-start, resume, simulation-only, `Study.load_policy`) now
 routes unconditionally through the shared `cobre_sddp::validate_policy_load`
-entry point -- there is no per-call opt-out. This module verifies the two
-Python-facing consequences: the removed opt-out kwarg raises
-`TypeError`, and a policy whose terminal entity manifest disagrees with the
-current study (same state dimension, different hydro id) raises `ValueError`.
-The compatible-load path is already exercised by
-`test_load_policy_then_simulate_matches_run` in `test_study.py`.
+entry point -- there is no per-call opt-out. This module verifies the
+Python-facing consequences of the unified validation path: the removed opt-out
+kwarg raises `TypeError`, a policy whose terminal entity manifest disagrees with
+the current study raises `ValueError`, and policy version mismatch and stored-basis
+dimension mismatch raise `PolicyIncompatibleError`. The compatible-load path is
+already exercised by `test_load_policy_then_simulate_matches_run` in `test_study.py`.
 
 Run with (from the repo root):
     pytest crates/cobre-python/tests/test_policy_load_validation.py
@@ -83,6 +83,58 @@ def _copy_case_with_renamed_hydro(
     pq.write_table(table, inflow_path, compression="zstd")
 
 
+def _copy_case_with_extra_thermal(src: pathlib.Path, dest: pathlib.Path) -> None:
+    """Copy `src` into `dest`, adding a third thermal on the same bus as its
+    existing two (a new id, a cost above them).
+
+    Thermals add LP columns but no state, so a policy trained on this variant
+    passes every `validate_policy_load` check against `src` (same state
+    dimension, stage count, pools and slot manifest) and reaches the
+    stored-basis dimension check.
+    """
+    for item in src.iterdir():
+        target = dest / item.name
+        if item.is_dir():
+            shutil.copytree(item, target)
+        else:
+            shutil.copy2(item, target)
+
+    thermals_path = dest / "system" / "thermals.json"
+    thermals = json.loads(thermals_path.read_text())
+    existing = thermals["thermals"]
+    new_id = max(t["id"] for t in existing) + 1
+    max_cost = max(t["cost_per_mwh"] for t in existing)
+    bus_id = existing[0]["bus_id"]
+    existing.append(
+        {
+            "id": new_id,
+            "name": "UTE_EXTRA",
+            "operational_start_date": "2020-01-01",
+            "bus_id": bus_id,
+            "generation": {"min_mw": 0.0, "max_mw": 15.0},
+            "cost_per_mwh": max_cost + 10.0,
+        }
+    )
+    thermals_path.write_text(json.dumps(thermals))
+
+
+def _restamp_policy_version(policy_dir: pathlib.Path) -> str:
+    """Rewrite the cobre version in ``policy_dir/manifest.bin`` to another
+    string of the same byte length (the FlatBuffers string keeps its layout;
+    the manifest carries no checksum) and return it."""
+    import cobre  # noqa: PLC0415
+
+    manifest = policy_dir / "manifest.bin"
+    data = manifest.read_bytes()
+    running = cobre.__version__.encode()
+    assert data.count(running) == 1, (
+        "the running version must occur once in manifest.bin"
+    )
+    other = (b"8" if running.startswith(b"9") else b"9") + running[1:]
+    manifest.write_bytes(data.replace(running, other))
+    return other.decode()
+
+
 def test_load_policy_removed_optout_kwarg_raises_typeerror(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -128,3 +180,66 @@ def test_load_policy_mismatched_entity_manifest_raises_valueerror(
 
     with pytest.raises(ValueError, match="policy validation error"):
         study.load_policy(output_dir=str(mismatched_run_dir))
+
+
+def test_load_policy_written_by_another_version_raises_policy_incompatible(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A policy checkpoint recording a cobre version other than the running
+    one raises `PolicyIncompatibleError`, naming both versions.
+    """
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+
+    run_dir = tmp_path / "run"
+    cobre.run.run(VALID_CASE, output_dir=str(run_dir))
+
+    study = cobre.Study(VALID_CASE, output_dir=str(tmp_path / "study_dir"))
+    study.load_policy(output_dir=str(run_dir))
+
+    other_version = _restamp_policy_version(run_dir / "policy")
+
+    fresh_study = cobre.Study(
+        VALID_CASE, output_dir=str(tmp_path / "fresh_study_dir")
+    )
+    with pytest.raises(
+        cobre.errors.PolicyIncompatibleError,
+        match=f"written by cobre {other_version}",
+    ) as exc_info:
+        fresh_study.load_policy(output_dir=str(run_dir))
+
+    assert cobre.__version__ in str(exc_info.value), (
+        f"expected the running version in the message: {exc_info.value}"
+    )
+
+
+def test_load_policy_wider_stored_basis_raises_policy_incompatible(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A policy trained with an extra thermal (wider LP columns, identical
+    state) is refused when loaded into the original 1dtoy: the stored
+    basis's column count no longer matches its node's LP template.
+    """
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+
+    variant_case = tmp_path / "variant_case"
+    variant_case.mkdir()
+    _copy_case_with_extra_thermal(pathlib.Path(VALID_CASE), variant_case)
+
+    variant_run_dir = tmp_path / "variant_run"
+    cobre.run.run(
+        str(variant_case),
+        output_dir=str(variant_run_dir),
+        config_overrides={
+            "training.stopping_rules": [{"type": "iteration_limit", "limit": 2}],
+            "simulation.enabled": False,
+        },
+    )
+
+    study = cobre.Study(VALID_CASE, output_dir=str(tmp_path / "study_dir"))
+
+    with pytest.raises(
+        cobre.errors.PolicyIncompatibleError, match="stored basis for node"
+    ):
+        study.load_policy(output_dir=str(variant_run_dir))

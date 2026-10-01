@@ -76,9 +76,9 @@ fn table_for_spec(spec: FreshNoiseSpec) -> Result<NoiseTable, StochasticError> {
     Ok(tables.table_at(0).cloned().unwrap_or(NoiseTable::Direct))
 }
 
-/// Fill `output[0..spec.dim]` with independent N(0,1) noise, omitting the
-/// spectral correlation step that [`sample_fresh`] applies — the composite
-/// `ForwardSampler` correlates afterward, once all class segments are filled.
+/// Fill `output[0..spec.dim]` with independent, uncorrelated N(0,1) noise —
+/// the composite `ForwardSampler` correlates afterward, once all class
+/// segments are filled.
 ///
 /// # Errors
 ///

@@ -76,7 +76,7 @@ mod boundary_cuts {
         let study_stage_end_dates = ascending_stage_end_dates(fcf.pools.len());
         let stage_cuts = build_stage_cuts_payloads(
             fcf,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &study_stage_ids,
             &study_stage_end_dates,
             1_000_000.0,
@@ -85,8 +85,13 @@ mod boundary_cuts {
             &stage_manifests,
         );
         let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases =
-            build_stage_basis_records(fcf, result, &setup.node_graph, &basis_col, &basis_row);
+        let stage_bases = build_stage_basis_records(
+            fcf,
+            result,
+            &setup.inputs.node_graph,
+            &basis_col,
+            &basis_row,
+        );
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,
@@ -140,7 +145,7 @@ mod boundary_cuts {
         let config_path = case_dir.join("config.json");
         let config = cobre_io::parse_config(&config_path).expect("config");
 
-        let mut config_5iter = config.clone();
+        let mut config_5iter = config;
         config_5iter.training.stopping_rules =
             Some(vec![StoppingRuleConfig::IterationLimit { limit: 5 }]);
 
@@ -184,11 +189,12 @@ mod boundary_cuts {
             !boundary_records.is_empty(),
             "source stage must have cuts after training"
         );
-        cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records);
+        cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records).unwrap();
 
-        let terminal_pool = &setup_c.fcf.pools[num_stages - 1];
+        let terminal_pool_id = setup_c.inputs.node_graph.terminal_pool(num_stages).unwrap();
+        let terminal_pool = &setup_c.fcf.pools[terminal_pool_id];
         assert!(
-            terminal_pool.warm_start_count > 0,
+            terminal_pool.has_warm_start_cuts(),
             "terminal pool must have boundary cuts"
         );
         assert!(
@@ -217,7 +223,7 @@ mod boundary_cuts {
         let config_path = case_dir.join("config.json");
         let config = cobre_io::parse_config(&config_path).expect("config");
 
-        let mut config_5iter = config.clone();
+        let mut config_5iter = config;
         config_5iter.training.stopping_rules =
             Some(vec![StoppingRuleConfig::IterationLimit { limit: 5 }]);
 
@@ -575,7 +581,7 @@ mod cut_subgradient_parity {
         let models = vec![vec![ResolvedProductionModel::Fpha {
             planes: vec![plane],
         }]];
-        ProductionModelSet::new(models, 1, 1)
+        ProductionModelSet::new(models, &cobre_sddp::test_support::minimal_hydros(1), 1)
     }
 
     fn fpha_evap_evaporation() -> EvaporationModelSet {
@@ -619,13 +625,6 @@ mod cut_subgradient_parity {
         assert_eq!(
             template.n_state, 1,
             "N=1, L=0: n_state must be 1 (storage only, no lags)"
-        );
-
-        // Guards ROW_WATER_BALANCE: with no state-fixing prefix (storage_fixing =
-        // 0..0), water-balance is at row 1 (z_inflow at row 0).
-        assert_eq!(
-            result.base_rows[0], 1,
-            "Phase 1: water-balance must be at row 1 (z_inflow at row 0, no state-fixing prefix)"
         );
 
         let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
@@ -1621,7 +1620,7 @@ mod warm_start {
         let study_stage_end_dates = ascending_stage_end_dates(fcf.pools.len());
         let stage_cuts = build_stage_cuts_payloads(
             fcf,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &study_stage_ids,
             &study_stage_end_dates,
             1_000_000.0,
@@ -1630,8 +1629,13 @@ mod warm_start {
             &stage_manifests,
         );
         let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases =
-            build_stage_basis_records(fcf, result, &setup.node_graph, &basis_col, &basis_row);
+        let stage_bases = build_stage_basis_records(
+            fcf,
+            result,
+            &setup.inputs.node_graph,
+            &basis_col,
+            &basis_row,
+        );
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,
@@ -2776,7 +2780,7 @@ mod range_warm_start_determinism {
         let study_stage_end_dates = ascending_stage_end_dates(fcf.pools.len());
         let stage_cuts = build_stage_cuts_payloads(
             fcf,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
             &study_stage_ids,
             &study_stage_end_dates,
             1_000_000.0,
@@ -2785,8 +2789,13 @@ mod range_warm_start_determinism {
             &stage_manifests,
         );
         let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases =
-            build_stage_basis_records(fcf, result, &setup.node_graph, &basis_col, &basis_row);
+        let stage_bases = build_stage_basis_records(
+            fcf,
+            result,
+            &setup.inputs.node_graph,
+            &basis_col,
+            &basis_row,
+        );
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,

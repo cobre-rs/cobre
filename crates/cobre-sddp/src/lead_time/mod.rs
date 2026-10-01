@@ -235,39 +235,38 @@ fn resolve_delivery(
     );
 
     let mut arrival_density = Vec::with_capacity(stage_reach);
-    let mut stage_start = 0.0_f64;
+    let mut stage_start = future_calendar[0];
 
-    for (d, &stage_len) in future_calendar[..=stage_reach].iter().enumerate() {
+    for (d, &stage_len) in future_calendar[1..=stage_reach].iter().enumerate() {
         let stage_end = stage_start + stage_len;
-        if d >= 1 {
-            let blocks = arrival_blocks[d - 1];
-            if let Some(partition) = blocks {
-                debug_assert!(
-                    (partition.iter().sum::<f64>() - stage_len).abs() < 1e-9,
-                    "an arrival-stage block partition must sum to that stage's own length"
-                );
-            }
-
-            let overlap_start = window_start.max(stage_start);
-            let overlap_end = window_end.min(stage_end);
-            let width = (overlap_end - overlap_start).max(0.0);
-
-            let row = if width > 0.0 {
-                let local_start = overlap_start - stage_start;
-                blocks.map_or_else(
-                    || vec![1.0],
-                    |partition| {
-                        window_period_overlaps(local_start, width, partition)
-                            .iter()
-                            .map(|&overlap| overlap / width)
-                            .collect()
-                    },
-                )
-            } else {
-                Vec::new()
-            };
-            arrival_density.push(row);
+        let blocks = arrival_blocks[d];
+        if let Some(partition) = blocks {
+            debug_assert!(
+                (partition.iter().sum::<f64>() - stage_len).abs() < 1e-9,
+                "an arrival-stage block partition must sum to that stage's own length"
+            );
         }
+
+        let overlap_start = window_start.max(stage_start);
+        let overlap_end = window_end.min(stage_end);
+        let width = (overlap_end - overlap_start).max(0.0);
+
+        let row = if width > 0.0 {
+            let local_start = overlap_start - stage_start;
+            blocks.map_or_else(
+                || vec![1.0],
+                |partition| {
+                    window_period_overlaps(local_start, width, partition)
+                        .iter()
+                        .map(|&overlap| overlap / width)
+                        .collect()
+                },
+            )
+        } else {
+            Vec::new()
+        };
+        arrival_density.push(row);
+
         stage_start = stage_end;
     }
 
@@ -280,7 +279,7 @@ fn resolve_delivery(
 /// which instead reuses the anchor's own partition at every reached lag.
 /// Lets a caller blend several source stages' deliveries into one arrival
 /// stage's own frame regardless of each source's own block mode
-/// (`setup::bucket_topology::build_arc_arrival_density`). `target_blocks` is
+/// (`crate::bucket_topology::build_arc_arrival_density`). `target_blocks` is
 /// `None` for a parallel target (the single `1.0` row).
 ///
 /// # Panics
@@ -330,30 +329,33 @@ pub enum LeadTime {
 }
 
 /// The delivery-vs-decision domain split for [`resolve_point`]: the decision
-/// axis `[0, n_decision)` is a prefix of the delivery axis `[0, n_delivery)`
-/// (`n_decision <= n_delivery`). `n_delivery` is explicit rather than derived
-/// from `stage_lengths_hours.len()`, so a [`LeadTime::Stages`] empty calendar
-/// keeps its full delivery domain. Built by struct literal (never a positional
-/// `new`) so a `n_decision`/`n_delivery` transposition is a field-name error at
-/// the call site, not a silent argument swap.
+/// axis `[0, n_decision())` is a prefix of the delivery axis
+/// `[0, n_delivery())`. `n_decision() <= n_delivery()` holds by construction
+/// — `n_delivery()` sums both slices' lengths, never a separately supplied
+/// count — mirroring [`crate::time_value::DeliveryCalendar`]. Built by struct
+/// literal (never a positional `new`) so a `study`/`post_study` transposition
+/// is a field-name error at the call site, not a silent argument swap.
 #[derive(Debug, Clone, Copy)]
 pub struct DeliveryAxis<'a> {
-    /// Delivery calendar's per-stage total hours: length `n_delivery` in
-    /// [`LeadTime::Time`] mode, unconstrained (typically empty) in
-    /// [`LeadTime::Stages`] mode.
-    pub stage_lengths_hours: &'a [f64],
-    /// In-study (decision) stage count.
-    pub n_decision: usize,
-    /// Delivery-stage count, `>= n_decision`.
-    pub n_delivery: usize,
+    /// Study (in-horizon decision) calendar's per-stage total hours.
+    pub study_stage_hours: &'a [f64],
+    /// Post-study continuation calendar's per-stage total hours; empty with
+    /// no post-study calendar declared. [`LeadTime::Stages`] never reads
+    /// either slice's values.
+    pub post_study_stage_hours: &'a [f64],
 }
 
 impl DeliveryAxis<'_> {
-    fn debug_assert_well_formed(self) {
-        debug_assert!(
-            self.n_decision <= self.n_delivery,
-            "n_decision must not exceed n_delivery (decision axis is a delivery-axis prefix)"
-        );
+    /// In-study (decision) stage count.
+    #[must_use]
+    pub fn n_decision(self) -> usize {
+        self.study_stage_hours.len()
+    }
+
+    /// Delivery-stage count, `>= n_decision()`.
+    #[must_use]
+    pub fn n_delivery(self) -> usize {
+        self.study_stage_hours.len() + self.post_study_stage_hours.len()
     }
 }
 
@@ -527,27 +529,21 @@ impl PointResolution {
 /// per-decision-stage outgoing commitment sets, and the per-decision-stage
 /// depths.
 ///
-/// `axis.stage_lengths_hours` must have length `axis.n_delivery`;
-/// [`LeadTime::Stages`] never reads it.
-///
 /// # Panics
 ///
-/// Debug builds panic if `axis.n_decision > axis.n_delivery`, if
-/// `axis.stage_lengths_hours.len() != axis.n_delivery` in [`LeadTime::Time`]
-/// mode, if a stage length or the lead time is not finite and positive, or if a
-/// delivery stage decided in-study (decider `Some(t)`, `t < axis.n_decision`)
-/// fails to appear in its own decision set.
+/// Debug builds panic if a stage length or the lead time is not finite and
+/// positive, or if a delivery stage decided in-study (decider `Some(t)`,
+/// `t < axis.n_decision()`) fails to appear in its own decision set.
 #[must_use]
 pub fn resolve_point(lag: LeadTime, axis: DeliveryAxis<'_>) -> PointResolution {
-    axis.debug_assert_well_formed();
     let decider = match lag {
-        LeadTime::Time(delta_hours) => {
-            resolve_decider_physical(delta_hours, axis.stage_lengths_hours, axis.n_delivery)
+        LeadTime::Time(delta_hours) => resolve_decider_physical(delta_hours, axis),
+        LeadTime::Stages(lead_stages) => {
+            resolve_decider_stage_count(lead_stages, axis.n_delivery())
         }
-        LeadTime::Stages(lead_stages) => resolve_decider_stage_count(lead_stages, axis.n_delivery),
     };
     let (decision_sets, depth, occupancy) =
-        build_decision_sets_and_depth(&decider, axis.n_decision);
+        build_decision_sets_and_depth(&decider, axis.n_decision());
 
     PointResolution {
         decider,
@@ -565,25 +561,43 @@ pub fn resolve_point(lag: LeadTime, axis: DeliveryAxis<'_>) -> PointResolution {
 /// per-plant `anticipated_lead_stages`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AnticipatedResolution {
-    /// One [`PointResolution`] per anticipated plant, in anticipated-local
-    /// (`anticipated_thermal_indices`) order.
+    /// One [`PointResolution`] per anticipated plant, in
+    /// [`crate::indexer::AnticipatedPlants`] order.
     pub per_plant: Vec<PointResolution>,
-    /// Delivery-anchored ring depth `max_i ring_depth_i` over every plant (see
-    /// [`PointResolution::ring_depth`], the single owner of the depth formula);
-    /// `0` with no anticipated plants.
-    pub k_max: usize,
-    /// Fan-out width `max_i max_t |genuine C_i(t)|` (bounded by [`Self::k_max`]
-    /// — a decision set's genuine members are a subset of the plant's in-flight
-    /// count at `t`): the decision-column geometry's per-plant stride,
-    /// `col_anticipated_decision_start + j * n_anticipated + local_idx` for
-    /// `j in 0..max_fanout`. `1` for a single-decider study (`|C(t)| <= 1`
-    /// everywhere), `0` with no anticipated plants.
-    pub max_fanout: usize,
 }
 
 impl AnticipatedResolution {
-    /// Resolve every plant's point-commitment lag against the delivery axis and
-    /// derive the ring depth and fan-out width.
+    /// Delivery-anchored ring depth `max_i ring_depth_i` over every plant (see
+    /// [`PointResolution::ring_depth`], the single owner of the depth formula);
+    /// `0` with no anticipated plants.
+    #[must_use]
+    pub fn anchored_depth(&self) -> usize {
+        self.per_plant
+            .iter()
+            .map(PointResolution::ring_depth)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Fan-out width `max_i max_t |genuine C_i(t)|` (bounded by
+    /// [`Self::anchored_depth`] — a decision set's genuine members are a
+    /// subset of the plant's in-flight count at `t`): the decision-column
+    /// geometry's per-plant stride,
+    /// `col_anticipated_decision_start + j * n_anticipated + local_idx` for
+    /// `j in 0..max_fanout`. `1` for a single-decider study (`|C(t)| <= 1`
+    /// everywhere), `0` with no anticipated plants.
+    #[must_use]
+    pub fn max_fanout(&self) -> usize {
+        self.per_plant
+            .iter()
+            .flat_map(|point| {
+                (0..point.decision_sets.len()).map(|t| point.genuine_decisions_at(t).count())
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Resolve every plant's point-commitment lag against the delivery axis.
     ///
     /// `leads` is in anticipated-local order; `axis` carries the delivery
     /// calendar and the decision/delivery stage counts ([`LeadTime::Stages`]
@@ -596,30 +610,27 @@ impl AnticipatedResolution {
             .iter()
             .map(|&lead| resolve_point(lead, axis))
             .collect();
-        let k_max = per_plant
-            .iter()
-            .map(PointResolution::ring_depth)
-            .max()
-            .unwrap_or(0);
-        let max_fanout = per_plant
-            .iter()
-            .flat_map(|point| (0..axis.n_decision).map(|t| point.genuine_decisions_at(t).count()))
-            .max()
-            .unwrap_or(0);
-        Self {
-            per_plant,
-            k_max,
-            max_fanout,
-        }
+        Self { per_plant }
+    }
+
+    /// Widens [`Self::anchored_depth`] to cover the deepest of `lead_stages`.
+    #[must_use]
+    pub(crate) fn ring_size(&self, lead_stages: &[usize]) -> usize {
+        self.anchored_depth()
+            .max(lead_stages.iter().copied().max().unwrap_or(0))
     }
 }
 
 /// Cumulative stage-end boundaries `S_0 = 0, S_1, .., S_n` on the hour clock.
-fn cumulative_stage_boundaries(stage_lengths_hours: &[f64]) -> Vec<f64> {
-    let mut boundaries = Vec::with_capacity(stage_lengths_hours.len() + 1);
+fn cumulative_stage_boundaries(axis: DeliveryAxis<'_>) -> Vec<f64> {
+    let mut boundaries = Vec::with_capacity(axis.n_delivery() + 1);
     let mut cumulative = 0.0_f64;
     boundaries.push(cumulative);
-    for &length in stage_lengths_hours {
+    for &length in axis
+        .study_stage_hours
+        .iter()
+        .chain(axis.post_study_stage_hours)
+    {
         debug_assert!(
             length.is_finite() && length > 0.0,
             "every stage length must be finite and > 0.0"
@@ -635,22 +646,14 @@ fn cumulative_stage_boundaries(stage_lengths_hours: &[f64]) -> Vec<f64> {
 /// sub-stage lead (`Δ < h_m`) gives `c(m) = m`; a start-anchored `start_m −
 /// Δ` could never reach that. `None` when the target precedes the
 /// horizon start.
-fn resolve_decider_physical(
-    delta_hours: f64,
-    stage_lengths_hours: &[f64],
-    n_delivery: usize,
-) -> Vec<Option<usize>> {
+fn resolve_decider_physical(delta_hours: f64, axis: DeliveryAxis<'_>) -> Vec<Option<usize>> {
     debug_assert!(
         delta_hours.is_finite() && delta_hours > 0.0,
         "delta_hours must be finite and > 0.0"
     );
-    debug_assert_eq!(
-        stage_lengths_hours.len(),
-        n_delivery,
-        "stage_lengths_hours must cover every delivery stage in physical mode"
-    );
 
-    let boundaries = cumulative_stage_boundaries(stage_lengths_hours);
+    let boundaries = cumulative_stage_boundaries(axis);
+    let n_delivery = axis.n_delivery();
 
     (0..n_delivery)
         .map(|m| {

@@ -126,21 +126,25 @@ fn single_node_source_injects_into_the_one_pool_every_terminal_fan_leaf_shares()
     let fixture = k_fan_setup(3, 2, 5);
     let mut setup = fixture.setup;
 
-    let leaves = leaf_positions(&setup.node_graph);
+    let leaves = leaf_positions(&setup.inputs.node_graph);
     assert_eq!(
         leaves.len(),
         fixture.k,
         "the fixture must declare a genuine multi-node terminal fan"
     );
     assert!(
-        setup.node_graph.nodes.len() > setup.node_graph.n_pools,
+        setup.inputs.node_graph.nodes.len() > setup.inputs.node_graph.n_pools,
         "the fan must have more nodes than pools, or leaf-pool-sharing has no work to do"
     );
 
-    let terminal_idx = setup.fcf.pools.len() - 1;
+    let terminal_idx = setup
+        .inputs
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .expect("the fanned target must carry a terminal pool");
     let leaf_pool_ids: Vec<usize> = leaves
         .iter()
-        .map(|&pos| setup.node_graph.nodes[pos].pool_id)
+        .map(|&pos| setup.inputs.node_graph.nodes[pos].pool_id)
         .collect();
     assert!(
         leaf_pool_ids.iter().all(|&p| p == terminal_idx),
@@ -175,11 +179,15 @@ fn single_node_source_injects_into_the_one_pool_every_terminal_fan_leaf_shares()
     assert_eq!(boundary_cuts.len(), 2);
 
     let n_pools_before = setup.fcf.pools.len();
-    inject_boundary_cuts(&mut setup, &boundary_cuts);
+    inject_boundary_cuts(&mut setup, &boundary_cuts).unwrap();
     assert_eq!(
         setup.fcf.pools.len(),
         n_pools_before,
         "injection must not fan out into per-leaf pools"
+    );
+    assert!(
+        setup.fcf.pools[terminal_idx].has_warm_start_cuts(),
+        "inject_boundary_cuts must write into the pool NodeGraph::terminal_pool resolves"
     );
 
     for &pool_id in &leaf_pool_ids {

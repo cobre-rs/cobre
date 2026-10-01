@@ -386,7 +386,7 @@ pub fn standardize_historical_windows(
     };
 
     let full_sequence: Vec<(i32, usize)> =
-        super::build_observation_sequence(stages, max_order, n_seasons);
+        super::build_observation_sequence(stages, max_order, season_map);
 
     // Digest over little-endian f64 bytes so it is reproducible across runs.
     {
@@ -407,7 +407,7 @@ pub fn standardize_historical_windows(
         stage_lag_transitions,
         downstream_par_order,
         |t, w, h| {
-            let (year_offset, season_id) = full_sequence[max_order + t];
+            let (year_offset, season_id) = full_sequence[t];
             let obs_year = window_years[w] + year_offset;
             debug_assert!(
                 table_idx(0, obs_year, season_id).is_some(),
@@ -709,8 +709,8 @@ mod tests {
     #[test]
     fn test_ar0_standardization() {
         let hydro = EntityId(1);
-        // Seasons 0→1 never wrap, so with max_order=0 every study observation
-        // sits at year_offset 0, i.e. at window_year 1990 itself.
+        // Both study stages resolve to their own calendar year, 1990, so both
+        // sit at year_offset 0 — window_year 1990 itself.
         let stages = vec![make_monthly_stage(0, 0), make_monthly_stage(1, 1)];
         let models = vec![
             InflowModel {
@@ -869,7 +869,8 @@ mod tests {
     fn test_multi_hydro_multi_window() {
         let h1 = EntityId(1);
         let h2 = EntityId(2);
-        // 2 stages, season_ids 0 and 1 (n_seasons=2, no wrap → year_offset=0).
+        // 2 stages, season_ids 0 and 1, both resolving to their own calendar
+        // year (year_offset=0).
         let stages = vec![make_monthly_stage(0, 0), make_monthly_stage(1, 1)];
 
         let models = vec![
@@ -2141,5 +2142,76 @@ mod tests {
             0,
             "standardize_historical_windows must write a non-sentinel digest"
         );
+    }
+
+    #[test]
+    fn standardize_replays_the_window_year_for_a_single_season_study() {
+        let hydro = EntityId(1);
+        let stages = vec![make_monthly_stage(0, 0)];
+        let sm = monthly_season_map(MonthlyLabels::ZeroBased);
+
+        let models = vec![
+            InflowModel {
+                hydro_id: hydro,
+                stage_id: -1,
+                mean_m3s: 0.0,
+                std_m3s: 1.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+                annual: None,
+            },
+            InflowModel {
+                hydro_id: hydro,
+                stage_id: 0,
+                mean_m3s: 0.0,
+                std_m3s: 1.0,
+                ar_coefficients: vec![0.0],
+                residual_std_ratio: 1.0,
+                annual: None,
+            },
+        ];
+        let par = PrecomputedPar::build(&models, &stages, &[hydro], None).unwrap();
+
+        let mut history: Vec<InflowHistoryRow> = (1990..=1993)
+            .map(|y| make_row(hydro, y, 0, 1000.0 + f64::from(y - 1990)))
+            .collect();
+        history.extend((1989..=1992).map(|y| make_row(hydro, y, 11, 1.0)));
+
+        let windows = crate::sampling::discover_historical_windows(
+            &history,
+            &[hydro],
+            &stages,
+            1,
+            None,
+            Some(&sm),
+            10,
+        )
+        .unwrap();
+        assert_eq!(windows, vec![1990, 1991, 1992, 1993]);
+
+        let mut lib =
+            HistoricalScenarioLibrary::new(windows.len(), stages.len(), 1, 1, windows.clone());
+        standardize_historical_windows(
+            &mut lib,
+            &history,
+            &[hydro],
+            &stages,
+            &par,
+            &windows,
+            Some(&sm),
+            DerivedSeed {
+                lag_values: &[0.0],
+                l_state: 1,
+                accum: &[],
+                weight: &[],
+            },
+            &[],
+            0,
+        );
+
+        for (w, &year) in windows.iter().enumerate() {
+            let expected = 1000.0 + f64::from(year - 1990);
+            assert_eq!(lib.eta_slice(w, 0)[0], expected);
+        }
     }
 }

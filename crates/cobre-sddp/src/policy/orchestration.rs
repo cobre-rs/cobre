@@ -26,6 +26,7 @@ use cobre_io::scenarios::estimation::EstimationReport;
 use cobre_io::scenarios::resolve_model_stage_seasons;
 use cobre_stochastic::StochasticContext;
 
+use crate::POLICY_COBRE_VERSION;
 use crate::TrainingResult;
 use crate::policy_export::{
     borrow_cut_records, build_active_indices, build_stage_basis_records, build_stage_cut_records,
@@ -215,6 +216,29 @@ pub struct CheckpointParams {
     pub export_states: bool,
 }
 
+fn pool_entity_manifests(
+    setup: &StudySetup,
+    system: &System,
+    n_pools: usize,
+) -> Vec<Vec<EntitySlot>> {
+    let global_layout = setup.stage_state();
+    (0..n_pools)
+        .map(|p| {
+            // `p` is a pool ordinal; its owning stage resolves through
+            // `pool_stage` — indexing `study_stage_ids` by `p` is OOB once
+            // `n_pools > n_stages` on a branching graph (see `NodeGraph::pool_stage`).
+            let stage_id = setup.inputs.study_stage_ids[setup.inputs.node_graph.pool_stage[p].0];
+            build_stage_entity_manifest(
+                system,
+                global_layout,
+                &setup.inputs.stage_data.study_dims.anticipated_plants,
+                &setup.inputs.cut_state_layouts[p],
+                stage_id,
+            )
+        })
+        .collect()
+}
+
 /// Write the trained policy (cuts, bases, visited states, metadata) to
 /// `policy_dir` as `FlatBuffers` files.
 ///
@@ -242,23 +266,9 @@ pub fn write_checkpoint(
     let n_pools = fcf.pools.len();
     let n_stages = setup.num_stages();
 
-    let global_layout = setup.stage_state();
-    let stage_manifests: Vec<Vec<EntitySlot>> = (0..n_pools)
-        .map(|p| {
-            // `p` is a pool ordinal; its owning stage resolves through
-            // `pool_stage` — indexing `study_stage_ids` by `p` is OOB once
-            // `n_pools > n_stages` on a branching graph (see `NodeGraph::pool_stage`).
-            let stage_id = setup.study_stage_ids[setup.node_graph.pool_stage[p].0];
-            build_stage_entity_manifest(
-                system,
-                global_layout,
-                &setup.stage_data.cut_state_layouts[p],
-                stage_id,
-            )
-        })
-        .collect();
+    let stage_manifests = pool_entity_manifests(setup, system, n_pools);
 
-    let cost_scale_factor = setup.stage_data.stage_templates.cost_scale_factor;
+    let cost_scale_factor = setup.inputs.stage_data.stage_templates.cost_scale_factor;
     let stage_records_internal = build_stage_cut_records(fcf);
     let stage_records_owned =
         scale_cut_records_for_export(&stage_records_internal, cost_scale_factor);
@@ -272,8 +282,8 @@ pub fn write_checkpoint(
         .collect();
     let stage_cuts = build_stage_cuts_payloads(
         fcf,
-        &setup.node_graph,
-        &setup.study_stage_ids,
+        &setup.inputs.node_graph,
+        &setup.inputs.study_stage_ids,
         &study_stage_end_dates,
         cost_scale_factor,
         &stage_records,
@@ -291,7 +301,7 @@ pub fn write_checkpoint(
     let stage_bases = build_stage_basis_records(
         fcf,
         training_result,
-        &setup.node_graph,
+        &setup.inputs.node_graph,
         &basis_col_u8,
         &basis_row_u8,
     );
@@ -309,7 +319,7 @@ pub fn write_checkpoint(
 
     let metadata = CheckpointManifest {
         format_version: FORMAT_VERSION,
-        cobre_version: env!("CARGO_PKG_VERSION").to_string(),
+        cobre_version: POLICY_COBRE_VERSION.to_string(),
         created_at: cobre_io::now_iso8601(),
         num_stages: n_stages as u32,
         graph_manifest: setup.build_graph_manifest(),
@@ -327,7 +337,7 @@ pub fn write_checkpoint(
             }),
             training_block_mode,
             training_block_mode_per_stage,
-            cost_scale_factor: Some(setup.stage_data.stage_templates.cost_scale_factor),
+            cost_scale_factor: Some(cost_scale_factor),
         },
         season_manifest: build_season_manifest(system).to_season_manifest(),
     };
@@ -336,7 +346,7 @@ pub fn write_checkpoint(
         build_stage_states_payloads(
             training_result.visited_archive.as_ref(),
             &stage_manifests,
-            &setup.node_graph,
+            &setup.inputs.node_graph,
         )
     } else {
         Vec::new()

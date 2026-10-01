@@ -9,7 +9,7 @@
 //! [`run_backward_node_replicated`] is the per-node orchestrator: it partitions
 //! the node's whole flattened outcome set — every successor CHILD's every
 //! opening, canonical `(child, ω)` order — across ranks via
-//! [`crate::solve::partition`], and for this rank's slice, loops over every
+//! [`fn@crate::solve::partition`], and for this rank's slice, loops over every
 //! child that intersects it, loading each intersecting child's own LP once
 //! ([`solve_replicated_outcome_slice`]) — never pricing a fan against a single
 //! child's LP (sddp.md "The branching backward integrates every successor
@@ -110,7 +110,6 @@ pub(crate) fn solve_replicated_outcome_slice<S: SolverInterface + Send>(
         let mut buf = std::mem::take(&mut ws.backward_accum.external_noise_buf);
         fill_external_opening_noise(
             training_ctx,
-            ctx,
             s,
             child.openings.offset,
             child.successor_node_id,

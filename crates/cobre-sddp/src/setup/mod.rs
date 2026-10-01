@@ -21,13 +21,15 @@
 //! let stochastic = build_stochastic_context(system, 42, None, &[], &[], OpeningTreeInputs::default(), ClassSchemes { inflow: None, load: None, ncs: None })?;
 //! let hydro_models = PrepareHydroModelsResult::default_from_system(system);
 //! let setup = StudySetup::new(system, config, stochastic, hydro_models, Vec::new())?;
-//! assert!(!setup.stage_data.stage_templates.templates.is_empty());
+//! assert!(!setup.inputs.stage_data.stage_templates.templates.is_empty());
 //! # Ok(())
 //! # }
 //! ```
 
+#![deny(clippy::allow_attributes, clippy::allow_attributes_without_reason)]
+
 use chrono::NaiveDate;
-use cobre_core::ContractType::Import;
+use cobre_core::ContractType;
 use cobre_core::temporal::SeasonCycleType::Monthly;
 use cobre_core::temporal::SeasonMap;
 use cobre_core::temporal::StageLagTransition;
@@ -42,9 +44,10 @@ use cobre_stochastic::noise_entity_order;
 use cobre_stochastic::par::lag_transition::derive_downstream_par_order;
 use cobre_stochastic::par::lag_transition::precompute_noise_groups;
 use cobre_stochastic::par::lag_transition::precompute_stage_lag_transitions;
-use cobre_stochastic::season_cast::{DatedWindow, StageCalendar, post_study_calendar_stages};
+use cobre_stochastic::season_cast::{DatedWindow, StageCalendar};
 
 use crate::StageTemplates;
+use crate::bucket_topology;
 use crate::config::LoopParams;
 use crate::resolved_parameters::{ResolvedParameters, build_resolved_parameters};
 use crate::scaling_report::ScalingReport;
@@ -52,16 +55,18 @@ use crate::simulation::SimulationConfig;
 use crate::solve::solver_phase::{Phase, validate_phase_solver_config};
 use crate::stochastic::noise_key::build_noise_key_table;
 mod accessors;
-pub(crate) mod bucket_topology;
+pub(crate) mod lp_build_inputs;
 pub mod node_graph;
 mod orchestration;
 pub mod params;
 pub(crate) mod scenario_libraries;
 pub mod scenario_library_set;
+mod solve_inputs;
 pub mod stage_data;
 pub mod stochastic_pipeline;
 pub(crate) mod template_postprocess;
 
+pub(crate) use lp_build_inputs::resolve_lp_build_inputs;
 pub use node_graph::{
     EnumeratedPlan, NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor,
     OpeningSource, StageIdx, Traversal, TypedVec,
@@ -71,6 +76,7 @@ pub use params::{
     DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, SimulationEnumeratedRequest, StudyParams,
 };
 pub use scenario_library_set::{PhaseLibraries, ScenarioLibraries};
+pub use solve_inputs::SolveInputs;
 pub use stage_data::StageData;
 pub use stochastic_pipeline::{
     PrepareStochasticResult, build_ncs_factor_entries, build_stochastic_context_for_study,
@@ -81,9 +87,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use cobre_core::{
-    AffineBound, AnticipatedConfig, CoefficientRef, EntityId, GenericConstraint, HorizonGraph,
-    Hydro, HydroPastDefluence, PostStudyStages, PostStudyThermalBound, ScalarParameter, Stage,
-    StageId, System, Thermal,
+    AffineBound, AnticipatedConfig, CoefficientRef, EntityId, GenericConstraint, Hydro,
+    HydroPastDefluence, ScalarParameter, Stage, StageId, System, Thermal,
     scenario::{SamplingScheme, ScenarioSource},
 };
 use cobre_io::StageIdResolver;
@@ -94,6 +99,8 @@ use cobre_stochastic::{
 };
 
 use crate::{
+    InflowNonNegativityMethod,
+    block_clock::M3S_TO_HM3,
     config::{CutManagementConfig, EventParams},
     cut::FutureCostFunction,
     cut_selection::CutSelectionStrategy,
@@ -101,16 +108,19 @@ use crate::{
     error::SddpError,
     horizon_mode::HorizonMode,
     hydro_models::PrepareHydroModelsResult,
-    inflow_method::InflowNonNegativityMethod,
-    lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution, SpreadResolution},
-    lp::builder::{M3S_TO_HM3, StateBox, build_stage_templates},
+    lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution},
+    lp::builder::{
+        LpBuildInputs, StageGeometry, StateBox, build_stage_templates, contract_family_slot,
+    },
     lp::indexer::{
-        AnticipatedLocal, CutStateProjection, HydroCellIndex, StateSpace, StudyDimensions,
+        AnticipatedLocal, AnticipatedPlants, CutStateProjection, HydroCellIndex, HydroSys,
+        StateSpace, StudyDimensions, ThermalSys,
     },
     risk_measure::{RiskMeasure, uniform_effective_measure},
     simulation::EntityCounts,
     simulation::extraction::TransitSeedArc,
     stopping_rule::{StoppingRule, StoppingRuleSet},
+    time_value::{DeliveryCalendar, TimeValue},
     workspace::CapturedBasis,
 };
 
@@ -133,59 +143,16 @@ use crate::{
 /// storage.
 #[derive(Debug)]
 pub struct StudySetup {
-    /// Stage-indexed data: LP templates, indexer, stages, entity counts, blocks,
-    /// lag transitions, noise groups, and scaling report.
-    pub stage_data: stage_data::StageData,
+    /// The resolved study inputs shared by the stage, training, and
+    /// simulation contexts, disjoint from [`Self::fcf`] so [`Self::train`]
+    /// can build a context while holding `&mut fcf`.
+    pub inputs: SolveInputs,
 
-    /// Stochastic context holding sampling distributions, libraries, and provenance.
-    pub stochastic: StochasticContext,
     /// Future cost function (cut pool) updated by the backward pass during training.
     pub fcf: FutureCostFunction,
-    pub(crate) initial_state: Vec<f64>,
 
     /// Pre-computed hydro production models (FPHA, turbine curves, etc.).
     pub hydro_models: PrepareHydroModelsResult,
-    pub(crate) ncs_entity_ids_per_stage: Vec<Vec<i32>>,
-    /// Stage-invariant stochastic-slot → dense NCS column index map (slot in
-    /// `StochasticContext::ncs_entity_ids` id-sorted order).
-    ///
-    /// The NCS bound patch sites stride the per-opening cap onto
-    /// `ncs_col_starts[s] + ncs_stochastic_dense_col[slot] * n_blks_s + blk`.
-    /// Length equals `n_stochastic_ncs`; empty when the study has no stochastic NCS.
-    pub(crate) ncs_stochastic_dense_col: Vec<usize>,
-    /// Stage-invariant `(entry_stage_id, exit_stage_id)` per stochastic NCS slot
-    /// (id-sorted to match `ncs_stochastic_dense_col` and the `transform_ncs_noise`
-    /// buffer order).
-    ///
-    /// The dormant-slot `[0, 0]` cap MUST stay identical across the forward,
-    /// backward, and lower-bound patch sites — the `evaluate_lower_bound`
-    /// "patch NCS per opening" contract; a divergence understates the bound (D15).
-    /// Length equals `n_stochastic_ncs`; empty when no stochastic NCS.
-    pub(crate) ncs_stochastic_windows: Vec<(Option<i32>, Option<i32>)>,
-    /// Max generation \[MW\] per stochastic NCS entity, sorted by entity ID.
-    pub(crate) ncs_max_gen: Vec<f64>,
-    /// Whether each stochastic NCS entity may be curtailed, aligned 1:1 with
-    /// [`Self::ncs_max_gen`]. `false` = must-run: the patch sites pin
-    /// `col_lower = col_upper` (not `[0, cap]`), and non-simulated must-run
-    /// generation is pre-netted from load.
-    pub(crate) ncs_allow_curtailment: Vec<bool>,
-
-    /// Stage-invariant `(entry_stage_id, exit_stage_id)` per anticipated thermal,
-    /// in anticipated-local order matching
-    /// `stage_data.study_dims.anticipated_thermal_indices`.
-    ///
-    /// Threaded into the simulation
-    /// [`StageExtractionSpec`](crate::simulation::extraction::StageExtractionSpec)
-    /// so the anticipated-decision read gates on the same
-    /// `is_anticipated_decision_active` predicate the LP builder used,
-    /// keying its operation-window clause on the DELIVERY stage's `stage.id`. Empty
-    /// when there are no anticipated thermals.
-    pub(crate) anticipated_windows: Vec<(Option<i32>, Option<i32>)>,
-
-    /// `study_stage_ids[t] = stage.id` per study stage index; the simulation
-    /// context borrows it to map a delivery stage index to its commissioning id
-    /// for the `anticipated_windows` gate.
-    pub(crate) study_stage_ids: Vec<i32>,
 
     /// Extended delivery-stage anchors ([`build_extended_delivery_anchors`]):
     /// the `YYYYMM01` anchor of each delivery target stage, indexed by delivery
@@ -197,11 +164,12 @@ pub struct StudySetup {
     /// walk. Study-only when the study declares no post-study stage.
     pub(crate) extended_delivery_anchors: Vec<i32>,
 
-    /// Declared travel-time arcs (upstream hydro id + travel time), resolved
-    /// once from [`System::hydros`] ([`build_transit_seed_arcs`]). Threaded
-    /// into [`SimulationOutputSpec`](crate::simulation::SimulationOutputSpec)
-    /// so the rolling-seed emitter never re-derives it from `System`. Empty
-    /// when the study declares no travel-time arc.
+    /// Declared travel-time arcs (upstream hydro id + travel time), projected
+    /// from the bucket topology's arc list ([`build_transit_seed_arcs`]).
+    /// Threaded into
+    /// [`SimulationOutputSpec`](crate::simulation::SimulationOutputSpec) so
+    /// the rolling-seed emitter never re-derives it from `System`. Empty when
+    /// the study declares no travel-time arc.
     pub(crate) transit_seed_arcs: Vec<TransitSeedArc>,
 
     /// This run's own `system.initial_conditions().past_defluences`, retained
@@ -210,7 +178,7 @@ pub struct StudySetup {
     pub(crate) past_defluences: Vec<HydroPastDefluence>,
 
     /// `study_stage_dates[t] = (stage.start_date, stage.end_date)` per study
-    /// stage index, parallel to [`Self::study_stage_ids`]. Threaded into
+    /// stage index, parallel to `inputs.study_stage_ids`. Threaded into
     /// [`SimulationOutputSpec`](crate::simulation::SimulationOutputSpec) so the
     /// rolling-seed emitter's per-stage windows never re-derive the calendar.
     pub(crate) study_stage_dates: Vec<(NaiveDate, NaiveDate)>,
@@ -219,14 +187,6 @@ pub struct StudySetup {
     /// and the generic-constraint echo.
     pub(crate) resolved_parameters: ResolvedParameters,
 
-    /// Sampling schemes and pre-built libraries for training and simulation phases.
-    pub scenario_libraries: ScenarioLibraries,
-
-    /// The runtime node graph: node identity/order, the `node → pool`
-    /// map, and per-node Ω views/out-edges. Absent `nodes[]` this is the
-    /// byte-exact chain degeneracy. Reached through
-    /// [`crate::context::TrainingContext::node_graph`] on the hot path.
-    pub node_graph: node_graph::NodeGraph,
     /// Iteration-loop parameters projected from [`crate::config::LoopConfig`].
     ///
     /// `n_fwd_threads` is excluded (derived at runtime) and supplied as a per-call
@@ -247,9 +207,6 @@ pub struct StudySetup {
 
     /// Relative path to the policy output directory (e.g. `"training/policy"`).
     pub policy_path: String,
-
-    /// Two-stage cut management pipeline configuration.
-    pub(crate) cut_management: CutManagementConfig,
 
     /// Pure-data event flags (output-side).
     ///
@@ -279,23 +236,6 @@ pub struct StudySetup {
     /// [`crate::solve::solver_phase::SolverProfiles::hardest_first_claim_order`]).
     pub(crate) hardest_first_claim_order: bool,
 
-    /// Study horizon mode (finite vs. infinite-horizon approximation).
-    pub(crate) horizon: HorizonMode,
-    /// Inflow non-negativity enforcement method.
-    pub(crate) inflow_method: InflowNonNegativityMethod,
-
-    /// Derived per-hydro PAR lag-slot and accumulator seeds ([`derive_inflow_seeds`]),
-    /// applied to the stage-0 lag block and to every trajectory start in the
-    /// forward pass and simulation pipeline instead of zero-filling. All-zero
-    /// when the derivation has no resolvable data.
-    pub(crate) derived_inflow_seeds: DerivedInflowSeeds,
-
-    /// PAR order of the downstream (coarser) resolution model. Non-zero only when
-    /// the study includes stages with `season_id >= 12` (a monthly-to-quarterly
-    /// transition); zero for uniform-resolution studies. Sizes the downstream
-    /// scratch buffers via `WorkspaceSizing`.
-    pub(crate) downstream_par_order: usize,
-
     /// Energy-conversion scalars (`ρ_eq`, `V_ref`, `Q_ref`, `ρ_acum`) per
     /// `(hydro, stage)`, consumed by the energy-balance LP constraints and
     /// inflow-/stored-energy extraction.
@@ -304,18 +244,6 @@ pub struct StudySetup {
     /// `V_min` (`min_storage_hm3`) per hydro, in declaration order; threaded into
     /// the simulation pipeline for stored-energy calculations.
     pub(crate) hydro_min_storage_hm3: Vec<f64>,
-
-    /// Water travel-time in-transit bucket topology: canonical column order,
-    /// global bucket count, per-stage reachability mask, and the three
-    /// resolved arc tables (stage-clock weights, chronological spread,
-    /// arrival density) — the single derivation site for all of them. Empty
-    /// (`n_buckets == 0`) when the system declares no travel-time arc.
-    // Every field is consumed via the constructor's threaded LOCAL
-    // (state-layout sizing, the LP builder's arc-table threading, the bucket
-    // IC seed) before this STORED field is set below; no post-construction
-    // reader exists yet. `#[allow(dead_code)]` refires once one lands.
-    #[allow(dead_code)]
-    pub(crate) transit_bucket_topology: bucket_topology::TransitBucketTopology,
 
     /// Per-stage warm-start basis cache for warm-start / resume training.
     ///
@@ -337,12 +265,12 @@ impl StudySetup {
     ///
     /// # Errors
     ///
-    /// - [`SddpError::Validation`] — if `build_stage_templates` succeeds but
-    ///   the template list is empty ("system has no study stages").
-    /// - [`SddpError::Solver`] — propagated from `build_stage_templates`
-    ///   on LP construction failure.
+    /// - [`SddpError::Validation`] — if the template list is empty ("system
+    ///   has no study stages").
     /// - [`SddpError::Validation`] — if `parse_cut_selection_config` returns
     ///   an invalid config string.
+    /// - [`SddpError::Validation`] — if `stochastic`'s precomputed inflow
+    ///   model shape does not match `system` (see `validate_par_shape`).
     pub fn new(
         system: &System,
         config: &Config,
@@ -421,14 +349,10 @@ impl StudySetup {
     /// - [`SddpError::Validation`] — a per-phase solver profile config sets a
     ///   field the compiled backend does not support (see
     ///   `validate_phase_solver_config`).
-    /// - [`SddpError::Validation`] — if `build_stage_templates` succeeds but
-    ///   the template list is empty ("system has no study stages").
-    /// - [`SddpError::Solver`] — propagated from `build_stage_templates` on LP
-    ///   construction failure.
-    // Rationale (too_many_lines): a single linear pass building the `StudySetup`
-    // literal from per-entity prep blocks; splitting it would scatter the
-    // construction the literal reads.
-    #[allow(clippy::too_many_lines)]
+    /// - [`SddpError::Validation`] — if the template list is empty ("system
+    ///   has no study stages").
+    /// - [`SddpError::Validation`] — if `stochastic`'s precomputed inflow
+    ///   model shape does not match `system` (see `validate_par_shape`).
     pub fn from_broadcast_params(
         system: &System,
         mut stochastic: StochasticContext,
@@ -437,42 +361,10 @@ impl StudySetup {
         training_source: &ScenarioSource,
         simulation_source: &ScenarioSource,
     ) -> Result<Self, SddpError> {
-        let StudyParams {
-            seed,
-            forward_passes,
-            training_enumerated,
-            stopping_rule_set,
-            n_scenarios,
-            simulation_enumerated,
-            io_channel_capacity,
-            policy_path,
-            inflow_method,
-            cut_selection,
-            cut_activity_tolerance,
-            budget,
-            export_states,
-            scalar_parameters,
-            training_solver_backward,
-            training_solver_forward,
-            simulation_solver,
-            backward_scheduler,
-            cost_scale_factor,
-            boundary,
-        } = config;
+        validate_par_shape(system, stochastic.par())?;
 
-        // Fail fast on a backend-unsupported field before any template exists;
-        // validation runs on every rank (`from_broadcast_params` is the shared
-        // setup path), so it is deterministic across the run.
-        validate_phase_solver_config(training_solver_backward.as_ref(), Phase::Backward)?;
-        validate_phase_solver_config(training_solver_forward.as_ref(), Phase::Forward)?;
-        validate_phase_solver_config(simulation_solver.as_ref(), Phase::Simulation)?;
-
-        // `resolve_profile` is a pure function of the (identically broadcast)
-        // config, so every rank resolving independently is sufficient — the
-        // resolved `ActiveProfile` itself never needs to go on the wire.
-        let backward_profile = Phase::Backward.resolve_profile(training_solver_backward.as_ref());
-        let forward_profile = Phase::Forward.resolve_profile(training_solver_forward.as_ref());
-        let simulation_profile = Phase::Simulation.resolve_profile(simulation_solver.as_ref());
+        let (backward_profile, forward_profile, simulation_profile) =
+            resolve_solver_profiles(&config)?;
 
         // Keys are a pure function of the synced tree + fixed σ, so every rank
         // computes the identical permutation and cuts stay bit-identical across
@@ -482,229 +374,40 @@ impl StudySetup {
             .set_solve_order(&solve_order_keys)
             .map_err(|e| SddpError::Validation(e.to_string()))?;
 
-        // Computed here (not inside `build_energy_and_templates`) so the one
-        // `TransitBucketTopology` this constructor derives from `system` also seeds the
-        // `StudySetup.transit_bucket_topology` field below, with no second call.
-        // `boundary.is_present()` gates the terminal deep-lag mask (the
-        // Delivery-family right-boundary pricing contract) — every rank resolves it
-        // identically from the broadcast config, before `inject_boundary_cuts` runs.
-        let transit_bucket_topology =
-            bucket_topology::build_transit_bucket_topology(system, boundary.is_present());
+        let (stage_data, initial, energy_conversion, resolved_parameters, transit_seed_arcs) =
+            resolve_stage_data(system, &config, &stochastic, &hydro_models)?;
+        let n_stages = stage_data.stage_templates.templates.len();
 
-        // Resolved before the LP templates: none of the state dimensions depend on
-        // the built LP, and `build_stage_templates` needs the finished `StateSpace`
-        // threaded in as a parameter (the single role-(a) owner — see
-        // `resolve_state_layout`).
-        let (state_layout, hydro_count, anticipated_thermal_indices) = resolve_state_layout(
-            system,
-            stochastic.par(),
-            &transit_bucket_topology,
-            boundary.inflow_lag_depth(),
-        )?;
-        warn_on_boundary_absent_post_study_delivery(
-            system,
-            &anticipated_thermal_indices,
-            &state_layout.anticipated_resolution,
-            boundary.is_present(),
-        );
-
-        // The sole `derive_inflow_seeds` call site: every consumer (the lag block
-        // below, `StudySetup::derived_inflow_seeds`) reads this one value — do not
-        // add a second call. Computed locally on every rank from the already-
-        // broadcast `system` rather than carried over the wire: the derivation is
-        // a pure function of `system`, so every rank derives a bit-identical seed
-        // with no extra broadcast.
-        let noop_season_map = SeasonMap {
-            cycle_type: Monthly,
-            seasons: Vec::new(),
-        };
-        let season_map_ref = system
-            .policy_graph()
-            .season_map
-            .as_ref()
-            .unwrap_or(&noop_season_map);
-        let derived_inflow_seeds = match system.stages().iter().find(|s| s.id >= 0) {
-            None => DerivedInflowSeeds::zero(system.hydros().len(), state_layout.max_par_order),
-            Some(first_stage) => derive_inflow_seeds(
-                system.inflow_history(),
-                &system.initial_conditions().recent_observations,
-                system.hydros(),
-                first_stage,
-                season_map_ref,
-                state_layout.max_par_order,
-            ),
-        };
-
-        // Built here, before the stage templates: `TemplateBuildCtx` reads it during
-        // `StageLayout::new`, and the SAME value (never rebuilt or cloned) is stored
-        // on `StageData` below.
-        let hydro_cell_index = HydroCellIndex::build(system.hydros());
-
-        let EnergyAndTemplates {
-            energy_conversion,
-            stage_templates,
-            scaling_report,
-            resolved_parameters,
-        } = build_energy_and_templates(
-            system,
-            inflow_method,
-            &stochastic,
-            &hydro_models,
-            &scalar_parameters,
-            &state_layout,
-            cost_scale_factor,
-            &transit_bucket_topology.per_stage_mask,
-            &transit_bucket_topology.arc_stage_weights,
-            &transit_bucket_topology.arc_spread_chrono,
-            &transit_bucket_topology.arc_arrival_density,
-            &hydro_cell_index,
-        )?;
-
-        let study_dims = build_study_dimensions(
-            system,
-            &stage_templates,
-            inflow_method,
-            hydro_count,
-            anticipated_thermal_indices,
-        );
-
-        let mut initial_state = build_initial_state(
-            system,
-            &study_dims,
-            &state_layout,
-            &derived_inflow_seeds.lag_values,
-        );
-        splice_transit_bucket_seed(
-            &mut initial_state,
-            &state_layout,
-            system,
-            &transit_bucket_topology,
-        );
-        if let Some(stage0_box) = stage_templates.state_boxes.first() {
-            canonicalize_initial_state(&mut initial_state, &state_layout, stage0_box);
-        }
-
-        let n_stages = stage_templates.templates.len();
-        let max_iterations = max_iterations_from_rules(&stopping_rule_set);
-        let fcf_capacity_iterations = max_iterations.saturating_add(1);
-
-        let stages: Vec<Stage> = system
-            .stages()
+        let study_stage_ids: Vec<i32> = stage_data.stages.iter().map(|s| s.id).collect();
+        let study_stage_dates: Vec<(NaiveDate, NaiveDate)> = stage_data
+            .stages
             .iter()
-            .filter(|s| s.id >= 0)
-            .cloned()
+            .map(|s| (s.start_date, s.end_date))
             .collect();
-        let study_stage_ids: Vec<i32> = stages.iter().map(|s| s.id).collect();
-        let study_stage_dates: Vec<(NaiveDate, NaiveDate)> =
-            stages.iter().map(|s| (s.start_date, s.end_date)).collect();
-
-        let LagData {
-            stage_lag_transitions,
-            noise_group_ids,
-            downstream_par_order,
-        } = precompute_lag_data(system, &stages, &stochastic, season_map_ref);
-
-        let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
 
         let scenario_libraries = build_scenario_libraries(
             system,
-            &stages,
-            &hydro_ids,
             &stochastic,
-            &stage_lag_transitions,
+            &stage_data,
+            &initial,
+            config.forward_passes,
             training_source,
             simulation_source,
-            forward_passes,
-            downstream_par_order,
-            derived_inflow_seeds.as_seed(state_layout.max_par_order),
         )?;
 
-        // G1: binds after `build_scenario_libraries` — an `External`-bound
-        // node's Ω addresses the standardized library's raw scenario axis,
-        // so binding earlier would race the library's own standardization.
-        // Also binds BEFORE the FCF / cut_state_layouts construction below: the
-        // pool axis they use is resolved through this graph's `node → pool` map.
-        let stage_id_resolver = StageIdResolver::from_study_stage_ids(&study_stage_ids);
-        let node_graph = node_graph::build_node_graph(
-            system.policy_graph(),
-            n_stages,
-            &stage_id_resolver,
+        let node_graph = build_checked_node_graph(
+            system,
             &stochastic,
+            &study_stage_ids,
+            n_stages,
+            config.training_enumerated,
         )?;
 
-        reject_scenario_id_under_sampled_selection(&node_graph, training_enumerated)?;
-        let prov = stochastic.provenance();
-        reject_insample_class_under_external_nodes(
-            &node_graph,
-            (prov.inflow_scheme, stochastic.n_hydros()),
-            (prov.load_scheme, stochastic.n_load_buses()),
-            (prov.ncs_scheme, stochastic.n_stochastic_ncs()),
-        )?;
+        let (loop_params, simulation_config) =
+            resolve_phase_configs(&node_graph, &config, simulation_profile)?;
 
-        // Resolves any `enumerated`-declared phase's actual count now that the
-        // graph exists — config load could only signal the request, never the
-        // count. `forward_passes`/`n_scenarios` carry a `sampled`-shaped
-        // placeholder until this point when enumerated was requested.
-        warn_on_enumeration_asymmetry(
-            training_enumerated,
-            matches!(
-                simulation_enumerated,
-                SimulationEnumeratedRequest::Enumerated
-            ),
-        );
-        let forward_passes = if training_enumerated {
-            resolve_enumerated_training_count(&node_graph)?
-        } else {
-            forward_passes
-        };
-        let n_scenarios = match simulation_enumerated {
-            SimulationEnumeratedRequest::Enumerated => {
-                resolve_enumerated_simulation_count(&node_graph)?
-            }
-            SimulationEnumeratedRequest::Sampled => n_scenarios,
-        };
-
-        // Resolved AFTER the guard-checked counts above (`resolve_enumerated_training_count`
-        // has already run the enumerated admissibility guards for a `true`
-        // `training_enumerated`), so this resolution cannot fail — it is the
-        // typed reification of what the two calls above already validated.
-        let traversal =
-            node_graph::Traversal::resolve(&node_graph, training_enumerated, forward_passes);
-
-        let cut_state_layouts = build_cut_state_layouts(system, &state_layout, &node_graph);
-        let pool_state_dimensions: Vec<usize> = cut_state_layouts
-            .iter()
-            .map(CutStateProjection::n_slots)
-            .collect();
-        // Cut-RECEIPT stride selected through the resolved traversal. The
-        // `Sampled` arm keeps `pool_cut_stride` — the mean+σ statistical margin
-        // capped at `forward_passes`, one candidate cut per TRIAL POINT — and
-        // NEVER `forward_solve_counts`, the enumerated engine's node-deduplicated
-        // per-pool FORWARD-SOLVE count, which under-reserves a branched pool's
-        // slots (the backward still produces one cut per trial point, so the next
-        // trial collides with a still-active slot — `CutPool::add_cut`'s
-        // double-insert panic). The `Enumerated` arm sizes at the node-native cut
-        // count, `enumerated_pool_cut_stride`: exactly 1 per non-leaf node
-        // (in-degree 1, one distinct incoming state, one cut per iteration) and 0
-        // for the shared leaf pool — NOT the sampled bound, which would keep the
-        // per-pool capacity/basis/broadcast/checkpoint reservation the node-native
-        // backward never fills.
-        let visit_bounds = match &traversal {
-            node_graph::Traversal::Sampled { forward_passes } => {
-                node_graph.pool_cut_stride(*forward_passes)
-            }
-            node_graph::Traversal::Enumerated(_) => {
-                node_graph::enumerated_pool_cut_stride(&node_graph)
-            }
-        };
-        let fcf = FutureCostFunction::new_per_pool(
-            &pool_state_dimensions,
-            state_layout.n_state,
-            forward_passes,
-            fcf_capacity_iterations,
-            &vec![0; node_graph.n_pools],
-            &visit_bounds,
-        );
+        let (fcf, cut_state_layouts) =
+            build_future_cost_function(system, &stage_data.state, &node_graph, &loop_params);
 
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -714,115 +417,59 @@ impl StudySetup {
         // above still leaves `n_stages == 1` possible.
         horizon.validate()?;
 
+        let ncs = build_ncs_entity_data(system, &stage_data, &stochastic)?;
+
         let risk_measures = build_risk_measures(system);
-
-        let NcsEntityData {
-            entity_counts,
-            ncs_entity_ids_per_stage,
-            ncs_stochastic_dense_col,
-            ncs_stochastic_windows,
-            ncs_max_gen,
-            ncs_allow_curtailment,
-        } = build_ncs_entity_data(system, &stage_templates, &stochastic)?;
-        let block_counts_per_stage: Vec<usize> = stage_templates
-            .block_hours_per_stage
-            .iter()
-            .map(Vec::len)
-            .collect();
-        let max_blocks = block_counts_per_stage.iter().copied().max().unwrap_or(0);
-
-        let pumping_consumption_mw_per_m3s = build_pumping_consumption(system);
-        let contract_prices_per_stage =
-            build_contract_prices_per_stage(system, n_stages, &block_counts_per_stage);
-        let contract_is_import = build_contract_is_import(system);
-
-        let anticipated_windows = build_anticipated_windows(system);
-        let extended_delivery_anchors =
-            build_extended_delivery_anchors(system, &state_layout, n_stages);
-        let transit_seed_arcs = build_transit_seed_arcs(system);
-        let past_defluences = system.initial_conditions().past_defluences.clone();
-
         admission_gate(
             &risk_measures,
-            &stopping_rule_set,
-            training_enumerated,
-            cut_selection.as_ref(),
+            &config.stopping_rule_set,
+            config.training_enumerated,
+            config.cut_selection.as_ref(),
         )?;
 
-        let hydro_min_storage_hm3: Vec<f64> =
-            system.hydros().iter().map(|h| h.min_storage_hm3).collect();
+        let extended_delivery_anchors =
+            build_extended_delivery_anchors(system, stage_data.time_value.calendar());
 
         Ok(Self {
-            stage_data: stage_data::StageData {
-                stage_templates,
-                state: state_layout,
-                study_dims,
-                hydro_cell_index,
+            inputs: SolveInputs {
+                stage_data,
+                stochastic,
+                scenario_libraries,
+                node_graph,
+                initial,
+                ncs,
+                study_stage_ids,
+                horizon,
+                cut_management: CutManagementConfig {
+                    cut_selection: config.cut_selection,
+                    budget: config.budget,
+                    cut_activity_tolerance: config.cut_activity_tolerance,
+                    risk_measures,
+                },
                 cut_state_layouts,
-                stages,
-                entity_counts,
-                pumping_consumption_mw_per_m3s,
-                contract_prices_per_stage,
-                contract_is_import,
-                block_counts_per_stage,
-                stage_lag_transitions,
-                noise_group_ids,
-                scaling_report,
             },
-            stochastic,
             fcf,
-            initial_state,
             hydro_models,
-            ncs_entity_ids_per_stage,
-            ncs_stochastic_dense_col,
-            ncs_stochastic_windows,
-            ncs_max_gen,
-            ncs_allow_curtailment,
-            anticipated_windows,
-            study_stage_ids,
             extended_delivery_anchors,
             transit_seed_arcs,
-            past_defluences,
+            past_defluences: system.initial_conditions().past_defluences.clone(),
             study_stage_dates,
             resolved_parameters,
-            scenario_libraries,
-            node_graph,
-            loop_params: LoopParams {
-                seed,
-                forward_passes,
-                training_enumerated,
-                max_iterations,
-                start_iteration: 0,
-                max_blocks,
-                stopping_rules: stopping_rule_set,
+            loop_params,
+            simulation_config,
+            simulation_enumerated: config.simulation_enumerated,
+            policy_path: config.policy_path,
+            events: EventParams {
+                export_states: config.export_states,
             },
-            simulation_config: SimulationConfig {
-                n_scenarios,
-                io_channel_capacity,
-                profile: simulation_profile,
-            },
-            simulation_enumerated,
-            policy_path,
-            cut_management: CutManagementConfig {
-                cut_selection,
-                budget,
-                cut_activity_tolerance,
-                risk_measures,
-            },
-            events: EventParams { export_states },
             backward_profile,
             forward_profile,
-            backward_scheduler,
+            backward_scheduler: config.backward_scheduler,
             hardest_first_claim_order: true,
-            horizon,
-            inflow_method,
-            derived_inflow_seeds,
-            downstream_par_order,
             energy_conversion,
-            hydro_min_storage_hm3,
-            transit_bucket_topology,
+            hydro_min_storage_hm3: system.hydros().iter().map(|h| h.min_storage_hm3).collect(),
             warm_start_basis_cache: None,
-            boundary_requirements: boundary,
+            boundary_requirements: config.boundary,
         })
     }
 }
@@ -885,22 +532,41 @@ mod run_phase_plan_tests {
 // from_broadcast_params sub-phase helpers
 // ---------------------------------------------------------------------------
 
-/// Grouped output of [`build_ncs_entity_data`].
-struct NcsEntityData {
-    entity_counts: EntityCounts,
-    ncs_entity_ids_per_stage: Vec<Vec<i32>>,
-    ncs_stochastic_dense_col: Vec<usize>,
-    ncs_stochastic_windows: Vec<(Option<i32>, Option<i32>)>,
-    ncs_max_gen: Vec<f64>,
-    ncs_allow_curtailment: Vec<bool>,
+/// Grouped per-slot NCS entity data, held on [`SolveInputs::ncs`].
+#[derive(Debug)]
+pub(crate) struct NcsEntityData {
+    /// Stage-invariant stochastic-slot → dense NCS column index map (slot in
+    /// `StochasticContext::ncs_entity_ids` id-sorted order).
+    ///
+    /// The NCS bound patch sites stride the per-opening cap through
+    /// [`StageGeometry::ncs_generation_col`](crate::lp::builder::StageGeometry::ncs_generation_col)
+    /// at `stochastic_dense_col[slot]`. Length equals `n_stochastic_ncs`;
+    /// empty when the study has no stochastic NCS.
+    pub(crate) stochastic_dense_col: Vec<usize>,
+    /// Stage-invariant `(entry_stage_id, exit_stage_id)` per stochastic NCS slot
+    /// (id-sorted to match `stochastic_dense_col` and the `transform_ncs_noise`
+    /// buffer order).
+    ///
+    /// The dormant-slot `[0, 0]` cap MUST stay identical across the forward,
+    /// backward, and lower-bound patch sites — the `evaluate_lower_bound`
+    /// "patch NCS per opening" contract; a divergence understates the bound (D15).
+    /// Length equals `n_stochastic_ncs`; empty when no stochastic NCS.
+    pub(crate) stochastic_windows: Vec<(Option<i32>, Option<i32>)>,
+    /// Max generation \[MW\] per stochastic NCS entity, sorted by entity ID.
+    pub(crate) max_gen: Vec<f64>,
+    /// Whether each stochastic NCS entity may be curtailed, aligned 1:1 with
+    /// [`Self::max_gen`]. `false` = must-run: the patch sites pin
+    /// `col_lower = col_upper` (not `[0, cap]`), and non-simulated must-run
+    /// generation is pre-netted from load.
+    pub(crate) allow_curtailment: Vec<bool>,
 }
 
-/// Build entity counts and the dense NCS column/window maps from the system.
+/// Build the per-slot NCS entity data from the system.
 ///
-/// `ncs_stochastic_dense_col`, `ncs_stochastic_windows`, `ncs_max_gen`, and
-/// `ncs_allow_curtailment` are aligned 1:1 in stochastic NCS-entity (slot) order;
-/// see [`StudySetup::ncs_stochastic_dense_col`] and
-/// [`StudySetup::ncs_stochastic_windows`] for what each carries.
+/// `stochastic_dense_col`, `stochastic_windows`, `max_gen`, and
+/// `allow_curtailment` are aligned 1:1 in stochastic NCS-entity (slot) order;
+/// see [`NcsEntityData::stochastic_dense_col`] and
+/// [`NcsEntityData::stochastic_windows`] for what each carries.
 ///
 /// # Errors
 ///
@@ -908,35 +574,27 @@ struct NcsEntityData {
 /// in the system's `non_controllable_sources`.
 fn build_ncs_entity_data(
     system: &System,
-    stage_templates: &StageTemplates,
+    stage_data: &StageData,
     stochastic: &StochasticContext,
 ) -> Result<NcsEntityData, SddpError> {
-    let entity_counts = build_entity_counts(system);
-
-    let n_study = stage_templates.templates.len();
-
-    // Every stage repeats the full id-sorted NCS list, so a dormant NCS still
-    // occupies its slot and reports a zero row rather than being absent.
-    let ncs_entity_ids_per_stage: Vec<Vec<i32>> =
-        vec![entity_counts.non_controllable_ids.clone(); n_study];
-
     let stoch_ncs_ids = stochastic.ncs_entity_ids();
 
     // Bridge each slot to its dense column via entity id (not a direct index) so the
     // map stays correct when only a subset of NCS are stochastic or the orders
     // diverge. Keyed on the id-sorted slot order, not entity declaration order.
-    let mut ncs_stochastic_dense_col: Vec<usize> = Vec::with_capacity(stoch_ncs_ids.len());
-    let mut ncs_stochastic_windows: Vec<(Option<i32>, Option<i32>)> =
+    let mut stochastic_dense_col: Vec<usize> = Vec::with_capacity(stoch_ncs_ids.len());
+    let mut stochastic_windows: Vec<(Option<i32>, Option<i32>)> =
         Vec::with_capacity(stoch_ncs_ids.len());
-    let mut ncs_max_gen: Vec<f64> = Vec::with_capacity(stoch_ncs_ids.len());
-    let mut ncs_allow_curtailment: Vec<bool> = Vec::with_capacity(stoch_ncs_ids.len());
+    let mut max_gen: Vec<f64> = Vec::with_capacity(stoch_ncs_ids.len());
+    let mut allow_curtailment: Vec<bool> = Vec::with_capacity(stoch_ncs_ids.len());
     for slot_id in stoch_ncs_ids {
         let not_found = || {
             SddpError::Validation(format!(
                 "stochastic NCS entity {slot_id:?} not found in system non_controllable_sources"
             ))
         };
-        let dense_col = entity_counts
+        let dense_col = stage_data
+            .entity_counts
             .non_controllable_ids
             .iter()
             .position(|&id| id == slot_id.0)
@@ -946,96 +604,54 @@ fn build_ncs_entity_data(
             .iter()
             .find(|n| n.id == *slot_id)
             .ok_or_else(not_found)?;
-        ncs_stochastic_dense_col.push(dense_col);
-        ncs_stochastic_windows.push((ncs.entry_stage_id, ncs.exit_stage_id));
-        ncs_max_gen.push(ncs.max_generation_mw);
-        ncs_allow_curtailment.push(ncs.allow_curtailment);
+        stochastic_dense_col.push(dense_col);
+        stochastic_windows.push((ncs.entry_stage_id, ncs.exit_stage_id));
+        max_gen.push(ncs.max_generation_mw);
+        allow_curtailment.push(ncs.allow_curtailment);
     }
 
     Ok(NcsEntityData {
-        entity_counts,
-        ncs_entity_ids_per_stage,
-        ncs_stochastic_dense_col,
-        ncs_stochastic_windows,
-        ncs_max_gen,
-        ncs_allow_curtailment,
+        stochastic_dense_col,
+        stochastic_windows,
+        max_gen,
+        allow_curtailment,
     })
 }
 
-/// Grouped output of [`build_energy_and_templates`].
-struct EnergyAndTemplates {
-    energy_conversion: EnergyConversionSet,
-    stage_templates: StageTemplates,
-    scaling_report: ScalingReport,
-    resolved_parameters: ResolvedParameters,
-}
-
-/// Build the energy-conversion set, the resolved parameter table, and the
-/// post-processed stage LP templates.
-///
-/// The energy-conversion set and resolved parameter table are built before the
-/// LP templates so the builder can resolve `CoefficientRef::Parameter` values.
-/// The resolved parameter table feeds `build_stage_templates` and is returned
-/// for the generic-constraint echo. Seasonless stages collapse to season 0,
-/// consistent with every other season-indexed lookup.
+/// Build the stage LP templates and post-process them (scaling, state boxes).
 ///
 /// # Errors
 ///
-/// - [`SddpError::Validation`] — on energy-conversion / resolved-parameter
-///   construction failure, or when the post-processed template list is empty.
-/// - [`SddpError::Solver`] — propagated from `build_stage_templates`.
-// Rationale (too_many_arguments): each of the three arc-table parameters threads
-// the single setup-owned derivation (`build_transit_bucket_topology`) into
-// `build_stage_templates`, mirroring the existing `per_stage_mask` thread; a
-// wrapper struct used at this one call site would rename the coupling, not
-// remove it.
-#[allow(clippy::too_many_arguments)]
-fn build_energy_and_templates(
+/// [`SddpError::Validation`] when the post-processed template list is empty.
+fn build_postprocessed_templates(
     system: &System,
-    inflow_method: crate::InflowNonNegativityMethod,
     stochastic: &StochasticContext,
     hydro_models: &PrepareHydroModelsResult,
-    scalar_parameters: &[cobre_core::ScalarParameter],
-    state_layout: &StateSpace,
-    cost_scale_factor: f64,
-    per_stage_mask: &[Vec<usize>],
-    arc_stage_weights: &HashMap<usize, Vec<Vec<f64>>>,
-    arc_spread_chrono: &HashMap<usize, Vec<Option<SpreadResolution>>>,
-    arc_arrival_density: &HashMap<usize, Vec<Option<Vec<f64>>>>,
-    hydro_cell_index: &HydroCellIndex,
-) -> Result<EnergyAndTemplates, SddpError> {
-    let (energy_conversion, resolved_parameters) = build_energy_conversion_and_resolved_parameters(
-        system,
-        hydro_models,
-        scalar_parameters,
-        cost_scale_factor,
-    )?;
+    state: &StateSpace,
+    topology: &bucket_topology::TransitBucketTopology,
+    inputs: LpBuildInputs<'_>,
+) -> Result<(StageTemplates, ScalingReport), SddpError> {
+    let resolved_parameters = inputs.resolved_parameters;
+    let study_dims = inputs.study_dims;
+    let time_value = inputs.time_value;
 
     let mut stage_templates = build_stage_templates(
         system,
-        inflow_method,
         stochastic.par(),
-        stochastic.normal(),
         &hydro_models.production,
         &hydro_models.evaporation,
-        &resolved_parameters,
-        state_layout,
-        per_stage_mask,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        hydro_cell_index,
-        stochastic
-            .provenance()
-            .load_scheme
-            .unwrap_or(SamplingScheme::InSample),
-    )?;
+        state,
+        topology,
+        inputs,
+    );
 
     let scaling_report = template_postprocess::postprocess_templates(
         &mut stage_templates,
         system,
-        state_layout,
-        cost_scale_factor,
+        state,
+        &study_dims.anticipated_plants,
+        resolved_parameters.cost_scale_factor,
+        time_value,
     );
 
     if stage_templates.templates.is_empty() {
@@ -1044,17 +660,12 @@ fn build_energy_and_templates(
         ));
     }
 
-    Ok(EnergyAndTemplates {
-        energy_conversion,
-        stage_templates,
-        scaling_report,
-        resolved_parameters,
-    })
+    Ok((stage_templates, scaling_report))
 }
 
 /// Build the energy-conversion set and the resolved-parameter table, then fail
 /// loud on a generic constraint that references an unresolved scalar-parameter
-/// id — the shared prefix of [`build_energy_and_templates`] and the
+/// id — the shared prefix of [`resolve_stage_data`] and the
 /// validate-time [`validate_generic_constraint_parameters`].
 ///
 /// # Errors
@@ -1193,60 +804,112 @@ fn check_scalar_parameters_present(
     Ok(())
 }
 
-/// `L_state = max(computed_order, boundary_depth)` — the single widening
-/// every lag-state-slot source (`resolve_state_layout`'s dense stride and
-/// per-hydro activeness mask, `build_opening_tree_library`,
-/// `rebuild_historical_library_non_root`) applies in lockstep so a
-/// boundary-inferred depth never truncates on one source while widening another.
+/// Validate that `par`'s shape matches `system`, once, at setup — every
+/// other reader trusts a validated [`PrecomputedPar`] and checks presence
+/// only (`n_stages() > 0`).
+///
+/// # Errors
+///
+/// Returns [`SddpError::Validation`] when `par.n_stages() > 0` and either its
+/// stage or hydro count differs from `system`'s.
+pub(crate) fn validate_par_shape(system: &System, par: &PrecomputedPar) -> Result<(), SddpError> {
+    let par_stages = par.n_stages();
+    if par_stages == 0 {
+        return Ok(());
+    }
+    let study_stages = system.stages().iter().filter(|s| s.id >= 0).count();
+    let hydros = system.hydros().len();
+    let par_hydros = par.n_hydros();
+    if par_stages == study_stages && par_hydros == hydros {
+        return Ok(());
+    }
+    Err(SddpError::Validation(format!(
+        "precomputed inflow model shape mismatch: the model covers {par_stages} stages x \
+         {par_hydros} hydros, the study has {study_stages} stages x {hydros} hydros"
+    )))
+}
+
+/// Validate every per-phase solver-config override, then resolve the three
+/// active profiles.
+///
+/// Validation covers all three phases before any profile resolves, so a
+/// backend-unsupported field is rejected before any template exists — on
+/// every rank identically, since `from_broadcast_params` is the shared setup
+/// path.
+///
+/// # Errors
+///
+/// [`SddpError::Validation`] when a phase's solver-config override sets a
+/// field the compiled backend does not support.
+fn resolve_solver_profiles(
+    config: &StudyParams,
+) -> Result<(ActiveProfile, ActiveProfile, ActiveProfile), SddpError> {
+    validate_phase_solver_config(config.training_solver_backward.as_ref(), Phase::Backward)?;
+    validate_phase_solver_config(config.training_solver_forward.as_ref(), Phase::Forward)?;
+    validate_phase_solver_config(config.simulation_solver.as_ref(), Phase::Simulation)?;
+
+    // `resolve_profile` is a pure function of the (identically broadcast)
+    // config, so every rank resolving independently is sufficient — the
+    // resolved `ActiveProfile` itself never needs to go on the wire.
+    let backward_profile =
+        Phase::Backward.resolve_profile(config.training_solver_backward.as_ref());
+    let forward_profile = Phase::Forward.resolve_profile(config.training_solver_forward.as_ref());
+    let simulation_profile = Phase::Simulation.resolve_profile(config.simulation_solver.as_ref());
+
+    Ok((backward_profile, forward_profile, simulation_profile))
+}
+
+/// `L_state = max(computed_order, boundary_depth)` — the single widening the
+/// lag-state depth: `resolve_state_layout`'s dense stride and per-hydro
+/// activeness mask, and the seed depth (`resolve_inflow_seeds`). It never
+/// widens a historical library, whose width and coverage are the applied
+/// PAR's own order (`scenario_libraries::build_historical_inflow_library`).
 /// `None` (no boundary) leaves `computed_order` unchanged.
 #[must_use]
 pub fn widen_lag_state_depth(computed_order: usize, boundary_depth: Option<u32>) -> usize {
     boundary_depth.map_or(computed_order, |d| computed_order.max(d as usize))
 }
 
+/// Grouped output of [`resolve_state_layout`].
+pub(crate) struct ResolvedStateLayout {
+    pub(crate) state: StateSpace,
+    pub(crate) anticipated_plants: AnticipatedPlants,
+}
+
 /// Resolve every anticipated thermal's delivery-anchored commitment and
 /// construct the single role-(a) [`StateSpace`] — before stage templates
 /// exist, since none of the state dimensions depend on the built LP.
 ///
-/// The returned `hydro_count` and `anticipated_thermal_indices` are the exact
-/// values the layout was built from; [`build_study_dimensions`] takes them as
-/// parameters instead of re-deriving them from the built templates.
+/// The returned `anticipated_plants` is the exact value the layout was built
+/// from; [`build_study_dimensions`] takes it as a parameter instead of
+/// re-deriving it from the built templates.
 ///
 /// # Errors
 ///
 /// - [`SddpError::Validation`] — a `LeadTime` anticipated plant's resolution
-///   fans out (`AnticipatedResolution::max_fanout > 1`); per-delivery-stage
+///   fans out (`AnticipatedResolution::max_fanout() > 1`); per-delivery-stage
 ///   fan-out simulation output is not yet supported.
 pub(crate) fn resolve_state_layout(
     system: &System,
+    calendar: &DeliveryCalendar,
     par_lp: &PrecomputedPar,
     transit_bucket_topology: &bucket_topology::TransitBucketTopology,
     inflow_lag_depth: Option<u32>,
-) -> Result<(StateSpace, usize, Vec<usize>), SddpError> {
-    let anticipated_thermal_indices: Vec<usize> = system
-        .thermals()
-        .iter()
-        .enumerate()
-        .filter_map(|(t_idx, thermal)| thermal.anticipated_config.is_some().then_some(t_idx))
-        .collect();
-    let n_anticipated = anticipated_thermal_indices.len();
+) -> Result<ResolvedStateLayout, SddpError> {
+    let anticipated_plants = AnticipatedPlants::build(system.thermals());
 
     // Single resolve_point consumer: map each anticipated plant's config to a
     // delivery-anchored PointResolution and derive the constant-lead K_i the
     // still-live ring machinery reads (the resolve_point decider contract). A
     // second resolve_point call site is forbidden — this resolution threads onto
     // the state layout instead.
-    let (anticipated_resolution, anticipated_lead_stages) = resolve_anticipated_commitments(system);
-    debug_assert_eq!(anticipated_lead_stages.len(), n_anticipated);
+    let (anticipated_resolution, anticipated_lead_stages) =
+        resolve_anticipated_commitments(system, calendar, &anticipated_plants);
 
     // TODO(anticipated-fanout-output): the coupled output extractor is
     // compute_anticipated_decision_mw
-    if anticipated_resolution.max_fanout > 1 {
-        let plant_id = first_fanned_plant_id(
-            system,
-            &anticipated_thermal_indices,
-            &anticipated_resolution,
-        );
+    if anticipated_resolution.max_fanout() > 1 {
+        let plant_id = first_fanned_plant_id(system, &anticipated_plants, &anticipated_resolution);
         debug_assert!(
             plant_id.is_some(),
             "max_fanout > 1 must locate the fanning plant"
@@ -1259,16 +922,8 @@ pub(crate) fn resolve_state_layout(
         )));
     }
 
-    // Ring depth: the delivery-anchored max_t K_i(t), clamped up to the
-    // constant-lead machinery's per-plant K_i so its slot indexing stays in range.
-    // A LeadStages plant's depth is bounded by ℓ, so this equals the pre-anchor
-    // max(lead_stages) and the ring sizing is byte-for-byte unchanged.
-    let k_max: usize = anticipated_resolution
-        .k_max
-        .max(anticipated_lead_stages.iter().copied().max().unwrap_or(0));
-
     let hydro_count = system.hydros().len();
-    let max_par_order: usize = widen_lag_state_depth(
+    let max_par_order = widen_lag_state_depth(
         system
             .inflow_models()
             .iter()
@@ -1291,7 +946,7 @@ pub(crate) fn resolve_state_layout(
     // stride for a hydro `par_lp` omits (`h >= par_lp.n_hydros()`) — production's
     // `par_lp` always covers every system hydro, so the fallback is inert there; a
     // hydro-free `PrecomputedPar` test fixture paired with a hydro-bearing system
-    // relies on it to satisfy the `StateSpace::new` length contract.
+    // relies on it to satisfy the `StateSpace::build` length contract.
     let effective_lag_counts: Vec<usize> = if max_par_order > 0 {
         (0..hydro_count)
             .map(|h| {
@@ -1312,19 +967,45 @@ pub(crate) fn resolve_state_layout(
     // no separate post-horizon commitment-hold block: a post-study-targeted
     // delivery is carried by the in-study ring slot its modular residue
     // resolves to.
-    let mut state = StateSpace::new(
-        hydro_count,
+    let state = StateSpace::build(
+        system.hydros(),
         max_par_order,
-        transit_bucket_topology.n_buckets,
-        transit_bucket_topology.column_order.clone(),
-        n_anticipated,
-        k_max,
-        anticipated_lead_stages,
         &effective_lag_counts,
+        transit_bucket_topology,
+        anticipated_lead_stages,
+        anticipated_resolution,
     );
-    state.set_anticipated_resolution(anticipated_resolution);
 
-    Ok((state, hydro_count, anticipated_thermal_indices))
+    debug_assert_eq!(
+        state.n_anticipated,
+        anticipated_plants.len(),
+        "state and the anticipated-plant set must agree on n_anticipated"
+    );
+    Ok(ResolvedStateLayout {
+        state,
+        anticipated_plants,
+    })
+}
+
+/// [`bucket_topology::build_transit_bucket_topology`] then [`resolve_state_layout`]
+/// — the shared prefix [`resolve_stage_data`] and
+/// [`lp_build_inputs::build_stage_templates_resolving_layout`] both need before
+/// diverging.
+///
+/// # Errors
+///
+/// Propagates [`resolve_state_layout`]'s `LeadTime` fan-out rejection.
+pub(crate) fn resolve_state_and_topology(
+    system: &System,
+    calendar: &DeliveryCalendar,
+    par_lp: &PrecomputedPar,
+    inflow_lag_depth: Option<u32>,
+    boundary_present: bool,
+) -> Result<(bucket_topology::TransitBucketTopology, ResolvedStateLayout), SddpError> {
+    let topology =
+        bucket_topology::build_transit_bucket_topology(system, calendar, boundary_present);
+    let layout = resolve_state_layout(system, calendar, par_lp, &topology, inflow_lag_depth)?;
+    Ok((topology, layout))
 }
 
 /// Canonical absolute delivery/arrival calendar date of a stage `start_date`,
@@ -1338,21 +1019,6 @@ pub(crate) fn year_month_day_anchor(date: NaiveDate) -> i32 {
     use chrono::Datelike;
     // `month()` is 1..=12, so the conversion never fails.
     date.year() * 10_000 + i32::try_from(date.month()).unwrap_or(1) * 100 + 1
-}
-
-/// The study's post-study delivery calendar ([`post_study_calendar_stages`]),
-/// empty when none is declared. Appended after the study stages to extend the
-/// ring's dating calendar so a slot maturing past the horizon dates onto its
-/// real post-study stage. Shared by [`build_extended_delivery_anchors`] and
-/// the policy manifest builder `build_stage_entity_manifest`, so every
-/// delivery-dating site derives one calendar. The synthetic `Stage::id`
-/// restarts at `0` and collides with study ids — only
-/// `start_date`/`end_date` are ever read.
-pub(crate) fn post_study_delivery_calendar(system: &System) -> Vec<Stage> {
-    system
-        .post_study_stages()
-        .map(|post_study| post_study_calendar_stages(&post_study.stages))
-        .unwrap_or_default()
 }
 
 /// The study's boundary date: the last study stage's (`id >= 0`, highest
@@ -1387,251 +1053,56 @@ pub(crate) fn extended_delivery_stages<'a>(
 
 /// Extended delivery-stage anchors: the `YYYYMM01` anchor of each delivery
 /// target stage — the study stages (`id >= 0`) followed by the synthetic
-/// post-study continuation ([`post_study_delivery_calendar`]) — indexed by
-/// delivery target `m`. The dating input the `anticipated_lanes` output
+/// post-study continuation ([`DeliveryCalendar::post_study_stages`]) — indexed
+/// by delivery target `m`. The dating input the `anticipated_lanes` output
 /// extractor reads for a post-study-targeted decision (`delivery_dates[m]`),
 /// matching the policy manifest's `delivery_anchor_at` walk over the same
 /// extended calendar. Study-only, byte-identical to a study-stages walk, when
 /// no post-study stage is declared.
-fn build_extended_delivery_anchors(
-    system: &System,
-    state: &StateSpace,
-    n_stages: usize,
-) -> Vec<i32> {
+fn build_extended_delivery_anchors(system: &System, calendar: &DeliveryCalendar) -> Vec<i32> {
     let study_stages: Vec<&Stage> = system.stages().iter().filter(|s| s.id >= 0).collect();
-    let post_study_calendar = post_study_delivery_calendar(system);
-    let anchors: Vec<i32> = extended_delivery_stages(&study_stages, &post_study_calendar)
+    let anchors: Vec<i32> = extended_delivery_stages(&study_stages, calendar.post_study_stages())
         .iter()
         .map(|s| year_month_day_anchor(s.start_date))
         .collect();
     debug_assert!(
-        anchors.len() >= state.delivery_stage_count(n_stages),
+        anchors.len() >= calendar.n_delivery(),
         "extended delivery anchors ({}) must cover the delivery axis ({})",
         anchors.len(),
-        state.delivery_stage_count(n_stages),
+        calendar.n_delivery(),
     );
     anchors
 }
 
-/// Declared travel-time arcs (upstream hydro id + travel time), one entry per
-/// hydro declaring `travel_time_hours > 0.0` and a `downstream_id` — the same
-/// predicate [`bucket_topology::declared_arcs`] uses, applied per upstream
-/// hydro rather than grouped by downstream plant.
-fn build_transit_seed_arcs(system: &System) -> Vec<TransitSeedArc> {
-    system
-        .hydros()
+/// Declared travel-time arcs (upstream hydro id + travel time), projected
+/// from [`bucket_topology::TransitBucketTopology::arcs`], in that list's
+/// order.
+fn build_transit_seed_arcs(
+    system: &System,
+    topology: &bucket_topology::TransitBucketTopology,
+) -> Vec<TransitSeedArc> {
+    let hydros = system.hydros();
+    topology
+        .arcs()
         .iter()
-        .filter_map(|h| {
-            let t_v = h.travel_time_hours.filter(|&t| t > 0.0)?;
-            h.downstream_id?;
-            Some(TransitSeedArc {
-                upstream_hydro_id: h.id.0,
-                travel_time_hours: t_v,
-            })
+        .map(|arc| TransitSeedArc {
+            upstream_hydro_id: hydros[arc.upstream.get()].id.0,
+            travel_time_hours: arc.travel_time_hours,
         })
         .collect()
 }
 
-/// Per-`(thermal, post-study stage)` cost/bounds lookup — [`PostStudyStages::
-/// thermal_bounds`] verbatim, never rebuilt into a nondeterministic-
-/// iteration-order map.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct PostStudyThermalLookup {
-    bounds: Vec<PostStudyThermalBound>,
-}
-
-impl PostStudyThermalLookup {
-    fn new(bounds: Vec<PostStudyThermalBound>) -> Self {
-        debug_assert!(
-            bounds.is_sorted_by_key(|b| (b.thermal_id, b.post_study_stage_index)),
-            "PostStudyStages::thermal_bounds must already be canonically sorted by \
-             (thermal_id, post_study_stage_index) — the cobre-io parser's own invariant"
-        );
-        Self { bounds }
-    }
-
-    /// `(cost_per_mwh, min_mw, max_mw)` declared for `(thermal_id,
-    /// post_study_stage_index)`; `None` when undeclared.
-    #[must_use]
-    pub(crate) fn lookup(
-        &self,
-        thermal_id: EntityId,
-        post_study_stage_index: usize,
-    ) -> Option<(f64, f64, f64)> {
-        self.bounds
-            .binary_search_by_key(&(thermal_id, post_study_stage_index), |b| {
-                (b.thermal_id, b.post_study_stage_index)
-            })
-            .ok()
-            .map(|i| {
-                let b = &self.bounds[i];
-                (b.cost_per_mwh, b.min_mw, b.max_mw)
-            })
-    }
-}
-
-/// Setup-side resolved post-study boundary artifacts
-/// ([`System::post_study_stages`]), built once so the LP builder
-/// (`TemplateBuildCtx`/`StageLayout`) and `policy_export` read them without
-/// re-deriving the calendar walk, the discount continuation, or the
-/// per-thermal lookup. Every field is empty without `post_study_stages` —
-/// inert: a study with no post-horizon commitment leaves the rest of setup
-/// unchanged.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct PostStudyResolved {
-    /// Post-study stage `j`'s own duration in hours
-    /// (`PostStudyStage::duration_hours` verbatim).
-    pub(crate) total_hours: Vec<f64>,
-    /// Cumulative discount factor continued past the study horizon — the exact
-    /// values [`template_postprocess::compute_cumulative_discount_factors`]
-    /// would hold for these stages had the horizon been extended to cover them
-    /// (the study's last cumulative factor bridged by the last study stage's own
-    /// one-step factor, then multiplied stage-by-stage).
-    pub(crate) cumulative_discount_factors: Vec<f64>,
-    /// Per-`(thermal, post-study stage)` cost/bounds lookup.
-    pub(crate) thermal_bounds: PostStudyThermalLookup,
-    /// Dense row-major `[anticipated_local][post_study_stage]` projection of
-    /// [`PostStudyThermalLookup::lookup`] — one cell per anticipated plant times
-    /// post-study stage, `None` where the deck declares none. `anticipated_local`
-    /// MUST be [`resolve_state_layout`]'s own `anticipated_thermal_indices`
-    /// canonical order (`system.thermals()` filtered on
-    /// `anticipated_config.is_some()`); a mismatched order silently prices one
-    /// plant's post-study commitment with another's fuel cost. Never index this
-    /// directly — read it only through [`Self::anticipated_bound`], and never
-    /// rebuild it into a `Vec<Vec<_>>` (a per-plant allocation) or an
-    /// `EntityId`-keyed map (a nondeterministic-iteration-order read).
-    anticipated_bounds: Vec<Option<(f64, f64, f64)>>,
-    /// Row stride of [`Self::anticipated_bounds`] — the post-study stage count,
-    /// `total_hours.len()`.
-    anticipated_bounds_stride: usize,
-}
-
-impl PostStudyResolved {
-    /// `(cost_per_mwh, min_mw, max_mw)` declared for anticipated-local plant
-    /// `local_idx` at post-study stage `post_study_stage`, or `None` when the
-    /// deck declares no cell there — never a panic, including on an empty table
-    /// (`PostStudyResolved::default()`) or an out-of-range `local_idx`/
-    /// `post_study_stage`.
-    #[must_use]
-    pub(crate) fn anticipated_bound(
-        &self,
-        local_idx: AnticipatedLocal,
-        post_study_stage: usize,
-    ) -> Option<(f64, f64, f64)> {
-        if post_study_stage >= self.anticipated_bounds_stride {
-            return None;
-        }
-        self.anticipated_bounds
-            .get(local_idx.get() * self.anticipated_bounds_stride + post_study_stage)
-            .copied()
-            .flatten()
-    }
-}
-
-/// Resolve [`System::post_study_stages`] into the setup-side artifacts:
-/// post-study `total_hours`, the discount continuation, the per-thermal
-/// cost/bounds lookup, and its dense anticipated-local projection. `None`/empty
-/// `post_study` returns [`PostStudyResolved::default`] — inert.
-///
-/// `anticipated_thermal_ids` is the anticipated plants' `EntityId`s in
-/// anticipated-local order — [`resolve_state_layout`]'s own
-/// `anticipated_thermal_indices` order, handed in rather than re-derived here,
-/// since a second derivation could silently diverge from it.
-///
-/// `last_real_cumulative` and `last_real_per_stage` are the study's own last
-/// cumulative and per-stage discount factors — [`crate::StageTemplates::
-/// cumulative_discount_factors`]/[`crate::StageTemplates::discount_factors`]'s
-/// last entries, or (`crate::lp::builder::build_stage_templates`'s own
-/// `TemplateBuildCtx` build) the identical values computed from the same
-/// `compute_per_stage_discount_factors`/`compute_cumulative_discount_factors`
-/// pair before those output slices exist. The first post-study cumulative
-/// factor bridges the horizon by the LAST STUDY stage's own one-step factor
-/// (`last_real_cumulative * last_real_per_stage`), NEVER the first post-study
-/// stage's (`* per_stage_post[0]`): the continuation must equal what
-/// `cumulative_discount_factors` would hold had the horizon been extended to
-/// cover the post-study stages.
-pub(crate) fn resolve_post_study_artifacts(
-    post_study: Option<&PostStudyStages>,
-    anticipated_thermal_ids: &[EntityId],
-    pg: &HorizonGraph,
-    last_real_cumulative: f64,
-    last_real_per_stage: f64,
-) -> PostStudyResolved {
-    let Some(post_study) = post_study else {
-        return PostStudyResolved::default();
-    };
-    if post_study.stages.is_empty() {
-        return PostStudyResolved::default();
-    }
-
-    let total_hours: Vec<f64> = post_study.stages.iter().map(|s| s.duration_hours).collect();
-
-    let calendar_stages = post_study_calendar_stages(&post_study.stages);
-    // `PostStudyStage` declares no rate-override field (unlike a dispatched
-    // `Stage`); a `HorizonGraph` carrying only `annual_discount_rate` keeps this
-    // call from resolving a synthetic post-study stage id against a REAL study
-    // stage's override in `pg.stage_discount_rate_overrides`.
-    let rate_graph = HorizonGraph {
-        annual_discount_rate: pg.annual_discount_rate,
-        ..HorizonGraph::default()
-    };
-    let calendar_stage_refs: Vec<&Stage> = calendar_stages.iter().collect();
-    let per_stage_post =
-        template_postprocess::compute_per_stage_discount_factors(&calendar_stage_refs, &rate_graph);
-
-    let mut cumulative_discount_factors = Vec::with_capacity(per_stage_post.len());
-    let mut cumulative = last_real_cumulative * last_real_per_stage;
-    for &factor in &per_stage_post {
-        cumulative_discount_factors.push(cumulative);
-        cumulative *= factor;
-    }
-
-    let thermal_bounds = PostStudyThermalLookup::new(post_study.thermal_bounds.clone());
-
-    // Dense [anticipated_local][post_study_stage] projection of `thermal_bounds`,
-    // built once here so the ring fill (`fill_anticipated_columns`) never
-    // reconstructs an `EntityId` from an anticipated-local index or re-searches
-    // `thermal_bounds` per fill call.
-    let anticipated_bounds_stride = total_hours.len();
-    let mut anticipated_bounds =
-        Vec::with_capacity(anticipated_thermal_ids.len() * anticipated_bounds_stride);
-    for &thermal_id in anticipated_thermal_ids {
-        for post_study_stage in 0..anticipated_bounds_stride {
-            anticipated_bounds.push(thermal_bounds.lookup(thermal_id, post_study_stage));
-        }
-    }
-    debug_assert_eq!(
-        anticipated_bounds.len(),
-        anticipated_thermal_ids.len() * anticipated_bounds_stride,
-        "PostStudyResolved.anticipated_bounds row count must equal \
-         anticipated_thermal_ids.len()"
-    );
-
-    PostStudyResolved {
-        total_hours,
-        cumulative_discount_factors,
-        thermal_bounds,
-        anticipated_bounds,
-        anticipated_bounds_stride,
-    }
-}
-
 /// Build the study-invariant, non-state [`StudyDimensions`] from the system
-/// and the post-processed stage templates.
+/// alone, before the stage templates exist.
 ///
-/// `hydro_count` and `anticipated_thermal_indices` are threaded from
-/// [`resolve_state_layout`] — the same values its [`StateSpace`] was built
-/// from — so the only per-stage template field this reads is
-/// `ncs_col_starts`, the one dimension genuinely derived from the built LP.
-fn build_study_dimensions(
+/// `anticipated_plants` is threaded from [`resolve_state_layout`] — the same
+/// value its [`StateSpace`] was built from.
+pub(crate) fn build_study_dimensions(
     system: &System,
-    stage_templates: &StageTemplates,
-    inflow_method: crate::InflowNonNegativityMethod,
-    hydro_count: usize,
-    anticipated_thermal_indices: Vec<usize>,
+    inflow_method: InflowNonNegativityMethod,
+    anticipated_plants: AnticipatedPlants,
+    downstream_par_order: usize,
 ) -> StudyDimensions {
-    let has_inflow_penalty = inflow_method.has_slack_columns() && hydro_count > 0;
-
     let max_deficit_segments = system
         .buses()
         .iter()
@@ -1639,21 +1110,14 @@ fn build_study_dimensions(
         .max()
         .unwrap_or(0);
 
-    // Single owner of the study-invariant, non-state LP shape. `has_ncs` only flags
-    // presence; the per-(ncs, block) column base is read per stage from
-    // `StageContext::ncs_col_starts`, never a global handle. `n_blks` is deliberately
-    // absent — it is per-stage, owned by the per-stage geometry, never study-global.
+    // Single owner of the study-invariant, non-state LP shape. `n_blks` is
+    // deliberately absent — it is per-stage, owned by the per-stage geometry, never
+    // study-global.
     StudyDimensions {
-        n_thermals: system.thermals().len(),
-        n_lines: system.lines().len(),
-        n_buses: system.buses().len(),
         max_deficit_segments,
-        has_ncs: !stage_templates.ncs_col_starts.is_empty(),
-        has_inflow_penalty,
-        has_withdrawal: hydro_count > 0,
-        has_operational_violations: hydro_count != 0,
-        anticipated_thermal_indices,
-        n_pumping: system.n_pumping_stations(),
+        inflow_method,
+        anticipated_plants,
+        downstream_par_order,
     }
 }
 
@@ -1661,12 +1125,12 @@ fn build_study_dimensions(
 /// fans out — `|genuine C(t)| > 1` at some decision stage `t` — or `None` if
 /// none does. Shares the exact per-plant/per-stage predicate
 /// [`AnticipatedResolution::max_fanout`] maxes over, so `Some(_)` iff
-/// `resolution.max_fanout > 1`; `anticipated_thermal_indices` and
+/// `resolution.max_fanout() > 1`; `anticipated_plants` and
 /// `resolution.per_plant` are both in canonical (anticipated-local) order, so
 /// the first match is declaration-order-invariant.
 fn first_fanned_plant_id(
     system: &System,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
     resolution: &AnticipatedResolution,
 ) -> Option<EntityId> {
     resolution
@@ -1676,21 +1140,13 @@ fn first_fanned_plant_id(
         .find_map(|(local_idx, point)| {
             let fans_out =
                 (0..point.decision_sets.len()).any(|t| point.genuine_decisions_at(t).count() > 1);
-            fans_out.then(|| system.thermals()[anticipated_thermal_indices[local_idx]].id)
+            fans_out.then(|| {
+                let thermal_idx = anticipated_plants
+                    .thermal_of(AnticipatedLocal::new(local_idx))
+                    .get();
+                system.thermals()[thermal_idx].id
+            })
         })
-}
-
-/// The study calendar followed by every declared post-study stage duration;
-/// byte-identical to the study-only vector when none is declared. Two
-/// consumers derive their own extended calendar from this one vector: the
-/// anticipated delivery axis ([`DeliveryAxis::stage_lengths_hours`], where it
-/// lets `n_delivery` span `n_stages + n_post`) and the water ring's arrival
-/// resolution ([`bucket_topology::extend_for_resolution`]'s base calendar).
-fn delivery_stage_durations(mut study_durations: Vec<f64>, system: &System) -> Vec<f64> {
-    if let Some(post_study) = system.post_study_stages() {
-        study_durations.extend(post_study.stages.iter().map(|s| s.duration_hours));
-    }
-    study_durations
 }
 
 /// Resolve every anticipated thermal's delivery-anchored point commitment and
@@ -1698,28 +1154,24 @@ fn delivery_stage_durations(mut study_durations: Vec<f64>, system: &System) -> V
 ///
 /// The sole `resolve_point` consumer (via [`AnticipatedResolution::resolve`]).
 /// Warn-free: [`resolve_anticipated_commitments`] wraps this with the setup-time
-/// `K = 0` advisory; [`crate::lp::builder::build_stage_templates`] calls this core
-/// directly to attach an identical resolution onto its own `StateSpace` — the
-/// same accepted redundant-but-deterministic recompute this crate already
-/// applies to the bucket topology, not a second advisory emission. Returns the
+/// `K = 0` advisory. Returns the
 /// per-plant resolution and the anticipated-local constant leads: a
 /// `LeadStages(ℓ)` plant keeps `ℓ` byte-for-byte; a `LeadTime` plant takes its
-/// per-plant ring depth ([`PointResolution::ring_depth`]) — the plant's own
-/// `k_i` reachability/padding bound the slot masking and policy manifest read.
+/// per-plant ring depth ([`PointResolution::ring_depth`]) —
+/// [`crate::lp::indexer::for_each_live_commitment_slot`] owns which slots that
+/// ring depth reaches, for both the LP fill and the policy manifest read.
 ///
 /// The delivery axis is EXTENDED: `n_delivery = n_stages + n_post` while
 /// `n_decision` stays `n_stages` (decisions are only ever made in-study), so a
-/// `LeadTime` plant's resolution can target a post-study delivery. Widening
-/// this site alone is a half-switch — [`crate::lp::indexer::anticipated_gate::anticipated_resolution_for`]'s
-/// fixture fallback must widen in lockstep or the two resolution paths desync
-/// the moment a study declares `post_study_stages`.
+/// `LeadTime` plant's resolution can target a post-study delivery.
 pub(crate) fn resolve_anticipated_commitments_core(
     system: &System,
+    calendar: &DeliveryCalendar,
+    anticipated_plants: &AnticipatedPlants,
 ) -> (AnticipatedResolution, Vec<usize>) {
-    let anticipated_thermals: Vec<&Thermal> = system
+    let anticipated_thermals: Vec<&Thermal> = anticipated_plants
         .thermals()
-        .iter()
-        .filter(|t| t.anticipated_config.is_some())
+        .map(|t| &system.thermals()[t.get()])
         .collect();
     let leads: Vec<LeadTime> = anticipated_thermals
         .iter()
@@ -1733,16 +1185,12 @@ pub(crate) fn resolve_anticipated_commitments_core(
         return (AnticipatedResolution::default(), Vec::new());
     }
 
-    let study_durations = bucket_topology::study_stage_durations(system);
-    let n_stages = study_durations.len();
-    let durations = delivery_stage_durations(study_durations, system);
-    let n_delivery = durations.len();
+    let n_stages = calendar.n_study();
     let resolution = AnticipatedResolution::resolve(
         &leads,
         DeliveryAxis {
-            stage_lengths_hours: &durations,
-            n_decision: n_stages,
-            n_delivery,
+            study_stage_hours: calendar.study_total_hours(),
+            post_study_stage_hours: calendar.post_study_total_hours(),
         },
     );
 
@@ -1776,17 +1224,18 @@ pub(crate) fn resolve_anticipated_commitments_core(
 }
 
 /// [`resolve_anticipated_commitments_core`] plus the setup-time `K = 0`
-/// advisory ([`warn_on_sub_stage_lead`]) — the single owner of that advisory.
-/// Every other caller (e.g. [`crate::lp::builder::build_stage_templates`]) uses
-/// the core directly so the advisory never double-emits.
+/// advisory ([`warn_on_sub_stage_lead`]) — the single owner of that advisory, so
+/// it is emitted once per setup.
 pub(crate) fn resolve_anticipated_commitments(
     system: &System,
+    calendar: &DeliveryCalendar,
+    anticipated_plants: &AnticipatedPlants,
 ) -> (AnticipatedResolution, Vec<usize>) {
-    let (resolution, lead_stages) = resolve_anticipated_commitments_core(system);
-    let anticipated_thermals: Vec<&Thermal> = system
+    let (resolution, lead_stages) =
+        resolve_anticipated_commitments_core(system, calendar, anticipated_plants);
+    let anticipated_thermals: Vec<&Thermal> = anticipated_plants
         .thermals()
-        .iter()
-        .filter(|t| t.anticipated_config.is_some())
+        .map(|t| &system.thermals()[t.get()])
         .collect();
     warn_on_sub_stage_lead(&anticipated_thermals, &resolution);
     (resolution, lead_stages)
@@ -1831,14 +1280,15 @@ fn warn_on_sub_stage_lead(thermals: &[&Thermal], resolution: &AnticipatedResolut
 /// event), naming every affected plant in the one emitted event.
 fn warn_on_boundary_absent_post_study_delivery(
     system: &System,
-    anticipated_thermal_indices: &[usize],
+    calendar: &DeliveryCalendar,
+    anticipated_plants: &AnticipatedPlants,
     resolution: &AnticipatedResolution,
     boundary_present: bool,
 ) {
     if boundary_present {
         return;
     }
-    let n_stages = bucket_topology::study_stage_durations(system).len();
+    let n_stages = calendar.n_study();
     let thermals = system.thermals();
     let horizon_end = study_horizon_end(system);
     let past = &system.initial_conditions().past_anticipated_commitments;
@@ -1848,16 +1298,16 @@ fn warn_on_boundary_absent_post_study_delivery(
                 .any(|w| w.thermal_id.0 == thermal_id && w.start_date >= end && w.value_mw != 0.0)
         })
     };
-    let affected: Vec<String> = anticipated_thermal_indices
-        .iter()
+    let affected: Vec<String> = anticipated_plants
+        .thermals()
         .zip(&resolution.per_plant)
-        .filter(|&(&t_idx, point)| {
+        .filter(|&(t, point)| {
             let class3 = point.decider.get(n_stages..).is_some_and(|post_study| {
                 post_study.iter().any(|c| c.is_some_and(|t| t < n_stages))
             });
-            class3 || has_nonzero_fixed(thermals[t_idx].id.0)
+            class3 || has_nonzero_fixed(thermals[t.get()].id.0)
         })
-        .map(|(&t_idx, _)| format!("{} ({})", thermals[t_idx].id, thermals[t_idx].name))
+        .map(|(t, _)| format!("{} ({})", thermals[t.get()].id, thermals[t.get()].name))
         .collect();
     if affected.is_empty() {
         return;
@@ -1943,124 +1393,419 @@ const FULL_STATE_CONFIG: StageStateConfig = StageStateConfig {
     inflow_lags: true,
 };
 
-/// Grouped output of [`precompute_lag_data`].
-struct LagData {
-    stage_lag_transitions: Vec<StageLagTransition>,
-    noise_group_ids: Vec<u32>,
-    downstream_par_order: usize,
+/// Build the runtime node graph and run its admissibility rejects.
+///
+/// # Errors
+///
+/// Propagates [`node_graph::build_node_graph`]'s construction error,
+/// [`reject_scenario_id_under_sampled_selection`], and
+/// [`reject_insample_class_under_external_nodes`].
+fn build_checked_node_graph(
+    system: &System,
+    stochastic: &StochasticContext,
+    study_stage_ids: &[i32],
+    n_stages: usize,
+    training_enumerated: bool,
+) -> Result<NodeGraph, SddpError> {
+    // Binds after `build_scenario_libraries`: an `External`-bound node's Ω
+    // addresses the standardized library's raw scenario axis, so binding
+    // earlier would race the library's own standardization.
+    let stage_id_resolver = StageIdResolver::from_study_stage_ids(study_stage_ids);
+    let node_graph = node_graph::build_node_graph(
+        system.policy_graph(),
+        n_stages,
+        &stage_id_resolver,
+        stochastic,
+    )?;
+
+    reject_scenario_id_under_sampled_selection(&node_graph, training_enumerated)?;
+    let prov = stochastic.provenance();
+    reject_insample_class_under_external_nodes(
+        &node_graph,
+        (prov.inflow_scheme, stochastic.n_hydros()),
+        (prov.load_scheme, stochastic.n_load_buses()),
+        (prov.ncs_scheme, stochastic.n_stochastic_ncs()),
+    )?;
+
+    Ok(node_graph)
 }
 
-/// Precompute per-stage lag accumulation weights, noise-group ids, and the
-/// downstream PAR order. `season_map_ref` is the caller's already-resolved
-/// no-op-fallback season map (see the `from_broadcast_params` hoist).
-fn precompute_lag_data(
-    system: &System,
-    stages: &[Stage],
-    stochastic: &StochasticContext,
-    season_map_ref: &SeasonMap,
-) -> LagData {
-    // Proxy: the global `max_par_order` stands in for the quarterly PAR order until a
-    // separate quarterly stochastic context exists.
-    let downstream_par_order = derive_downstream_par_order(
-        stages,
-        stochastic.par().max_order(),
-        system.policy_graph().season_map.as_ref(),
+/// Resolve the training and simulation phase configs: re-resolve any
+/// `enumerated`-declared forward-pass/scenario count against the now-built
+/// node graph, then assemble [`LoopParams`] and [`SimulationConfig`].
+///
+/// # Errors
+///
+/// Propagates [`resolve_enumerated_training_count`]'s and
+/// [`resolve_enumerated_simulation_count`]'s admissibility and overflow errors.
+fn resolve_phase_configs(
+    node_graph: &NodeGraph,
+    config: &StudyParams,
+    simulation_profile: ActiveProfile,
+) -> Result<(LoopParams, SimulationConfig), SddpError> {
+    // Resolves any `enumerated`-declared phase's actual count now that the
+    // graph exists — config load could only signal the request, never the
+    // count. `forward_passes`/`n_scenarios` carry a `sampled`-shaped
+    // placeholder until this point when enumerated was requested.
+    warn_on_enumeration_asymmetry(
+        config.training_enumerated,
+        matches!(
+            config.simulation_enumerated,
+            SimulationEnumeratedRequest::Enumerated
+        ),
     );
-    let stage_lag_transitions =
-        precompute_stage_lag_transitions(stages, season_map_ref, downstream_par_order);
-    // Both outputs derive from `stages`, so they cannot disagree about which
-    // stages are in scope; `study_stage_noise_group_ids` re-derives that scope
-    // from `System` and is for callers that have no filtered slice.
-    let noise_group_ids = precompute_noise_groups(stages);
+    let forward_passes = if config.training_enumerated {
+        resolve_enumerated_training_count(node_graph)?
+    } else {
+        config.forward_passes
+    };
+    let n_scenarios = match config.simulation_enumerated {
+        SimulationEnumeratedRequest::Enumerated => resolve_enumerated_simulation_count(node_graph)?,
+        SimulationEnumeratedRequest::Sampled => config.n_scenarios,
+    };
+    let max_iterations = max_iterations_from_rules(&config.stopping_rule_set);
 
-    LagData {
-        stage_lag_transitions,
-        noise_group_ids,
-        downstream_par_order,
+    Ok((
+        LoopParams {
+            seed: config.seed,
+            forward_passes,
+            training_enumerated: config.training_enumerated,
+            max_iterations,
+            start_iteration: 0,
+            stopping_rules: config.stopping_rule_set.clone(),
+        },
+        SimulationConfig {
+            n_scenarios,
+            io_channel_capacity: config.io_channel_capacity,
+            profile: simulation_profile,
+        },
+    ))
+}
+
+/// Build the per-pool [`FutureCostFunction`] and its [`CutStateProjection`]s
+/// from the resolved node graph and phase parameters.
+fn build_future_cost_function(
+    system: &System,
+    state: &StateSpace,
+    node_graph: &NodeGraph,
+    loop_params: &LoopParams,
+) -> (FutureCostFunction, Vec<CutStateProjection>) {
+    // Cannot fail: `loop_params` comes from `resolve_phase_configs`, which already
+    // ran the enumerated admissibility guards for a `true` `training_enumerated`.
+    let traversal = node_graph::Traversal::resolve(
+        node_graph,
+        loop_params.training_enumerated,
+        loop_params.forward_passes,
+    );
+
+    let cut_state_layouts = build_cut_state_layouts(system, state, node_graph);
+    let pool_state_dimensions: Vec<usize> = cut_state_layouts
+        .iter()
+        .map(CutStateProjection::n_slots)
+        .collect();
+    // Cut-RECEIPT stride selected through the resolved traversal. The
+    // `Sampled` arm keeps `pool_cut_stride` — the mean+σ statistical margin
+    // capped at `forward_passes`, one candidate cut per TRIAL POINT — and
+    // NEVER `forward_solve_counts`, the enumerated engine's node-deduplicated
+    // per-pool FORWARD-SOLVE count, which under-reserves a branched pool's
+    // slots (the backward still produces one cut per trial point, so the next
+    // trial collides with a still-active slot — `CutPool::add_cut`'s
+    // double-insert panic). The `Enumerated` arm sizes at the node-native cut
+    // count, `enumerated_pool_cut_stride`: exactly 1 per non-leaf node
+    // (in-degree 1, one distinct incoming state, one cut per iteration) and 0
+    // for the shared leaf pool — NOT the sampled bound, which would keep the
+    // per-pool capacity/basis/broadcast/checkpoint reservation the node-native
+    // backward never fills.
+    let visit_bounds = match &traversal {
+        node_graph::Traversal::Sampled { forward_passes } => {
+            node_graph.pool_cut_stride(*forward_passes)
+        }
+        node_graph::Traversal::Enumerated(_) => node_graph::enumerated_pool_cut_stride(node_graph),
+    };
+    let fcf = FutureCostFunction::new_per_pool(
+        &pool_state_dimensions,
+        state.n_state,
+        loop_params.forward_passes,
+        loop_params.max_iterations.saturating_add(1),
+        &vec![0; node_graph.n_pools],
+        &visit_bounds,
+    );
+
+    (fcf, cut_state_layouts)
+}
+
+/// No-op fallback `SeasonMap`, shared by [`resolve_stage_lag_transitions`] and
+/// [`resolve_inflow_seeds`].
+static NOOP_SEASON_MAP: SeasonMap = SeasonMap {
+    cycle_type: Monthly,
+    seasons: Vec::new(),
+};
+
+/// Downstream PAR order and per-stage lag transitions over one `SeasonMap`.
+/// The sole owner of both derivations — `resolve_stage_data` and
+/// `scenario_libraries::build_historical_inflow_library` each call it once,
+/// over their own PAR model.
+pub(crate) fn resolve_stage_lag_transitions(
+    stages: &[Stage],
+    par: &PrecomputedPar,
+    season_map: Option<&SeasonMap>,
+) -> (usize, Vec<StageLagTransition>) {
+    let downstream_par_order = derive_downstream_par_order(stages, par, season_map);
+    let effective_season_map = season_map.unwrap_or(&NOOP_SEASON_MAP);
+    let stage_lag_transitions =
+        precompute_stage_lag_transitions(stages, effective_season_map, downstream_par_order);
+    (downstream_par_order, stage_lag_transitions)
+}
+
+/// Derived per-hydro PAR lag-slot and accumulator seeds from the system's
+/// first study stage. The sole owner — `resolve_initial_conditions` and the
+/// opening tree each call it once, at the same depth.
+fn resolve_inflow_seeds(system: &System, max_par_order: usize) -> DerivedInflowSeeds {
+    let season_map = system
+        .policy_graph()
+        .season_map
+        .as_ref()
+        .unwrap_or(&NOOP_SEASON_MAP);
+    match system.stages().iter().find(|s| s.id >= 0) {
+        None => DerivedInflowSeeds::zero(system.hydros().len(), max_par_order),
+        Some(first_stage) => derive_inflow_seeds(
+            system.inflow_history(),
+            &system.initial_conditions().recent_observations,
+            system.hydros(),
+            first_stage,
+            season_map,
+            max_par_order,
+        ),
     }
 }
 
-/// Build the training and simulation [`ScenarioLibraries`].
+/// Initial state vector and derived per-hydro PAR lag-slot/accumulator seeds,
+/// held on [`SolveInputs::initial`].
+#[derive(Debug)]
+pub(crate) struct InitialConditions {
+    pub(crate) state: Vec<f64>,
+    /// Applied to the stage-0 lag block and to every trajectory start in the
+    /// forward pass and simulation pipeline instead of zero-filling. All-zero
+    /// when the derivation has no resolvable data.
+    pub(crate) inflow_seeds: DerivedInflowSeeds,
+}
+
+/// Build the initial state vector and its inflow-lag seeds together —
+/// [`build_initial_state`]'s lag block reads [`resolve_inflow_seeds`]'s output.
+fn resolve_initial_conditions(
+    system: &System,
+    state: &StateSpace,
+    study_dims: &StudyDimensions,
+    topology: &bucket_topology::TransitBucketTopology,
+    stage0_box: Option<&StateBox>,
+) -> InitialConditions {
+    let inflow_seeds = resolve_inflow_seeds(system, state.max_par_order);
+    let mut initial_state =
+        build_initial_state(system, study_dims, state, &inflow_seeds.lag_values);
+    splice_transit_bucket_seed(&mut initial_state, state, system, topology);
+    if let Some(stage0_box) = stage0_box {
+        canonicalize_initial_state(&mut initial_state, state, stage0_box);
+    }
+    InitialConditions {
+        state: initial_state,
+        inflow_seeds,
+    }
+}
+
+/// Resolve the stage phase: the state layout, LP templates, per-stage data,
+/// and initial conditions built once before scenario libraries and the node
+/// graph.
 ///
-/// Each phase's per-class library (`historical`, `external_inflow`,
-/// `external_load`, `external_ncs`) is constructed only when that class uses
-/// the matching sampling scheme. Simulation-specific libraries are built only
-/// when the simulation scheme differs from the training scheme; when identical,
-/// the simulation phase stores `None` and `simulation_ctx()` falls back to the
-/// training library references.
+/// `energy_conversion`, `resolved_parameters`, and `transit_seed_arcs` return
+/// alongside [`StageData`] rather than fold into it — all three are
+/// `StudySetup`'s own fields, not part of the stage/training/simulation
+/// contexts' shared inputs.
+///
+/// # Errors
+///
+/// Propagates [`resolve_state_layout`]'s, [`build_energy_conversion_and_resolved_parameters`]'s
+/// and [`build_postprocessed_templates`]'s errors.
+fn resolve_stage_data(
+    system: &System,
+    config: &StudyParams,
+    stochastic: &StochasticContext,
+    hydro_models: &PrepareHydroModelsResult,
+) -> Result<
+    (
+        StageData,
+        InitialConditions,
+        EnergyConversionSet,
+        ResolvedParameters,
+        Vec<TransitSeedArc>,
+    ),
+    SddpError,
+> {
+    let calendar = DeliveryCalendar::from_system(system);
+    let (transit_bucket_topology, layout) = resolve_state_and_topology(
+        system,
+        &calendar,
+        stochastic.par(),
+        config.boundary.inflow_lag_depth(),
+        config.boundary.is_present(),
+    )?;
+    let transit_seed_arcs = build_transit_seed_arcs(system, &transit_bucket_topology);
+    warn_on_boundary_absent_post_study_delivery(
+        system,
+        &calendar,
+        &layout.anticipated_plants,
+        &layout.state.anticipated_resolution,
+        config.boundary.is_present(),
+    );
+
+    let (energy_conversion, resolved_parameters) = build_energy_conversion_and_resolved_parameters(
+        system,
+        hydro_models,
+        &config.scalar_parameters,
+        config.cost_scale_factor,
+    )?;
+
+    let stages: Vec<Stage> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .cloned()
+        .collect();
+    let (downstream_par_order, stage_lag_transitions) = resolve_stage_lag_transitions(
+        &stages,
+        stochastic.par(),
+        system.policy_graph().season_map.as_ref(),
+    );
+    let study_dims = build_study_dimensions(
+        system,
+        config.inflow_method,
+        layout.anticipated_plants,
+        downstream_par_order,
+    );
+
+    let time_value = TimeValue::from_system(system, &study_dims.anticipated_plants, calendar);
+    let hydro_cell_index = HydroCellIndex::build(system.hydros());
+    let load_bus_ids = &stochastic.entity_order()[stochastic.class_dimensions().load_bus_range()];
+    let inputs = resolve_lp_build_inputs(
+        system,
+        load_bus_ids,
+        &hydro_models.production,
+        &study_dims,
+        &time_value,
+        &hydro_cell_index,
+        &resolved_parameters,
+    );
+
+    let (stage_templates, scaling_report) = build_postprocessed_templates(
+        system,
+        stochastic,
+        hydro_models,
+        &layout.state,
+        &transit_bucket_topology,
+        inputs,
+    )?;
+
+    let noise_group_ids = precompute_noise_groups(&stages);
+
+    let initial = resolve_initial_conditions(
+        system,
+        &layout.state,
+        &study_dims,
+        &transit_bucket_topology,
+        stage_templates.state_boxes().first(),
+    );
+
+    let stage_data = stage_data::StageData {
+        entity_counts: build_entity_counts(system),
+        pumping_consumption_mw_per_m3s: build_pumping_consumption(system),
+        contract_prices_per_stage: build_contract_prices_per_stage(
+            system,
+            &stage_templates.geometry_per_stage,
+        ),
+        contract_slots: build_contract_slots(system),
+        stage_templates,
+        time_value,
+        state: layout.state,
+        study_dims,
+        hydro_cell_index,
+        stages,
+        stage_lag_transitions,
+        noise_group_ids,
+        scaling_report,
+    };
+
+    Ok((
+        stage_data,
+        initial,
+        energy_conversion,
+        resolved_parameters,
+        transit_seed_arcs,
+    ))
+}
+
+/// Build one phase's per-class [`PhaseLibraries`].
+///
+/// A class is built when `source`'s scheme for it matches the class's target
+/// scheme (`Historical` or `External`) and `training` is `None` (this call
+/// builds the training phase itself) or names a different scheme for that
+/// class than `source`'s own — the dedupe [`ScenarioLibraries`] documents.
 ///
 /// # Errors
 ///
 /// Propagates [`SddpError`] from the individual library builders on validation
 /// or padding failure.
-// Rationale: mirrors build_historical_inflow_library/build_external_inflow_library's
-// own arity; a context struct would just relocate the arity, not reduce it.
-#[allow(clippy::too_many_arguments)]
-// Rationale: a flat training/simulation x 4-class enumeration; splitting it
-// would relocate the enumeration into a same-shaped helper, not shrink it.
-#[allow(clippy::too_many_lines)]
-fn build_scenario_libraries(
+fn build_phase_libraries(
     system: &System,
-    stages: &[Stage],
-    hydro_ids: &[EntityId],
     stochastic: &StochasticContext,
-    stage_lag_transitions: &[StageLagTransition],
-    training_source: &ScenarioSource,
-    simulation_source: &ScenarioSource,
-    forward_passes: u32,
-    downstream_par_order: usize,
+    stage_data: &StageData,
     seed: DerivedSeed<'_>,
-) -> Result<ScenarioLibraries, SddpError> {
-    let inflow_scheme = training_source.inflow_scheme;
-    let load_scheme = training_source.load_scheme;
-    let ncs_scheme = training_source.ncs_scheme;
-    let sim_inflow_scheme = simulation_source.inflow_scheme;
-    let sim_load_scheme = simulation_source.load_scheme;
-    let sim_ncs_scheme = simulation_source.ncs_scheme;
-    // Shared by every external LOAD call below, training and simulation alike
-    // — see `build_external_load_library`'s doc for why.
-    let normal_load_bus_ids = system.load_noise_member_bus_ids(load_scheme);
+    forward_passes: u32,
+    source: &ScenarioSource,
+    training: Option<&ScenarioSource>,
+) -> Result<PhaseLibraries, SddpError> {
+    let inflow_scheme = source.inflow_scheme;
+    let load_scheme = source.load_scheme;
+    let ncs_scheme = source.ncs_scheme;
+    let inflow_differs = training.is_none_or(|t| t.inflow_scheme != inflow_scheme);
+    let load_differs = training.is_none_or(|t| t.load_scheme != load_scheme);
+    let ncs_differs = training.is_none_or(|t| t.ncs_scheme != ncs_scheme);
 
-    let training_historical: Option<HistoricalScenarioLibrary> =
-        if inflow_scheme == SamplingScheme::Historical {
+    let historical: Option<HistoricalScenarioLibrary> =
+        if inflow_scheme == SamplingScheme::Historical && inflow_differs {
             Some(scenario_libraries::build_historical_inflow_library(
-                system.inflow_history(),
-                hydro_ids,
-                stages,
+                system,
                 stochastic.par(),
-                system.policy_graph().season_map.as_ref(),
                 seed,
-                stage_lag_transitions,
-                training_source.historical_years.as_ref(),
+                source.historical_years.as_ref(),
                 forward_passes,
-                downstream_par_order,
             )?)
         } else {
             None
         };
 
-    let training_external_inflow: Option<ExternalScenarioLibrary> =
-        if inflow_scheme == SamplingScheme::External {
+    let external_inflow: Option<ExternalScenarioLibrary> =
+        if inflow_scheme == SamplingScheme::External && inflow_differs {
             Some(scenario_libraries::build_external_inflow_library(
-                system.external_scenarios(),
-                hydro_ids,
-                stages,
+                system,
                 stochastic.par(),
                 seed,
-                stage_lag_transitions,
+                &stage_data.stage_lag_transitions,
                 forward_passes,
-                downstream_par_order,
+                stage_data.study_dims.downstream_par_order,
             )?)
         } else {
             None
         };
 
-    let training_external_load: Option<ExternalScenarioLibrary> =
-        if load_scheme == SamplingScheme::External {
+    // Shared by training and a simulation phase whose own scheme diverges —
+    // see `build_external_load_library`'s doc for why.
+    let normal_load_bus_ids =
+        system.load_noise_member_bus_ids(training.unwrap_or(source).load_scheme);
+
+    let external_load: Option<ExternalScenarioLibrary> =
+        if load_scheme == SamplingScheme::External && load_differs {
             Some(scenario_libraries::build_external_load_library(
                 system,
                 load_scheme,
-                stages,
                 forward_passes,
                 stochastic.normal(),
                 &normal_load_bus_ids,
@@ -2069,11 +1814,10 @@ fn build_scenario_libraries(
             None
         };
 
-    let training_external_ncs: Option<ExternalScenarioLibrary> =
-        if ncs_scheme == SamplingScheme::External {
+    let external_ncs: Option<ExternalScenarioLibrary> =
+        if ncs_scheme == SamplingScheme::External && ncs_differs {
             Some(scenario_libraries::build_external_ncs_library(
                 system,
-                stages,
                 forward_passes,
                 stochastic.ncs_normal(),
                 stochastic.ncs_entity_ids(),
@@ -2082,88 +1826,55 @@ fn build_scenario_libraries(
             None
         };
 
-    let simulation_historical: Option<HistoricalScenarioLibrary> =
-        if sim_inflow_scheme == SamplingScheme::Historical && sim_inflow_scheme != inflow_scheme {
-            Some(scenario_libraries::build_historical_inflow_library(
-                system.inflow_history(),
-                hydro_ids,
-                stages,
-                stochastic.par(),
-                system.policy_graph().season_map.as_ref(),
-                seed,
-                stage_lag_transitions,
-                simulation_source.historical_years.as_ref(),
-                forward_passes,
-                downstream_par_order,
-            )?)
-        } else {
-            None
-        };
+    Ok(PhaseLibraries {
+        inflow_scheme,
+        load_scheme,
+        ncs_scheme,
+        historical,
+        external_inflow,
+        external_load,
+        external_ncs,
+    })
+}
 
-    let simulation_external_inflow: Option<ExternalScenarioLibrary> =
-        if sim_inflow_scheme == SamplingScheme::External && sim_inflow_scheme != inflow_scheme {
-            Some(scenario_libraries::build_external_inflow_library(
-                system.external_scenarios(),
-                hydro_ids,
-                stages,
-                stochastic.par(),
-                seed,
-                stage_lag_transitions,
-                forward_passes,
-                downstream_par_order,
-            )?)
-        } else {
-            None
-        };
-
-    let simulation_external_load: Option<ExternalScenarioLibrary> =
-        if sim_load_scheme == SamplingScheme::External && sim_load_scheme != load_scheme {
-            Some(scenario_libraries::build_external_load_library(
-                system,
-                sim_load_scheme,
-                stages,
-                forward_passes,
-                stochastic.normal(),
-                &normal_load_bus_ids,
-            )?)
-        } else {
-            None
-        };
-
-    let simulation_external_ncs: Option<ExternalScenarioLibrary> =
-        if sim_ncs_scheme == SamplingScheme::External && sim_ncs_scheme != ncs_scheme {
-            Some(scenario_libraries::build_external_ncs_library(
-                system,
-                stages,
-                forward_passes,
-                stochastic.ncs_normal(),
-                stochastic.ncs_entity_ids(),
-            )?)
-        } else {
-            None
-        };
-
+/// Build the training and simulation [`ScenarioLibraries`].
+///
+/// # Errors
+///
+/// Propagates [`SddpError`] from [`build_phase_libraries`] or from
+/// [`assert_external_library_widths`]'s width check.
+fn build_scenario_libraries(
+    system: &System,
+    stochastic: &StochasticContext,
+    stage_data: &StageData,
+    initial: &InitialConditions,
+    forward_passes: u32,
+    training_source: &ScenarioSource,
+    simulation_source: &ScenarioSource,
+) -> Result<ScenarioLibraries, SddpError> {
+    let seed = initial.inflow_seeds.as_seed(stage_data.state.max_par_order);
+    let training = build_phase_libraries(
+        system,
+        stochastic,
+        stage_data,
+        seed,
+        forward_passes,
+        training_source,
+        None,
+    )?;
+    let simulation = build_phase_libraries(
+        system,
+        stochastic,
+        stage_data,
+        seed,
+        forward_passes,
+        simulation_source,
+        Some(training_source),
+    )?;
     let libraries = ScenarioLibraries {
-        training: PhaseLibraries {
-            inflow_scheme,
-            load_scheme,
-            ncs_scheme,
-            historical: training_historical,
-            external_inflow: training_external_inflow,
-            external_load: training_external_load,
-            external_ncs: training_external_ncs,
-        },
-        simulation: PhaseLibraries {
-            inflow_scheme: sim_inflow_scheme,
-            load_scheme: sim_load_scheme,
-            ncs_scheme: sim_ncs_scheme,
-            historical: simulation_historical,
-            external_inflow: simulation_external_inflow,
-            external_load: simulation_external_load,
-            external_ncs: simulation_external_ncs,
-        },
+        training,
+        simulation,
     };
-
     assert_external_library_widths(system, &libraries, training_source)?;
     Ok(libraries)
 }
@@ -2231,8 +1942,8 @@ fn max_iterations_from_rules(rules: &StoppingRuleSet) -> u64 {
 /// Build the per-study-stage risk measures from the system's stage risk configs.
 ///
 /// One entry per study stage (`id >= 0`), in stage-index order, matching the
-/// `block_counts_per_stage` / template ordering the cut-management pipeline
-/// indexes by stage.
+/// `stage_templates.geometry_per_stage` / template ordering the cut-management
+/// pipeline indexes by stage.
 fn build_risk_measures(system: &System) -> Vec<RiskMeasure> {
     system
         .stages()
@@ -2686,21 +2397,20 @@ fn build_pumping_consumption(system: &System) -> Vec<f64> {
 ///
 /// Outer index is the study-stage index `t` (0-based, matching
 /// [`ResolvedBounds`](cobre_core::ResolvedBounds)'s contract stage axis); each
-/// inner slice is flat with the per-stage stride `block_counts_per_stage[t]` —
-/// index `c * n_blks + blk`, `c` ID-sorted parallel to `system.contracts()`
+/// inner slice is flat with the per-stage stride `geometry_per_stage[t].n_blks`
+/// — index `c * n_blks + blk`, `c` ID-sorted parallel to `system.contracts()`
 /// (the same order `EntityCounts::contract_ids` is built in) — carrying
 /// `contract_bounds_at_block(c, t, blk).price_per_mwh`. Empty inner slices for
 /// a contract-free system or a zero-block stage.
 fn build_contract_prices_per_stage(
     system: &System,
-    n_stages: usize,
-    block_counts_per_stage: &[usize],
+    geometry_per_stage: &[StageGeometry],
 ) -> Vec<Vec<f64>> {
     let bounds = system.bounds();
     let n_contracts = system.contracts().len();
-    (0..n_stages)
+    (0..geometry_per_stage.len())
         .map(|t| {
-            let n_blks = block_counts_per_stage[t];
+            let n_blks = geometry_per_stage[t].n_blks;
             (0..n_contracts)
                 .flat_map(|c| {
                     (0..n_blks)
@@ -2711,31 +2421,14 @@ fn build_contract_prices_per_stage(
         .collect()
 }
 
-/// Build the per-contract direction flags (`true` = import).
-///
-/// ID-sorted parallel to `system.contracts()` — the same order
-/// `EntityCounts::contract_ids` is built in — so extraction's running per-direction
-/// slot count reproduces the LP builder's `fill_contract_columns` slot assignment.
-fn build_contract_is_import(system: &System) -> Vec<bool> {
-    system
-        .contracts()
-        .iter()
-        .map(|c| c.contract_type == Import)
-        .collect()
-}
-
-/// Build the per-plant commissioning windows for the anticipated thermals.
-///
-/// In anticipated-local declaration order — the same order
-/// `anticipated_thermal_indices` and the LP-builder `anticipated_windows` use, so
-/// the simulation decision gate reads the matching window per index. Empty when
-/// there are no anticipated thermals.
-fn build_anticipated_windows(system: &System) -> Vec<(Option<i32>, Option<i32>)> {
-    system
-        .thermals()
-        .iter()
-        .filter(|t| t.anticipated_config.is_some())
-        .map(|t| (t.entry_stage_id, t.exit_stage_id))
+/// Build the per-contract `(ContractType, per-family slot)`, ID-sorted
+/// parallel to `system.contracts()` — the same order `EntityCounts::contract_ids`
+/// is built in — from [`contract_family_slot`], the LP builder's own slot
+/// derivation.
+fn build_contract_slots(system: &System) -> Vec<(ContractType, usize)> {
+    let contracts = system.contracts();
+    (0..contracts.len())
+        .map(|c| contract_family_slot(contracts, c))
         .collect()
 }
 
@@ -2809,7 +2502,7 @@ fn build_initial_state(
 
     for hs in &ic.storage {
         if let Some(&idx) = hydro_positions.get(&hs.hydro_id.0) {
-            state[idx] = hs.value_hm3;
+            state[layout.storage_state_dim(HydroSys::new(idx)).get()] = hs.value_hm3;
         }
     }
 
@@ -2819,7 +2512,7 @@ fn build_initial_state(
         // the two collections or re-index the column — a separate index would
         // silently desync from that pin.
         if let Some(&idx) = hydro_positions.get(&hs.hydro_id.0) {
-            state[idx] = hs.value_hm3;
+            state[layout.storage_state_dim(HydroSys::new(idx)).get()] = hs.value_hm3;
         }
     }
 
@@ -2828,18 +2521,13 @@ fn build_initial_state(
         let l = layout.max_par_order;
         for idx in 0..n_h {
             for lag in 0..l {
-                let slot = layout.inflow_lags.start + lag * n_h + idx;
-                state[slot] = derived_lag_values[idx * l + lag];
+                state[layout.lag_state_dim(lag, HydroSys::new(idx)).get()] =
+                    derived_lag_values[idx * l + lag];
             }
         }
     }
 
     if layout.n_anticipated > 0 && layout.k_max > 0 {
-        debug_assert_eq!(
-            study_dims.anticipated_thermal_indices.len(),
-            layout.n_anticipated,
-            "anticipated_thermal_indices length must equal n_anticipated",
-        );
         let thermals = system.thermals();
         let thermal_positions = id_to_position(thermals, |t: &Thermal| t.id.0);
         let calendar = StageCalendar::new(study_stages_slice(system));
@@ -2849,13 +2537,12 @@ fn build_initial_state(
                 // production.
                 continue;
             };
-            // O(n) over the small `n_anticipated` list, not a map.
             let Some(local_idx) = study_dims
-                .anticipated_thermal_indices
-                .iter()
-                .position(|&g| g == global_idx)
+                .anticipated_plants
+                .local_of(ThermalSys::new(global_idx))
+                .map(AnticipatedLocal::get)
             else {
-                // Not an anticipated plant (`anticipated_config: None`) — skip.
+                // Not one of AnticipatedPlants::build's plants — skip.
                 continue;
             };
             // A covered stage at or beyond K_i is a resolver/validator desync,
@@ -2866,9 +2553,10 @@ fn build_initial_state(
                 start_date: history.start_date,
                 end_date: history.end_date,
             };
-            // coverage's whole-day-hours arithmetic keeps a full-coverage ratio
-            // bit-exact (mirrors StageCalendar::covers_exactly).
-            #[allow(clippy::float_cmp)]
+            #[expect(
+                clippy::float_cmp,
+                reason = "whole-day-hours coverage makes a full-coverage ratio exactly 1.0"
+            )]
             for (slot, fraction) in calendar.coverage(&window).into_iter().enumerate() {
                 if fraction == 1.0 {
                     if slot < k_i {
@@ -2896,9 +2584,10 @@ fn build_initial_state(
                     }
                 }
             }
-            // Padding slots `[K_i, k_max)` must stay 0.0 — a non-zero value corrupts
-            // the ring buffer and causes LP infeasibility.
-            #[allow(clippy::float_cmp)]
+            #[expect(
+                clippy::float_cmp,
+                reason = "padding slots must be exactly 0.0, because a non-zero value corrupts the ring buffer and makes the LP infeasible"
+            )]
             for slot in k_i..layout.k_max {
                 let off = layout.commit_out.start
                     + layout.commitment_hold_in_study_offset(local_idx, slot);
@@ -2934,9 +2623,10 @@ fn build_initial_state(
 fn build_initial_transit_bucket_state(
     system: &System,
     topology: &bucket_topology::TransitBucketTopology,
+    state: &StateSpace,
 ) -> Vec<f64> {
-    let mut seed = vec![0.0_f64; topology.n_buckets];
-    if topology.n_buckets == 0 {
+    let mut seed = vec![0.0_f64; state.n_buckets];
+    if state.n_buckets == 0 {
         return seed;
     }
 
@@ -2952,17 +2642,12 @@ fn build_initial_transit_bucket_state(
     let ic = system.initial_conditions();
     let hydros = system.hydros();
 
-    let mut start = 0_usize;
-    for &depth in &topology.per_plant_depth {
-        let plant_id = hydros[topology.column_order[start].0].id;
+    for (plant, local) in state.transit_bucket_plants() {
+        let depth = local.len();
 
-        for upstream in hydros {
-            let Some(t_v) = upstream.travel_time_hours.filter(|&t| t > 0.0) else {
-                continue;
-            };
-            if upstream.downstream_id != Some(plant_id) {
-                continue;
-            }
+        for arc in topology.arcs().iter().filter(|arc| arc.downstream == plant) {
+            let upstream = &hydros[arc.upstream.get()];
+            let t_v = arc.travel_time_hours;
 
             for window in ic
                 .past_defluences
@@ -2981,16 +2666,14 @@ fn build_initial_transit_bucket_state(
                 let k = calendar.hour_window_shares(t_v, e_off, width);
                 for (transit_bucket_offset, &k_val) in k.iter().enumerate().take(depth) {
                     if k_val != 0.0 {
-                        seed[start + transit_bucket_offset] += k_val * volume;
+                        seed[local.start + transit_bucket_offset] += k_val * volume;
                     }
                 }
             }
         }
-
-        start += depth;
     }
 
-    debug_assert_eq!(seed.len(), topology.n_buckets);
+    debug_assert_eq!(seed.len(), topology.n_buckets());
     seed
 }
 
@@ -3008,9 +2691,10 @@ fn study_start_date(system: &System) -> Option<NaiveDate> {
 
 /// Hours of wall clock between `earlier` and `later` (`later − earlier`),
 /// positive when `earlier` precedes `later`.
-// Rationale: pre-study spans are on the order of years, far under f64's
-// exact-integer range; a checked conversion buys nothing.
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "pre-study spans are years long, far inside f64's exact-integer range"
+)]
 fn hours_between(later: NaiveDate, earlier: NaiveDate) -> f64 {
     (later - earlier).num_hours() as f64
 }
@@ -3025,11 +2709,8 @@ fn splice_transit_bucket_seed(
     system: &System,
     topology: &bucket_topology::TransitBucketTopology,
 ) {
-    let seed = build_initial_transit_bucket_state(system, topology);
-    debug_assert_eq!(seed.len(), layout.n_buckets);
-    for (b, &value) in seed.iter().enumerate() {
-        state[layout.transit_buckets_out.start + b] = value;
-    }
+    let seed = build_initial_transit_bucket_state(system, topology, layout);
+    state[layout.transit_buckets_out.clone()].copy_from_slice(&seed);
 }
 
 // ---------------------------------------------------------------------------
@@ -3038,156 +2719,6 @@ fn splice_transit_bucket_seed(
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod post_study_resolution_tests {
-    use super::{PostStudyResolved, resolve_post_study_artifacts, template_postprocess};
-    use chrono::NaiveDate;
-    use cobre_core::{
-        EntityId, HorizonGraph, PostStudyStage, PostStudyStages, PostStudyThermalBound,
-    };
-    use cobre_stochastic::season_cast::post_study_calendar_stages;
-
-    fn two_stage_post_study() -> PostStudyStages {
-        PostStudyStages {
-            stages: vec![
-                PostStudyStage {
-                    start_date: NaiveDate::from_ymd_opt(2026, 11, 1)
-                        .unwrap_or_else(|| unreachable!("hardcoded date is valid")),
-                    duration_hours: 720.0,
-                },
-                PostStudyStage {
-                    start_date: NaiveDate::from_ymd_opt(2026, 12, 1)
-                        .unwrap_or_else(|| unreachable!("hardcoded date is valid")),
-                    duration_hours: 744.0,
-                },
-            ],
-            thermal_bounds: vec![
-                PostStudyThermalBound {
-                    thermal_id: EntityId(1),
-                    post_study_stage_index: 0,
-                    cost_per_mwh: 210.0,
-                    min_mw: 0.0,
-                    max_mw: 350.0,
-                },
-                PostStudyThermalBound {
-                    thermal_id: EntityId(1),
-                    post_study_stage_index: 1,
-                    cost_per_mwh: 220.0,
-                    min_mw: 0.0,
-                    max_mw: 300.0,
-                },
-            ],
-        }
-    }
-
-    #[test]
-    fn post_study_absent_returns_default() {
-        let resolved = resolve_post_study_artifacts(None, &[], &HorizonGraph::default(), 1.0, 1.0);
-        assert_eq!(resolved, PostStudyResolved::default());
-    }
-
-    #[test]
-    fn post_study_with_no_stages_returns_default() {
-        let empty = PostStudyStages {
-            stages: Vec::new(),
-            thermal_bounds: Vec::new(),
-        };
-        let resolved =
-            resolve_post_study_artifacts(Some(&empty), &[], &HorizonGraph::default(), 1.0, 1.0);
-        assert_eq!(resolved, PostStudyResolved::default());
-    }
-
-    #[test]
-    fn total_hours_matches_declared_duration() {
-        let post_study = two_stage_post_study();
-        let resolved = resolve_post_study_artifacts(
-            Some(&post_study),
-            &[],
-            &HorizonGraph::default(),
-            1.0,
-            1.0,
-        );
-        assert_eq!(resolved.total_hours, vec![720.0, 744.0]);
-    }
-
-    #[test]
-    fn continued_cumulative_discount_is_seed_at_zero_rate() {
-        let post_study = two_stage_post_study();
-        let resolved = resolve_post_study_artifacts(
-            Some(&post_study),
-            &[],
-            &HorizonGraph::default(),
-            0.9,
-            1.0,
-        );
-        assert_eq!(resolved.cumulative_discount_factors, vec![0.9, 0.9]);
-    }
-
-    #[test]
-    fn continued_cumulative_discount_matches_extended_horizon() {
-        let post_study = two_stage_post_study();
-        let pg = HorizonGraph {
-            annual_discount_rate: 0.08,
-            ..HorizonGraph::default()
-        };
-        // A synthetic two-stage study whose per-stage one-step factors are
-        // `[0.95, 0.93]`: its last cumulative factor is `0.95` (the product of
-        // the stages strictly before the last) and its last per-stage factor is
-        // `0.93`.
-        let study_per_stage = [0.95_f64, 0.93_f64];
-        let last_real_cumulative = study_per_stage[0];
-        let last_real_per_stage = study_per_stage[1];
-
-        let resolved = resolve_post_study_artifacts(
-            Some(&post_study),
-            &[],
-            &pg,
-            last_real_cumulative,
-            last_real_per_stage,
-        );
-
-        // Ground truth: extend the horizon with the post-study stages, take the
-        // cumulative product over the whole thing, and read off the post-study
-        // tail. A resolver that bridged by `per_stage_post[0]` instead of the
-        // last study factor would diverge here.
-        let calendar_stages = post_study_calendar_stages(&post_study.stages);
-        let calendar_stage_refs: Vec<_> = calendar_stages.iter().collect();
-        let per_stage_post =
-            template_postprocess::compute_per_stage_discount_factors(&calendar_stage_refs, &pg);
-        let mut extended_per_stage = study_per_stage.to_vec();
-        extended_per_stage.extend_from_slice(&per_stage_post);
-        let extended_cumulative =
-            template_postprocess::compute_cumulative_discount_factors(&extended_per_stage);
-
-        assert_eq!(
-            resolved.cumulative_discount_factors,
-            extended_cumulative[study_per_stage.len()..].to_vec()
-        );
-    }
-
-    #[test]
-    fn thermal_bound_lookup_returns_declared_triple() {
-        let post_study = two_stage_post_study();
-        let resolved = resolve_post_study_artifacts(
-            Some(&post_study),
-            &[],
-            &HorizonGraph::default(),
-            1.0,
-            1.0,
-        );
-
-        assert_eq!(
-            resolved.thermal_bounds.lookup(EntityId(1), 0),
-            Some((210.0, 0.0, 350.0))
-        );
-        assert_eq!(
-            resolved.thermal_bounds.lookup(EntityId(1), 1),
-            Some((220.0, 0.0, 300.0))
-        );
-        assert_eq!(resolved.thermal_bounds.lookup(EntityId(2), 0), None);
-    }
-}
 
 /// Round-trip fidelity: the rolling-seed emitter's output, re-anchored at the
 /// next run's `start_0`, must reproduce the identical
@@ -3206,9 +2737,11 @@ mod transit_seed_round_trip_tests {
     };
     use cobre_core::{EntityId, HydroPastDefluence, InitialConditions, System, SystemBuilder};
 
-    use super::{TransitSeedArc, bucket_topology, build_initial_transit_bucket_state};
+    use super::{TransitSeedArc, build_initial_transit_bucket_state};
+    use crate::bucket_topology;
     use crate::simulation::extraction::build_transit_seed;
     use crate::simulation::types::{SimulationHydroResult, SimulationStageResult};
+    use crate::time_value::DeliveryCalendar;
 
     fn date(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap_or_else(|| unreachable!("hardcoded date is valid"))
@@ -3455,8 +2988,12 @@ mod transit_seed_round_trip_tests {
                 })
                 .collect(),
         );
-        let topology_b = bucket_topology::build_transit_bucket_topology(&system_b, false);
-        let seed_from_emission = build_initial_transit_bucket_state(&system_b, &topology_b);
+        let calendar_b = DeliveryCalendar::from_system(&system_b);
+        let topology_b =
+            bucket_topology::build_transit_bucket_topology(&system_b, &calendar_b, false);
+        let state_b = crate::test_support::bucket_seed_state(&system_b, &topology_b);
+        let seed_from_emission =
+            build_initial_transit_bucket_state(&system_b, &topology_b, &state_b);
 
         let system_reference = build_system(
             hydros(),
@@ -3477,10 +3014,19 @@ mod transit_seed_round_trip_tests {
                 },
             ],
         );
-        let topology_reference =
-            bucket_topology::build_transit_bucket_topology(&system_reference, false);
-        let seed_reference =
-            build_initial_transit_bucket_state(&system_reference, &topology_reference);
+        let calendar_reference = DeliveryCalendar::from_system(&system_reference);
+        let topology_reference = bucket_topology::build_transit_bucket_topology(
+            &system_reference,
+            &calendar_reference,
+            false,
+        );
+        let state_reference =
+            crate::test_support::bucket_seed_state(&system_reference, &topology_reference);
+        let seed_reference = build_initial_transit_bucket_state(
+            &system_reference,
+            &topology_reference,
+            &state_reference,
+        );
 
         assert_eq!(seed_from_emission.len(), seed_reference.len());
         for (a, b) in seed_from_emission.iter().zip(&seed_reference) {

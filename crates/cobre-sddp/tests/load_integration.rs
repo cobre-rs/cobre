@@ -32,13 +32,17 @@ use cobre_core::{
 use cobre_sddp::{
     SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
     config::{CutManagementConfig, EventConfig, LoopConfig},
-    context::{StageContext, TrainingContext},
+    context::TrainingContext,
     cut::fcf::FutureCostFunction,
     horizon_mode::HorizonMode,
     indexer::{CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
-    lp::builder::StateBox,
+    lead_time::AnticipatedResolution,
     risk_measure::RiskMeasure,
+    test_support::{
+        StageContextFixture, equipment_free_geometry, geometry_with_load_balance,
+        permissive_state_boxes,
+    },
     train,
 };
 use cobre_solver::{
@@ -63,11 +67,9 @@ fn state_layout_for(hydro_count: usize, max_par_order: usize) -> StateSpace {
     StateSpace::new(
         hydro_count,
         max_par_order,
-        0,
         Vec::new(),
-        0,
-        0,
         vec![],
+        AnticipatedResolution::default(),
         &vec![max_par_order; hydro_count],
     )
 }
@@ -79,15 +81,11 @@ fn study_dims() -> StudyDimensions {
 /// Mock solver that returns a fixed objective on every `solve` call.
 struct MockSolver {
     objective: f64,
-    call_count: usize,
 }
 
 impl MockSolver {
     fn with_fixed(objective: f64) -> Self {
-        Self {
-            objective,
-            call_count: 0,
-        }
+        Self { objective }
     }
 }
 
@@ -107,7 +105,6 @@ impl SolverInterface for MockSolver {
         &mut self,
         _basis: Option<&Basis>,
     ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.call_count += 1;
         Ok(cobre_solver::SolutionView {
             objective: self.objective,
             primal: &[0.0, 0.0, 0.0, 0.0],
@@ -301,24 +298,20 @@ fn build_context_with_load(
 /// Minimal stage template for N=1 hydro, L=0 PAR.
 fn minimal_template() -> StageTemplate {
     // N=1, L=0 → cols: storage(0), z_inflow(1), storage_in(2), theta(3)
-    //             rows: storage_fixing(0), z_inflow(1)
+    //             rows: z_inflow(0), mock_pin(1)
     StageTemplate {
         num_cols: 4,
         num_rows: 2,
-        num_nz: 1,
-        col_starts: vec![0, 0, 0, 1, 1],
-        row_indices: vec![0],
-        values: vec![1.0],
-        col_lower: vec![0.0; 4],
+        num_nz: 2,
+        col_starts: vec![0, 0, 1, 2, 2],
+        row_indices: vec![0, 1],
+        values: vec![1.0, 1.0],
+        col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
         col_upper: vec![f64::INFINITY; 4],
         objective: vec![0.0, 0.0, 0.0, 1.0],
         row_lower: vec![0.0; 2],
         row_upper: vec![0.0; 2],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -333,18 +326,6 @@ fn iteration_limit(limit: u64) -> StoppingRuleSet {
         rules: vec![StoppingRule::IterationLimit { limit }],
         mode: StoppingMode::Any,
     }
-}
-
-/// A fully-permissive `(-inf, inf)` box per stage, for fixtures driving
-/// `train` through the seam without exercising the clamp.
-fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
-    vec![
-        StateBox {
-            lower: vec![f64::NEG_INFINITY; n_state],
-            upper: vec![f64::INFINITY; n_state],
-        };
-        n_stages
-    ]
 }
 
 // ===========================================================================
@@ -376,18 +357,16 @@ fn test_stochastic_load_context_construction() {
 #[test]
 fn test_stochastic_load_training_completes() {
     let n_stages = 2usize;
-    let n_load_buses = 1usize;
     let stochastic = build_context_with_load(n_stages, 500.0, 50.0);
 
     assert_eq!(
         stochastic.n_load_buses(),
-        n_load_buses,
+        1,
         "pre-condition: n_load_buses must be 1"
     );
 
     let state = state_layout_for(1, 0);
     let templates = vec![minimal_template(); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -405,14 +384,13 @@ fn test_stochastic_load_training_completes() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(3),
         },
         cut_management: CutManagementConfig {
             cut_selection: None,
             budget: None,
             cut_activity_tolerance: 0.0,
-            risk_measures: risk_measures.clone(),
+            risk_measures,
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -423,38 +401,14 @@ fn test_stochastic_load_training_completes() {
     };
 
     // The mock solver ignores set_row_bounds, so only the slice length (n_stages)
-    // matters here, not the row-start value.
-    let load_balance_row_starts = vec![1usize; n_stages];
+    // matters here, not geometry_per_stage's load-balance row range.
     let load_bus_indices = vec![0usize];
-    let block_counts_per_stage = vec![1usize; n_stages];
+    let geometry_per_stage = vec![geometry_with_load_balance(1, 1, 1); n_stages];
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses,
-        load_balance_row_starts: &load_balance_row_starts,
-        load_bus_indices: &load_bus_indices,
-        block_counts_per_stage: &block_counts_per_stage,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
+        .load_bus_indices(&load_bus_indices);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
         &mut solver,
         config,
@@ -532,7 +486,6 @@ fn test_deterministic_load_training_matches_baseline() {
 
     let state = state_layout_for(1, 0);
     let templates = vec![minimal_template(); n_stages];
-    let base_rows = vec![2usize; n_stages];
     let initial_state = vec![0.0_f64; state.n_state];
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -542,35 +495,11 @@ fn test_deterministic_load_training_matches_baseline() {
     let mut solver = MockSolver::with_fixed(100.0);
     let comm = StubComm;
 
-    let block_counts_per_stage = vec![1usize; n_stages];
+    let geometry = equipment_free_geometry(&vec![1usize; n_stages]);
 
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &block_counts_per_stage,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let result = train(
         &mut solver,
         TrainingConfig {
@@ -580,14 +509,13 @@ fn test_deterministic_load_training_matches_baseline() {
                 max_iterations: 10,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit(3),
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
                 cut_activity_tolerance: 0.0,
-                risk_measures: risk_measures.clone(),
+                risk_measures,
             },
             events: EventConfig {
                 event_sender: None,
@@ -642,13 +570,11 @@ fn test_deterministic_load_training_matches_baseline() {
 #[test]
 fn test_stochastic_load_seed_determinism() {
     let n_stages = 2usize;
-    let n_load_buses = 1usize;
 
     let run_training = || {
         let stochastic = build_context_with_load(n_stages, 500.0, 50.0);
         let state = state_layout_for(1, 0);
         let templates = vec![minimal_template(); n_stages];
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -666,14 +592,13 @@ fn test_stochastic_load_seed_determinism() {
                 max_iterations: 10,
                 start_iteration: 0,
                 n_fwd_threads: 1,
-                max_blocks: 1,
                 stopping_rules: iteration_limit(3),
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
                 cut_activity_tolerance: 0.0,
-                risk_measures: risk_measures.clone(),
+                risk_measures,
             },
             events: EventConfig {
                 event_sender: Some(tx),
@@ -683,37 +608,14 @@ fn test_stochastic_load_seed_determinism() {
             },
         };
 
-        let load_balance_row_starts = vec![1usize; n_stages];
         let load_bus_indices = vec![0usize];
-        let block_counts_per_stage = vec![1usize; n_stages];
+        let geometry_per_stage = vec![geometry_with_load_balance(1, 1, 1); n_stages];
 
         let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-        let stage_ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses,
-            load_balance_row_starts: &load_balance_row_starts,
-            load_bus_indices: &load_bus_indices,
-            block_counts_per_stage: &block_counts_per_stage,
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let stage_ctx_fixture =
+            StageContextFixture::new(&templates, &state_boxes, &geometry_per_stage)
+                .load_bus_indices(&load_bus_indices);
+        let stage_ctx = stage_ctx_fixture.ctx();
         let result = train(
             &mut solver,
             config,

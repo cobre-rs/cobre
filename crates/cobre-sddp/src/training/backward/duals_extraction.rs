@@ -91,6 +91,7 @@ mod tests {
 
     use super::extract_state_duals_only;
     use crate::indexer::{CutStateProjection, StateDim, StateSpace};
+    use crate::lead_time::AnticipatedResolution;
     use cobre_core::temporal::StageStateConfig;
 
     const ALL_ENABLED: StageStateConfig = StageStateConfig {
@@ -107,11 +108,9 @@ mod tests {
         StateSpace::new(
             hydro_count,
             max_par_order,
-            0,
             Vec::new(),
-            0,
-            0,
             vec![],
+            AnticipatedResolution::default(),
             &lag_counts,
         )
     }

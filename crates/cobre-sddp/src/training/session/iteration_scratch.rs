@@ -8,7 +8,7 @@ use cobre_solver::freeze_rows_into_template;
 use cobre_solver::{RowBatch, StageTemplate};
 
 use crate::{
-    context::StageContext,
+    context::{StageContext, TrainingContext},
     cut::CutRowMap,
     lower_bound::LbEvalScratch,
     lp::builder::PatchBuffer,
@@ -56,10 +56,6 @@ pub(crate) struct IterationScratch {
     /// the nested risk-adjusted upper bound. Filled only on an enumerated forward
     /// under an effective `CVaR`; empty otherwise.
     pub(crate) ub_stage_costs: Vec<f64>,
-    /// Whether the terminal pool carried boundary cuts when the static
-    /// terminal template was baked at priming; the terminal template is never
-    /// refrozen afterward, so this stays fixed for the rest of the run.
-    pub(crate) terminal_has_boundary_cuts: bool,
     /// Packed per-stage forward solver-stat scalars, the cross-rank allreduce
     /// input in `run_forward_phase` (empty until the first forward phase).
     pub(crate) fwd_stats_pack_local: Vec<f64>,
@@ -74,24 +70,17 @@ impl IterationScratch {
     /// Allocate all iteration scratch buffers; pre-freeze each `frozen_templates[p]`
     /// as an empty-cut-batch structural copy of pool `p`'s base stage template so
     /// iteration 1 can use the frozen load path.
-    // Rationale: each argument sizes a distinct pre-allocated scratch region with
-    // its own sizing formula, so no sub-struct would group a subset of the arity.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         max_local_fwd: usize,
-        num_stages: usize,
         pool_stage: &[StageIdx],
-        n_state: usize,
         lb_root_pool_capacity: usize,
         template_0_num_rows: usize,
-        hydro_count: usize,
-        max_par_order: usize,
-        n_buckets: usize,
-        n_anticipated: usize,
-        k_max: usize,
+        training_ctx: &TrainingContext<'_>,
         stage_ctx: &StageContext<'_>,
     ) -> Self {
         let n_pools = pool_stage.len();
+        let n_state = training_ctx.state.n_state;
+        let num_stages = training_ctx.horizon.num_stages();
         let records: Vec<TrajectoryRecord> = (0..max_local_fwd * num_stages)
             .map(|_| TrajectoryRecord {
                 primal: Vec::new(),
@@ -102,19 +91,7 @@ impl IterationScratch {
             })
             .collect();
 
-        // The LB path never calls `fill_load_patches`, so `n_load_buses` and
-        // `max_blocks` are 0. Bucket and anticipated capacity MUST match
-        // `n_buckets` / `n_anticipated * k_max` — undersizing panics in
-        // `fill_col_state_patches`.
-        let patch_buf = PatchBuffer::new(
-            hydro_count,
-            max_par_order,
-            0,
-            0,
-            n_buckets,
-            n_anticipated,
-            k_max,
-        );
+        let patch_buf = crate::lower_bound::lower_bound_patch_buffer(training_ctx.state, stage_ctx);
 
         let empty_row_batch = || RowBatch {
             num_rows: 0,
@@ -147,14 +124,8 @@ impl IterationScratch {
 
         let lb_scratch = LbEvalScratch::new();
 
-        // The LB path is always stage 0, so `n_load_buses`/`max_blocks`/pool-capacity
-        // sizing hints are irrelevant; `ScratchBuffers` fields grow on demand.
-        let lb_noise_scratch = ScratchBuffers::new(WorkspaceSizing {
-            hydro_count,
-            max_par_order,
-            downstream_par_order: stage_ctx.downstream_par_order,
-            ..WorkspaceSizing::default()
-        });
+        let lb_noise_scratch =
+            ScratchBuffers::new(training_ctx, stage_ctx, WorkspaceSizing::default());
 
         Self {
             patch_buf,
@@ -169,7 +140,6 @@ impl IterationScratch {
             freeze_scratch,
             ub_path_weights: Vec::with_capacity(max_local_fwd),
             ub_stage_costs: Vec::with_capacity(max_local_fwd * num_stages),
-            terminal_has_boundary_cuts: false,
             fwd_stats_pack_local: Vec::new(),
             fwd_stats_pack_global: Vec::new(),
             fwd_stats_unpacked: Vec::new(),
@@ -197,8 +167,13 @@ mod tests {
     use cobre_solver::StageTemplate;
 
     use super::IterationScratch;
-    use crate::context::StageContext;
+    use crate::lp::builder::StageGeometry;
+    use crate::lp::indexer::HydroSys;
     use crate::setup::node_graph::StageIdx;
+    use crate::test_support::{
+        StageContextFixture, TrainingContextFixture, equipment_free_geometry, state_layout,
+        state_layout_full, state_layout_with_transit_buckets,
+    };
 
     fn minimal_template() -> StageTemplate {
         StageTemplate {
@@ -214,69 +189,40 @@ mod tests {
             row_lower: vec![0.0, 0.0],
             row_upper: vec![0.0, 0.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
     }
 
-    fn make_stage_ctx(templates: &[StageTemplate]) -> StageContext<'_> {
-        StageContext {
-            geometry_per_stage: &[],
-            templates,
-            state_boxes: &[],
-            base_rows: &[],
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        }
+    fn make_stage_ctx<'a>(
+        templates: &'a [StageTemplate],
+        geometry_per_stage: &'a [StageGeometry],
+    ) -> StageContextFixture<'a> {
+        StageContextFixture::new(templates, &[], geometry_per_stage)
     }
 
     #[test]
     fn iteration_scratch_new_sizes_vecs_correctly() {
         let max_local_fwd = 2;
         let num_stages = 3;
-        let n_state = 4;
         let lb_root_pool_capacity = 10;
         let template_0_num_rows = 5;
-        let hydro_count = 1;
-        let max_par_order = 1;
 
         let templates = vec![minimal_template(); num_stages];
-        let stage_ctx = make_stage_ctx(&templates);
+        let geometry = equipment_free_geometry(&vec![0; num_stages]);
+        let fixture = make_stage_ctx(&templates, &geometry);
+        let stage_ctx = fixture.ctx();
+        let training_fixture =
+            TrainingContextFixture::new(state_layout(1, 1)).num_stages(num_stages);
+        let training_ctx = training_fixture.training_ctx();
+        let n_state = training_ctx.state.n_state;
 
         let scratch = IterationScratch::new(
             max_local_fwd,
-            num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
-            n_state,
             lb_root_pool_capacity,
             template_0_num_rows,
-            hydro_count,
-            max_par_order,
-            0,
-            0,
-            0,
+            &training_ctx,
             &stage_ctx,
         );
 
@@ -311,27 +257,23 @@ mod tests {
     fn iteration_scratch_new_pre_freezes_templates() {
         let max_local_fwd = 2;
         let num_stages = 3;
-        let n_state = 4;
         let lb_root_pool_capacity = 10;
         let template_0_num_rows = 5;
-        let hydro_count = 1;
-        let max_par_order = 1;
 
         let templates = vec![minimal_template(); num_stages];
-        let stage_ctx = make_stage_ctx(&templates);
+        let geometry = equipment_free_geometry(&vec![0; num_stages]);
+        let fixture = make_stage_ctx(&templates, &geometry);
+        let stage_ctx = fixture.ctx();
+        let training_fixture =
+            TrainingContextFixture::new(state_layout(1, 1)).num_stages(num_stages);
+        let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
-            num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
-            n_state,
             lb_root_pool_capacity,
             template_0_num_rows,
-            hydro_count,
-            max_par_order,
-            0,
-            0,
-            0,
+            &training_ctx,
             &stage_ctx,
         );
 
@@ -354,7 +296,6 @@ mod tests {
     fn iteration_scratch_new_sizes_patch_buffer_for_anticipated_thermals() {
         let max_local_fwd = 1;
         let num_stages = 2;
-        let n_state = 4;
         let lb_root_pool_capacity = 4;
         let template_0_num_rows = 4;
         let hydro_count = 2;
@@ -363,51 +304,52 @@ mod tests {
         let k_max = 2;
 
         let templates = vec![minimal_template(); num_stages];
-        let stage_ctx = make_stage_ctx(&templates);
+        let geometry = equipment_free_geometry(&vec![0; num_stages]);
+        let fixture = make_stage_ctx(&templates, &geometry);
+        let stage_ctx = fixture.ctx();
+        let state = state_layout_full(hydro_count, max_par_order, vec![k_max; n_anticipated]);
+        assert_eq!(
+            state.k_max, k_max,
+            "ring_size must resolve to k_max for uniform leads"
+        );
+        let training_fixture = TrainingContextFixture::new(state).num_stages(num_stages);
+        let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
-            num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
-            n_state,
             lb_root_pool_capacity,
             template_0_num_rows,
-            hydro_count,
-            max_par_order,
-            0,
-            n_anticipated,
-            k_max,
+            &training_ctx,
             &stage_ctx,
         );
 
         // Forward-pass layout capacity:
-        //   N + M*B + N
-        // with M = 0 and B = 0 in the LB patch buffer (no load patches).
-        let expected_capacity = hydro_count + hydro_count;
+        //   M*B + N
+        // with M = 0 and B = 0 in the LB patch buffer (no load patches); the A*K
+        // anticipated-state slots size the column region only, never this row region.
+        let expected_capacity = hydro_count;
         assert_eq!(
             scratch.patch_buf.indices.len(),
             expected_capacity,
-            "patch_buf indices length must include A*K slots for anticipated state",
+            "patch_buf indices length must equal M*B + N regardless of A*K",
         );
         assert_eq!(
             scratch.patch_buf.lower.len(),
             expected_capacity,
-            "patch_buf lower length must include A*K slots for anticipated state",
+            "patch_buf lower length must equal M*B + N regardless of A*K",
         );
         assert_eq!(
             scratch.patch_buf.upper.len(),
             expected_capacity,
-            "patch_buf upper length must include A*K slots for anticipated state",
+            "patch_buf upper length must equal M*B + N regardless of A*K",
         );
 
-        // forward_patch_count starts at `N` before any load or
-        // z-inflow patches have been filled — exactly the slot count that
-        // `fill_forward_patches` will write into.
-        let expected_pre_fill_count = hydro_count;
+        // forward_patch_count is 0 before any load or z-inflow patch has been filled.
         assert_eq!(
             scratch.patch_buf.forward_patch_count(),
-            expected_pre_fill_count,
-            "forward_patch_count must include the A*K anticipated-state slots",
+            0,
+            "forward_patch_count must be zero before any fill call",
         );
     }
 
@@ -417,32 +359,31 @@ mod tests {
     fn iteration_scratch_new_patch_buffer_zero_anticipated_unchanged() {
         let max_local_fwd = 1;
         let num_stages = 2;
-        let n_state = 2;
         let lb_root_pool_capacity = 4;
         let template_0_num_rows = 4;
         let hydro_count = 2;
         let max_par_order = 1;
 
         let templates = vec![minimal_template(); num_stages];
-        let stage_ctx = make_stage_ctx(&templates);
+        let geometry = equipment_free_geometry(&vec![0; num_stages]);
+        let fixture = make_stage_ctx(&templates, &geometry);
+        let stage_ctx = fixture.ctx();
+        let training_fixture =
+            TrainingContextFixture::new(state_layout(hydro_count, max_par_order))
+                .num_stages(num_stages);
+        let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
-            num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
-            n_state,
             lb_root_pool_capacity,
             template_0_num_rows,
-            hydro_count,
-            max_par_order,
-            0,
-            0,
-            0,
+            &training_ctx,
             &stage_ctx,
         );
 
-        // With A=0 and K=0, capacity reduces to N + N (z-inflow) = 2*N.
-        let expected_capacity = hydro_count + hydro_count;
+        // With A=0 and K=0, row capacity is still M*B + N = 0 + N = N.
+        let expected_capacity = hydro_count;
         assert_eq!(
             scratch.patch_buf.indices.len(),
             expected_capacity,
@@ -457,7 +398,6 @@ mod tests {
     fn iteration_scratch_new_sizes_patch_buffer_for_transit_buckets() {
         let max_local_fwd = 1;
         let num_stages = 2;
-        let n_state = 5;
         let lb_root_pool_capacity = 4;
         let template_0_num_rows = 4;
         let hydro_count = 2;
@@ -465,20 +405,21 @@ mod tests {
         let n_buckets = 3;
 
         let templates = vec![minimal_template(); num_stages];
-        let stage_ctx = make_stage_ctx(&templates);
+        let geometry = equipment_free_geometry(&vec![0; num_stages]);
+        let fixture = make_stage_ctx(&templates, &geometry);
+        let stage_ctx = fixture.ctx();
+        let bucket_order = (0..n_buckets).map(|d| (HydroSys::new(0), d)).collect();
+        let state =
+            state_layout_with_transit_buckets(hydro_count, max_par_order, bucket_order, vec![]);
+        let training_fixture = TrainingContextFixture::new(state).num_stages(num_stages);
+        let training_ctx = training_fixture.training_ctx();
 
         let scratch = IterationScratch::new(
             max_local_fwd,
-            num_stages,
             &(0..num_stages).map(StageIdx).collect::<Vec<StageIdx>>(),
-            n_state,
             lb_root_pool_capacity,
             template_0_num_rows,
-            hydro_count,
-            max_par_order,
-            n_buckets,
-            0,
-            0,
+            &training_ctx,
             &stage_ctx,
         );
 

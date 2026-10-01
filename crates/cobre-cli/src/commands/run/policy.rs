@@ -1,6 +1,7 @@
 //! Policy load/warm-start/resume phase for `cobre run`.
 
 use std::path::Path;
+use std::path::PathBuf;
 
 use cobre_comm::Communicator;
 use cobre_core::System;
@@ -52,7 +53,7 @@ fn load_and_validate_checkpoint(
     rescale_checkpoint_cuts_for_load(
         &mut checkpoint.stage_cuts,
         Some(source_cost_scale_factor),
-        setup.stage_data.stage_templates.cost_scale_factor,
+        setup.inputs.stage_data.stage_templates.cost_scale_factor,
     );
 
     // Rationale: the cast cannot truncate — `n_stages` is the validated study
@@ -91,7 +92,9 @@ fn load_and_validate_checkpoint(
         slots: &current_manifest,
         graph: &current_graph,
     };
-    let proof = validate_policy_load::<FullFcf>(&source, &current).map_err(CliError::from)?;
+    let proof =
+        validate_policy_load::<FullFcf>(&checkpoint.metadata.cobre_version, &source, &current)
+            .map_err(CliError::from)?;
 
     if ctx.is_root && !ctx.quiet {
         for msg in &proof.warnings {
@@ -136,12 +139,29 @@ fn load_checkpoint_into_setup(
         let basis_cache = build_basis_cache_from_checkpoint(
             &checkpoint.stage_bases,
             &checkpoint.stage_cuts,
-            &setup.node_graph.node_ids,
-            &setup.node_graph.node_pool_ids(),
-        );
+            setup,
+        )
+        .map_err(CliError::from)?;
         setup.set_warm_start_basis_cache(basis_cache);
     }
     Ok(())
+}
+
+fn require_policy_dir(
+    ctx: &RunContext<impl Communicator>,
+    setup: &StudySetup,
+    unmet_requirement: &str,
+) -> Result<PathBuf, CliError> {
+    let policy_dir = ctx.output_dir.join(&setup.policy_path);
+    if !policy_dir.exists() {
+        return Err(CliError::Internal {
+            message: format!(
+                "Policy directory not found: {}. {unmet_requirement}",
+                policy_dir.display()
+            ),
+        });
+    }
+    Ok(policy_dir)
 }
 
 /// Apply warm-start or resume policy before training, if requested.
@@ -154,16 +174,8 @@ pub(super) fn apply_training_policy(
 ) -> Result<(), CliError> {
     match policy_mode {
         WarmStart => {
-            let policy_dir = ctx.output_dir.join(&setup.policy_path);
-            if !policy_dir.exists() {
-                return Err(CliError::Internal {
-                    message: format!(
-                        "Policy directory not found: {}. Cannot warm-start \
-                         without a prior policy.",
-                        policy_dir.display()
-                    ),
-                });
-            }
+            let policy_dir =
+                require_policy_dir(ctx, setup, "Cannot warm-start without a prior policy.")?;
             if ctx.is_root && !ctx.quiet {
                 let _ = ctx
                     .stderr
@@ -181,16 +193,8 @@ pub(super) fn apply_training_policy(
             }
         }
         Resume => {
-            let policy_dir = ctx.output_dir.join(&setup.policy_path);
-            if !policy_dir.exists() {
-                return Err(CliError::Internal {
-                    message: format!(
-                        "Policy directory not found: {}. Cannot resume \
-                         without a prior checkpoint.",
-                        policy_dir.display()
-                    ),
-                });
-            }
+            let policy_dir =
+                require_policy_dir(ctx, setup, "Cannot resume without a prior checkpoint.")?;
             if ctx.is_root && !ctx.quiet {
                 let _ = ctx
                     .stderr
@@ -264,7 +268,7 @@ pub(super) fn apply_training_policy(
                     boundary_date,
                     state_dim,
                     &current_manifest,
-                    setup.stage_data.stage_templates.cost_scale_factor,
+                    setup.inputs.stage_data.stage_templates.cost_scale_factor,
                 )
                 .with_fixed_windows(&fixed_windows)
                 .with_inflow_lag_depth(effective_inflow_lag_depth)
@@ -293,7 +297,7 @@ pub(super) fn apply_training_policy(
         // and injects the same terminal pool.
         let boundary_records = broadcast_value(boundary_records, &ctx.comm)?;
         let validated = ValidatedBoundaryCuts::from_broadcast_records(boundary_records);
-        inject_boundary_cuts(setup, &validated);
+        inject_boundary_cuts(setup, &validated)?;
     }
 
     Ok(())
@@ -311,16 +315,11 @@ pub(super) fn load_policy_for_simulation(
             .write_line("Training disabled. Loading policy for simulation-only mode...");
     }
 
-    let policy_dir = ctx.output_dir.join(&setup.policy_path);
-    if !policy_dir.exists() {
-        return Err(CliError::Internal {
-            message: format!(
-                "Policy directory not found: {}. Cannot run simulation-only \
-                 mode without a trained policy.",
-                policy_dir.display()
-            ),
-        });
-    }
+    let policy_dir = require_policy_dir(
+        ctx,
+        setup,
+        "Cannot run simulation-only mode without a trained policy.",
+    )?;
 
     let (checkpoint, proof) = load_and_validate_checkpoint(ctx, &policy_dir, system, setup)?;
 
@@ -334,12 +333,9 @@ pub(super) fn load_policy_for_simulation(
     .map_err(CliError::from)?;
     setup.replace_fcf(loaded_fcf);
 
-    let basis_cache = build_basis_cache_from_checkpoint(
-        &checkpoint.stage_bases,
-        &checkpoint.stage_cuts,
-        &setup.node_graph.node_ids,
-        &setup.node_graph.node_pool_ids(),
-    );
+    let basis_cache =
+        build_basis_cache_from_checkpoint(&checkpoint.stage_bases, &checkpoint.stage_cuts, setup)
+            .map_err(CliError::from)?;
 
     Ok(TrainingResult::new(
         checkpoint.metadata.producer.final_lower_bound,

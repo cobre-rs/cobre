@@ -424,10 +424,10 @@ enum RawPlaneReductionConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFittingWindow {
-    /// Explicit minimum volume for fitting [hm³]. Mutually exclusive with
+    /// Explicit minimum volume for fitting \[hm³\]. Mutually exclusive with
     /// `volume_min_percentile`.
     volume_min_hm3: Option<f64>,
-    /// Explicit maximum volume for fitting [hm³]. Mutually exclusive with
+    /// Explicit maximum volume for fitting \[hm³\]. Mutually exclusive with
     /// `volume_max_percentile`.
     volume_max_hm3: Option<f64>,
     /// Minimum as a percentile of the operating range. Mutually exclusive
@@ -447,7 +447,7 @@ struct RawFittingWindow {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawReferenceVolume {
-    /// Absolute reference volume [hm³]. Mutually exclusive with `percentile`.
+    /// Absolute reference volume \[hm³\]. Mutually exclusive with `percentile`.
     /// When present must be finite and `> 0.0`.
     volume_hm3: Option<f64>,
     /// Reference volume as a percentile of the operating range. Mutually

@@ -230,7 +230,7 @@ impl ResolvedParameters {
 ///     name: "constant_coeff".to_string(),
 ///     kind: ParameterKind::Constant { value: 3.6 },
 /// }];
-/// let ec = EnergyConversionSet::new(vec![], vec![], 0, 4);
+/// let ec = EnergyConversionSet::new(vec![], vec![], &[], 4);
 /// let overrides = HydroEnergyProductivityOverride::default();
 /// let stage_ids = [StageId(0), StageId(1), StageId(2), StageId(3)];
 ///
@@ -587,6 +587,7 @@ mod tests {
         build_hydro_energy_productivity_override,
     };
     use crate::fpha_fitting::ForebayTable;
+    use crate::test_support;
 
     // -------------------------------------------------------------------------
     // Shared test helpers
@@ -671,7 +672,12 @@ mod tests {
                     .collect()
             })
             .collect();
-        EnergyConversionSet::new(per_hydro_stage, accumulated, n_hydros, n_stages)
+        EnergyConversionSet::new(
+            per_hydro_stage,
+            accumulated,
+            &test_support::minimal_hydros(n_hydros),
+            n_stages,
+        )
     }
 
     /// `StageId(0)..StageId(n_stages - 1)`: the 0-based domain ids every test
@@ -732,7 +738,7 @@ mod tests {
     #[test]
     fn constant_kind_fills_all_stages() {
         let params = vec![make_param(0, ParameterKind::Constant { value: 3.6 })];
-        let ec = EnergyConversionSet::new(vec![], vec![], 0, 4);
+        let ec = EnergyConversionSet::new(vec![], vec![], &[], 4);
         let overrides = HydroEnergyProductivityOverride::default();
         let stage_to_season = vec![0i32; 4];
         let stage_ids = stage_ids_0_based(4);
@@ -767,7 +773,7 @@ mod tests {
                 values: vec![1.0, 2.0],
             },
         )];
-        let ec = EnergyConversionSet::new(vec![], vec![], 0, 3);
+        let ec = EnergyConversionSet::new(vec![], vec![], &[], 3);
         let overrides = HydroEnergyProductivityOverride::default();
         let stage_to_season = vec![0i32; 3];
         let stage_ids = stage_ids_0_based(3);
@@ -805,7 +811,7 @@ mod tests {
                 values: vec![(0, 0.5), (1, 1.5)],
             },
         )];
-        let ec = EnergyConversionSet::new(vec![], vec![], 0, 3);
+        let ec = EnergyConversionSet::new(vec![], vec![], &[], 3);
         let overrides = HydroEnergyProductivityOverride::default();
         let stage_to_season = vec![0i32, 1, 0];
         let stage_ids = stage_ids_0_based(3);
@@ -1431,7 +1437,7 @@ mod tests {
 
     #[test]
     fn empty_parameters_n_stages_zero_is_ok() {
-        let ec = EnergyConversionSet::new(vec![], vec![], 0, 0);
+        let ec = EnergyConversionSet::new(vec![], vec![], &[], 0);
         let overrides = HydroEnergyProductivityOverride::default();
 
         let table =
@@ -1452,7 +1458,7 @@ mod tests {
         block_counts: &[usize],
     ) -> Result<ResolvedParameters, ResolvedParametersError> {
         let n_stages = block_counts.len();
-        let ec = EnergyConversionSet::new(vec![], vec![], 0, n_stages);
+        let ec = EnergyConversionSet::new(vec![], vec![], &[], n_stages);
         let overrides = HydroEnergyProductivityOverride::default();
         let stage_to_season = vec![0i32; n_stages];
         let stage_ids = stage_ids_0_based(n_stages);
@@ -1775,7 +1781,7 @@ mod tests {
                 .map(|&id| (0..n_stages).map(|t| integrated_for(id, t)).collect())
                 .collect();
             let energy_conversion =
-                EnergyConversionSet::new(per_hydro_stage, accumulated, n_hydros, n_stages)
+                EnergyConversionSet::new(per_hydro_stage, accumulated, &hydros, n_stages)
                     .with_integrated(integrated_equivalent, integrated_accumulated);
 
             (hydros, energy_conversion)

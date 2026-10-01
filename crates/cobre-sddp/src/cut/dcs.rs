@@ -135,6 +135,14 @@ pub struct DcsScoringScratch {
     pub violations: Vec<(f64, u32)>,
 }
 
+/// Grow `buf` to `target` capacity, growth-only — `additional` is computed
+/// from `len()`, not `capacity()`, per `DcsScoringScratch::reserve`'s doc.
+fn reserve_to<T>(buf: &mut Vec<T>, target: usize) {
+    if buf.capacity() < target {
+        buf.reserve(target - buf.len());
+    }
+}
+
 impl DcsScoringScratch {
     /// Grow the scratch buffers to hold `n_state` state entries and up to
     /// `pool_capacity` candidate cuts, growth-only.
@@ -148,26 +156,11 @@ impl DcsScoringScratch {
     /// from a nonzero (but still-short-of-target) capacity, e.g. a pool that
     /// grew twice.
     pub fn reserve(&mut self, n_state: usize, pool_capacity: usize) {
-        if self.unscaled_state.capacity() < n_state {
-            self.unscaled_state
-                .reserve(n_state - self.unscaled_state.len());
-        }
-        let coef_capacity = pool_capacity * n_state;
-        if self.cand_coef_block.capacity() < coef_capacity {
-            self.cand_coef_block
-                .reserve(coef_capacity - self.cand_coef_block.len());
-        }
-        if self.alpha.capacity() < pool_capacity {
-            self.alpha.reserve(pool_capacity - self.alpha.len());
-        }
-        if self.cand_slots.capacity() < pool_capacity {
-            self.cand_slots
-                .reserve(pool_capacity - self.cand_slots.len());
-        }
-        if self.violations.capacity() < pool_capacity {
-            self.violations
-                .reserve(pool_capacity - self.violations.len());
-        }
+        reserve_to(&mut self.unscaled_state, n_state);
+        reserve_to(&mut self.cand_coef_block, pool_capacity * n_state);
+        reserve_to(&mut self.alpha, pool_capacity);
+        reserve_to(&mut self.cand_slots, pool_capacity);
+        reserve_to(&mut self.violations, pool_capacity);
     }
 }
 
@@ -466,10 +459,7 @@ impl DcsSolveScratch {
     /// subtracting `capacity()` would under-reserve here.
     pub fn reserve(&mut self, n_state: usize, pool_capacity: usize) {
         self.scoring.reserve(n_state, pool_capacity);
-        if self.out_selected.capacity() < pool_capacity {
-            self.out_selected
-                .reserve(pool_capacity - self.out_selected.len());
-        }
+        reserve_to(&mut self.out_selected, pool_capacity);
         // base_row_offset 0 is a placeholder; each fresh solve resets it to the
         // loaded core's row count in `lazy_solve_preloaded`.
         self.row_map.reset(pool_capacity, 0);
@@ -480,9 +470,7 @@ impl DcsSolveScratch {
             &mut self.res_dual,
             &mut self.res_reduced_costs,
         ] {
-            if buf.capacity() < pool_capacity {
-                buf.reserve(pool_capacity - buf.len());
-            }
+            reserve_to(buf, pool_capacity);
         }
     }
 
@@ -542,6 +530,14 @@ fn map_solver_error(e: SolverError, ctx: DcsSolveContext) -> SddpError {
         },
         other => SddpError::Solver(other),
     }
+}
+
+fn solve_mapped<'a, S: SolverInterface>(
+    solver: &'a mut ProfiledSolver<S>,
+    basis: Option<&Basis>,
+    ctx: DcsSolveContext,
+) -> Result<SolutionView<'a>, SddpError> {
+    solver.solve(basis).map_err(|e| map_solver_error(e, ctx))
 }
 
 /// Solve one (stage, solve) lazily under Dynamic Cut Selection, given an
@@ -605,7 +601,7 @@ pub fn lazy_solve_preloaded<S: SolverInterface>(
     let mut view = if ctx.continue_carry {
         // CONTINUE: carry the loaded LP, resident rows, and warm basis; only the
         // bounds changed. No reset / seed / reload — just re-solve warm.
-        solver.solve(None).map_err(|e| map_solver_error(e, ctx))?
+        solve_mapped(solver, None, ctx)?
     } else {
         // FRESH: reset the carried row map, append the seed, run the initial
         // solve. Must NOT reload the model — that would discard the caller's
@@ -628,21 +624,16 @@ pub fn lazy_solve_preloaded<S: SolverInterface>(
         // run_stage_solve applies on the frozen path, mirrored here because
         // CLP accepts a shape-mismatched basis silently.
         if let Some(stored) = stored_basis.filter(|s| s.node_id == ctx.node_id) {
-            let target = ReconstructionTarget {
-                base_row_count: core.num_rows,
-                num_cols: core.num_cols,
-            };
+            let target = ReconstructionTarget::from_template(core);
             reconstruct_basis_uniform_basic(stored, target, cut_rows, &mut scratch.recon_basis);
             enforce_basic_count_invariant(
                 &mut scratch.recon_basis,
                 core.num_rows + cut_rows,
                 core.num_rows,
             )?;
-            solver
-                .solve(Some(&scratch.recon_basis))
-                .map_err(|e| map_solver_error(e, ctx))?
+            solve_mapped(solver, Some(&scratch.recon_basis), ctx)?
         } else {
-            solver.solve(None).map_err(|e| map_solver_error(e, ctx))?
+            solve_mapped(solver, None, ctx)?
         }
     };
 
@@ -682,7 +673,7 @@ pub fn lazy_solve_preloaded<S: SolverInterface>(
             &mut scratch.row_map,
             &mut scratch.batch,
         );
-        view = solver.solve(None).map_err(|e| map_solver_error(e, ctx))?;
+        view = solve_mapped(solver, None, ctx)?;
     }
 
     // TC fallback (cap hit with violations remaining): add ALL remaining
@@ -716,7 +707,7 @@ pub fn lazy_solve_preloaded<S: SolverInterface>(
             &mut scratch.batch,
         );
     }
-    let view = solver.solve(None).map_err(|e| map_solver_error(e, ctx))?;
+    let view = solve_mapped(solver, None, ctx)?;
     scratch.store_result(&view);
     Ok(())
 }
@@ -787,6 +778,7 @@ mod tests {
     use crate::cut::{CutPool, CutRowMap};
     use crate::cut_selection::{CutMetadata, CutSelectionStrategy};
     use crate::indexer::{CutSlot, CutStateProjection, StateSpace};
+    use crate::lead_time::AnticipatedResolution;
     use crate::setup::{NodeId, StageIdx};
     use crate::workspace::CapturedBasis;
 
@@ -898,7 +890,7 @@ mod tests {
     // score_violated_candidates fixtures
     // -----------------------------------------------------------------------
 
-    // All scoring tests use n_state = 2 (StateSpace::new(2, 0, 0, [], 0, 0, …)):
+    // All scoring tests use n_state = 2 (StateSpace::new(2, 0, [], [], default, …)):
     //   - state columns 0, 1 (identity state_to_lp_column for j < hydro_count)
     //   - theta column 6 (= n * (3 + l) with n = 2, l = 0)
     // So `primal` must be at least length 7.
@@ -907,7 +899,14 @@ mod tests {
     const PRIMAL_LEN: usize = THETA_COL + 1;
 
     fn indexer() -> StateSpace {
-        StateSpace::new(2, 0, 0, Vec::new(), 0, 0, vec![], &[0, 0])
+        StateSpace::new(
+            2,
+            0,
+            Vec::new(),
+            vec![],
+            AnticipatedResolution::default(),
+            &[0, 0],
+        )
     }
 
     /// A pool with capacity 16, state_dimension 2, forward_passes 16, no
@@ -1744,7 +1743,14 @@ mod tests {
     const LAZY_THETA_COL: usize = 3;
 
     fn lazy_indexer() -> StateSpace {
-        StateSpace::new(1, 0, 0, Vec::new(), 0, 0, vec![], &[0])
+        StateSpace::new(
+            1,
+            0,
+            Vec::new(),
+            vec![],
+            AnticipatedResolution::default(),
+            &[0],
+        )
     }
 
     /// Cut-free core template with x0 pinned to `STATE_X0` and theta free.
@@ -1763,10 +1769,6 @@ mod tests {
             row_lower: Vec::new(),
             row_upper: Vec::new(),
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }

@@ -501,7 +501,11 @@ fn build_reduction_fixture(coverage: SeasonCoverage) -> ReductionFixture {
             boundary_date,
             state_dim,
             &current_manifest,
-            truncated_setup.stage_data.stage_templates.cost_scale_factor,
+            truncated_setup
+                .inputs
+                .stage_data
+                .stage_templates
+                .cost_scale_factor,
         )
         .with_inflow_lag_depth(truncated_setup.boundary_requirements().inflow_lag_depth())
         .with_study_seasons(&study_seasons),
@@ -512,8 +516,16 @@ fn build_reduction_fixture(coverage: SeasonCoverage) -> ReductionFixture {
         policy_dir,
         validated,
         boundary_date,
-        full_cost_scale_factor: full_setup.stage_data.stage_templates.cost_scale_factor,
-        truncated_cost_scale_factor: truncated_setup.stage_data.stage_templates.cost_scale_factor,
+        full_cost_scale_factor: full_setup
+            .inputs
+            .stage_data
+            .stage_templates
+            .cost_scale_factor,
+        truncated_cost_scale_factor: truncated_setup
+            .inputs
+            .stage_data
+            .stage_templates
+            .cost_scale_factor,
     }
 }
 

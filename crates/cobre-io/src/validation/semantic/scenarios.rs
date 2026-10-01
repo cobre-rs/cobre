@@ -523,7 +523,7 @@ pub(super) fn check_external_scheme_has_files(data: &ParsedData, ctx: &mut Valid
 /// values (keyed by resolved study index, `scenario_id`, and entity id), the
 /// entity ids present, and the per-stage raw column count `raw_c(t)` (the
 /// distinct `scenario_id` count at that stage — the canonical, cross-class-agreed
-/// count [`check_node_graph`]'s pointer bound quantifies over).
+/// count [`check_node_graph`](super::stages::check_node_graph)'s pointer bound quantifies over).
 struct ClassExternal {
     name: &'static str,
     file: &'static str,
@@ -1153,10 +1153,7 @@ pub(super) fn check_filling_sufficiency(data: &ParsedData, ctx: &mut ValidationC
         .stages
         .stages
         .iter()
-        .map(|s| {
-            let duration_hours: f64 = s.blocks.iter().map(|b| b.duration_hours).sum();
-            (s.id, duration_hours * M3S_TO_HM3)
-        })
+        .map(|s| (s.id, s.total_hours() * M3S_TO_HM3))
         .collect();
 
     let rate_override: HashMap<(i32, i32), f64> = data
@@ -3152,7 +3149,8 @@ mod tests {
     }
 
     /// A coherent single-class deck (no `nodes[]`) produces no coherence
-    /// diagnostics — the C1 precondition the golden parity gate rests on.
+    /// diagnostics, so the coherence checks never fire on a deck without a node
+    /// graph.
     #[test]
     fn coherent_external_deck_has_no_coherence_errors() {
         let data = external_data(

@@ -1,4 +1,4 @@
-//! `Q1` probe — sign convention of `reduced_cost` for fixed-at-bound columns.
+//! Sign convention of `reduced_cost` for fixed-at-bound columns.
 //!
 //! Whether `HiGHS` reports `reduced_cost` for a column fixed at `lb == ub` so it
 //! numerically matches the row dual of the equivalent equality row. Two
@@ -23,7 +23,7 @@
 use cobre_solver::{HighsSolver, RowBatch, SolverInterface, StageTemplate};
 
 #[test]
-fn q1_sign_convention_row_equality_vs_column_bound() {
+fn fixed_column_reduced_cost_matches_equality_row_dual() {
     // LP-R: row 0 = x2+x3 >= 4, row 1 = x1 == 7.
     let template_r = StageTemplate {
         num_cols: 3,
@@ -38,10 +38,6 @@ fn q1_sign_convention_row_equality_vs_column_bound() {
         row_lower: vec![4.0, 7.0],
         row_upper: vec![f64::INFINITY, 7.0],
         n_state: 0,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
@@ -76,10 +72,6 @@ fn q1_sign_convention_row_equality_vs_column_bound() {
         row_lower: vec![4.0],
         row_upper: vec![f64::INFINITY],
         n_state: 0,
-        n_transfer: 0,
-        n_dual_relevant: 0,
-        n_hydro: 0,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
@@ -144,5 +136,11 @@ fn q1_sign_convention_row_equality_vs_column_bound() {
         "x3 must match: {} vs {}",
         x_r[2],
         x_c[2]
+    );
+    assert!(
+        (dual_r[1] - rc_c[0]).abs() <= 1e-9 * dual_r[1].abs().max(rc_c[0].abs()),
+        "the fixed column's reduced cost must equal the equality row's dual: {} vs {}",
+        rc_c[0],
+        dual_r[1]
     );
 }

@@ -694,7 +694,7 @@ mod opening_order_determinism {
         let case_dir = fixture_case_dir();
 
         let probe = fresh_setup(case_dir);
-        let tree_view = probe.stochastic.tree_view();
+        let tree_view = probe.inputs.stochastic.tree_view();
         let has_multi_opening_stage =
             (0..probe.num_stages()).any(|stage| tree_view.n_openings(stage) >= 3);
         assert!(
@@ -990,7 +990,7 @@ mod by_node_scheduler_determinism {
     /// stage's resolved block count must reach `>= 2`.
     fn assert_has_multi_block_stage(case_dir: &Path) {
         let probe = fresh_setup(case_dir, BackwardScheduler::ByNode { block_size: None });
-        let tree_view = probe.stochastic.tree_view();
+        let tree_view = probe.inputs.stochastic.tree_view();
         let has_multi_block_stage = (0..probe.num_stages())
             .any(|stage| resolved_block_count(tree_view.n_openings(stage)) >= 2);
         assert!(
@@ -1332,17 +1332,17 @@ mod by_node_scratch {
     use cobre_io::config::BackwardScheduler;
     use cobre_sddp::{
         BackwardPassInputs, BackwardPassState, ExchangeBuffers,
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         cut::FutureCostFunction,
         cut_sync::CutSyncBuffers,
         forward::EnumeratedForwardScratch,
         horizon_mode::HorizonMode,
         inflow_method::InflowNonNegativityMethod,
-        lp::builder::StateBox,
         risk_measure::RiskMeasure,
         setup::Traversal,
         test_support::{
-            all_enabled_cut_state_layouts, state_layout, study_dims, trial_state_records,
+            StageContextFixture, all_enabled_cut_state_layouts, equipment_free_geometry,
+            permissive_state_boxes, state_layout, study_dims, trial_state_records,
         },
         workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
     };
@@ -1435,27 +1435,24 @@ mod by_node_scratch {
         }
     }
 
-    /// Single-state-column template: one storage-like state column, one aux
-    /// column pinned `[0, 0]` by an equality row, one zero-cost objective column
-    /// — a trivially solvable LP any `SolverInterface` accepts unconditionally.
+    /// N=1, L=0 template: `storage_out`(0), `z_inflow`(1, free), `storage_in`(2,
+    /// pinned by this mock's row 1), `theta`(3, zero-cost) — a trivially
+    /// solvable LP any `SolverInterface` accepts unconditionally.
+    /// Row layout: `z_inflow`(0), this mock's pin row(1).
     fn minimal_template_1_0() -> StageTemplate {
         StageTemplate {
-            num_cols: 3,
-            num_rows: 1,
-            num_nz: 1,
-            col_starts: vec![0_i32, 0, 1, 1],
-            row_indices: vec![0_i32],
-            values: vec![1.0],
-            col_lower: vec![0.0, 0.0, 0.0],
-            col_upper: vec![f64::INFINITY; 3],
-            objective: vec![0.0, 0.0, 1.0],
-            row_lower: vec![0.0],
-            row_upper: vec![0.0],
+            num_cols: 4,
+            num_rows: 2,
+            num_nz: 2,
+            col_starts: vec![0_i32, 0, 1, 2, 2],
+            row_indices: vec![0_i32, 1],
+            values: vec![1.0, 1.0],
+            col_lower: vec![0.0, f64::NEG_INFINITY, 0.0, 0.0],
+            col_upper: vec![f64::INFINITY; 4],
+            objective: vec![0.0, 0.0, 0.0, 1.0],
+            row_lower: vec![0.0, 0.0],
+            row_upper: vec![0.0, 0.0],
             n_state: 1,
-            n_transfer: 0,
-            n_dual_relevant: 1,
-            n_hydro: 1,
-            max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
         }
@@ -1470,16 +1467,6 @@ mod by_node_scratch {
             iterations: 0,
             solve_time_seconds: 0.0,
         }
-    }
-
-    fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
-        vec![
-            StateBox {
-                lower: vec![f64::NEG_INFINITY; n_state],
-                upper: vec![f64::INFINITY; n_state],
-            };
-            n_stages
-        ]
     }
 
     fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
@@ -1590,7 +1577,15 @@ mod by_node_scratch {
 
     #[test]
     fn by_node_scratch_empty_on_by_scenario_default() {
-        let mut state = BackwardPassState::new(1, 1, 4, 0, 3, 5, 2);
+        let mut state = BackwardPassState::new(
+            1,
+            1,
+            4,
+            0,
+            3,
+            &state_layout(5, 0),
+            &HorizonMode::Finite { num_stages: 2 },
+        );
         state.set_scheduler(BackwardScheduler::ByScenario {});
         assert_eq!(
             state.by_node_scratch_arena_capacity(),
@@ -1613,8 +1608,8 @@ mod by_node_scratch {
             bwd_max_openings,
             0,
             max_local_fwd,
-            n_state,
-            num_stages,
+            &state_layout(n_state, 0),
+            &HorizonMode::Finite { num_stages },
         );
 
         state.set_scheduler(BackwardScheduler::ByNode { block_size: None });
@@ -1663,7 +1658,6 @@ mod by_node_scratch {
         let state_layout_fixture = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
         let frozen_templates = templates.clone();
-        let base_rows = vec![1_usize; n_stages];
         let n_state = state_layout_fixture.n_state;
         let forward_passes = 2_u32;
 
@@ -1671,56 +1665,20 @@ mod by_node_scratch {
             FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
         let trial_states = vec![vec![10.0], vec![20.0]];
         let records = trial_state_records(&trial_states, n_stages);
-        let mut exchange = ExchangeBuffers::new(n_state, trial_states.len(), 1);
+        let mut exchange = ExchangeBuffers::new(&state_layout_fixture, trial_states.len(), 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let comm = StubComm;
-        let mut workspace_pool = WorkspacePool::new(
-            0,
-            1,
-            n_state,
-            WorkspaceSizing {
-                hydro_count: 1,
-                max_openings: n_openings,
-                initial_pool_capacity: 20,
-                n_state,
-                ..WorkspaceSizing::default()
-            },
-            || MockSolver::always_ok(solution_1_0(100.0, -5.0)),
-        );
         let mut basis_store = BasisStore::new(exchange.local_count(), n_stages);
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[0, 0]);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+        let ctx = fixture.ctx();
         let study_dims_fixture = study_dims();
         let training_ctx = TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -1743,10 +1701,29 @@ mod by_node_scratch {
             lag_weight_seed: &[],
             dcs: None,
         };
+        let mut workspace_pool = WorkspacePool::new(
+            0,
+            1,
+            &training_ctx,
+            &ctx,
+            WorkspaceSizing {
+                max_openings: n_openings,
+                initial_pool_capacity: 20,
+                ..WorkspaceSizing::default()
+            },
+            || MockSolver::always_ok(solution_1_0(100.0, -5.0)),
+        );
 
         let local_count = exchange.local_count();
-        let mut state =
-            BackwardPassState::new(1, 1, n_openings, n_state, local_count, n_state, n_stages);
+        let mut state = BackwardPassState::new(
+            1,
+            1,
+            n_openings,
+            n_state,
+            local_count,
+            training_ctx.state,
+            training_ctx.horizon,
+        );
         state.set_scheduler(BackwardScheduler::ByNode {
             block_size: NonZeroUsize::new(1),
         });
@@ -1806,7 +1783,6 @@ mod by_node_scratch {
         let state_layout_fixture = state_layout(1, 0);
         let templates = vec![minimal_template_1_0(); n_stages];
         let frozen_templates = templates.clone();
-        let base_rows = vec![1_usize; n_stages];
         let n_state = state_layout_fixture.n_state;
         let forward_passes = 2_u32;
 
@@ -1814,56 +1790,20 @@ mod by_node_scratch {
             FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
         let trial_states = vec![vec![10.0], vec![20.0]];
         let records = trial_state_records(&trial_states, n_stages);
-        let mut exchange = ExchangeBuffers::new(n_state, trial_states.len(), 1);
+        let mut exchange = ExchangeBuffers::new(&state_layout_fixture, trial_states.len(), 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
         let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
         let comm = StubComm;
-        let mut workspace_pool = WorkspacePool::new(
-            0,
-            1,
-            n_state,
-            WorkspaceSizing {
-                hydro_count: 1,
-                max_openings: n_openings,
-                initial_pool_capacity: 20,
-                n_state,
-                ..WorkspaceSizing::default()
-            },
-            || MockSolver::always_ok(solution_1_0(100.0, -5.0)),
-        );
         let mut basis_store = BasisStore::new(exchange.local_count(), n_stages);
         let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let state_boxes = permissive_state_boxes(n_state, n_stages);
-        let ctx = StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
+        let geometry = equipment_free_geometry(&[0, 0]);
+        let fixture = StageContextFixture::new(&templates, &state_boxes, &geometry);
+        let ctx = fixture.ctx();
         let study_dims_fixture = study_dims();
         let training_ctx = TrainingContext {
             node_graph: &cobre_sddp::test_support::chain_node_graph(&stochastic),
@@ -1886,10 +1826,29 @@ mod by_node_scratch {
             lag_weight_seed: &[],
             dcs: None,
         };
+        let mut workspace_pool = WorkspacePool::new(
+            0,
+            1,
+            &training_ctx,
+            &ctx,
+            WorkspaceSizing {
+                max_openings: n_openings,
+                initial_pool_capacity: 20,
+                ..WorkspaceSizing::default()
+            },
+            || MockSolver::always_ok(solution_1_0(100.0, -5.0)),
+        );
 
         let local_count = exchange.local_count();
-        let mut state =
-            BackwardPassState::new(1, 1, n_openings, n_state, local_count, n_state, n_stages);
+        let mut state = BackwardPassState::new(
+            1,
+            1,
+            n_openings,
+            n_state,
+            local_count,
+            training_ctx.state,
+            training_ctx.horizon,
+        );
         state.set_scheduler(BackwardScheduler::ByNode {
             block_size: NonZeroUsize::new(1),
         });
@@ -2008,7 +1967,7 @@ mod k_fan_graph_invariance {
     /// instead of degenerating to one trial point per worker.
     fn assert_genuine_multi_node_level(max_threads_crossed: usize) {
         let probe = k_fan_setup(K, FORWARD_PASSES, MAX_ITERATIONS);
-        let node_graph = &probe.setup.node_graph;
+        let node_graph = &probe.setup.inputs.node_graph;
         let cut_generating = (0..node_graph.nodes.len())
             .map(NodePos)
             .filter(|&pos| !node_graph.successors[pos].is_empty())
@@ -2168,7 +2127,7 @@ mod by_node_k_fan_branching {
     /// boundaries and the root backward genuinely fans over more than one child.
     fn assert_genuine_multi_node_level(max_crossed: usize) {
         let probe = k_fan_setup(K, FORWARD_PASSES, MAX_ITERATIONS);
-        let node_graph = &probe.setup.node_graph;
+        let node_graph = &probe.setup.inputs.node_graph;
         let cut_generating = (0..node_graph.nodes.len())
             .map(NodePos)
             .filter(|&pos| !node_graph.successors[pos].is_empty())
@@ -2238,7 +2197,7 @@ mod by_node_k_fan_branching {
         // so at least one pool draws cuts from a strict subset of ranks — the genuine
         // multi-rank fan-branching the node-visit-offset slot base addresses.
         let probe = k_fan_setup(K, FORWARD_PASSES, MAX_ITERATIONS);
-        let node_graph = &probe.setup.node_graph;
+        let node_graph = &probe.setup.inputs.node_graph;
         let cut_generating = (0..node_graph.nodes.len())
             .map(NodePos)
             .filter(|&pos| !node_graph.successors[pos].is_empty())
@@ -2389,9 +2348,9 @@ mod k_fan_enumerated_determinism {
     /// multi-worker shape genuinely splits node work across worker boundaries.
     fn assert_genuine_multi_node(max_threads: usize) {
         let probe = k_fan_setup_enumerated(K, MAX_ITERATIONS);
-        let fan_nodes = (0..probe.setup.node_graph.nodes.len())
+        let fan_nodes = (0..probe.setup.inputs.node_graph.nodes.len())
             .map(NodePos)
-            .filter(|&pos| !probe.setup.node_graph.successors[pos].is_empty())
+            .filter(|&pos| !probe.setup.inputs.node_graph.successors[pos].is_empty())
             .count()
             - 1;
         assert!(
@@ -2712,7 +2671,7 @@ mod k_fan_sampled_declaration_order_invariance {
     /// Power precondition: the fan carries `>= 2` cut-generating fan nodes beyond
     /// the root, mirroring `k_fan_graph_invariance::assert_genuine_multi_node_level`.
     fn assert_genuine_k_fan(setup: &StudySetup) {
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let cut_generating = (0..node_graph.nodes.len())
             .map(NodePos)
             .filter(|&pos| !node_graph.successors[pos].is_empty())
@@ -2839,7 +2798,7 @@ mod non_uniform_branching_projection {
     /// shrink-at-the-fan-level-then-regrow-at-the-leaf shape) — the fixture
     /// genuinely varies its projection, not merely declares the axis.
     fn assert_non_uniform_branching_power(setup: &StudySetup) {
-        let node_graph = &setup.node_graph;
+        let node_graph = &setup.inputs.node_graph;
         let fan_nodes = (0..node_graph.nodes.len())
             .map(NodePos)
             .filter(|&pos| {

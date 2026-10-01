@@ -11,10 +11,12 @@ use cobre_core::ResolvedBounds;
 use cobre_solver::StageTemplate;
 
 use crate::indexer::{
-    AnticipatedLocal, StateSpace, anticipated_resolution_for,
+    AnticipatedLocal, AnticipatedPlants, StateSpace, anticipated_resolution_for,
     is_anticipated_decision_active_for_delivery,
 };
-use crate::setup::PostStudyResolved;
+use crate::time_value::TimeValue;
+
+use super::delivery_ring::DeliveryRing;
 
 /// Admissible interval per outgoing state dimension, both fields length
 /// [`StateSpace::n_state`]. A reachable dimension has `lower <= upper` by
@@ -28,21 +30,15 @@ pub struct StateBox {
     pub upper: Vec<f64>,
 }
 
-// Rationale (too_many_arguments): mirrors `fill_commitment_hold_box`'s own
-// rationale below — the commitment-hold family is the box builder's one
-// hand-written special case, and each argument is resolved once upstream in
-// `postprocess_templates` and threaded straight through.
-#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub(crate) fn build_state_box(
     template: &StageTemplate,
     layout: &StateSpace,
     stage_idx: usize,
     bounds: &ResolvedBounds,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
     anticipated_windows: &[(Option<i32>, Option<i32>)],
-    delivery_stage_ids: &[i32],
-    post_study_resolved: &PostStudyResolved,
+    time_value: &TimeValue,
 ) -> StateBox {
     let mut lower = vec![f64::NEG_INFINITY; layout.n_state];
     let mut upper = vec![f64::INFINITY; layout.n_state];
@@ -60,10 +56,9 @@ pub(crate) fn build_state_box(
         layout,
         stage_idx,
         bounds,
-        anticipated_thermal_indices,
+        anticipated_plants,
         anticipated_windows,
-        delivery_stage_ids,
-        post_study_resolved,
+        time_value,
     );
 
     StateBox { lower, upper }
@@ -102,22 +97,15 @@ fn fill_identity_box(
 /// axis (`m % k_max` on `m` read directly) is the wrong-but-compiling
 /// alternative once a plant's fixed post-horizon window excises part of the
 /// ring — `physical_target` is the sole owner of that excision.
-// Rationale (too_many_arguments): the commitment-hold family is the box
-// builder's one hand-written special case; each argument is resolved once in
-// `postprocess_templates` and threaded straight through — bundling them into a
-// context struct for this single call site would rename the coupling, not
-// remove it (mirrors `assemble_stage_templates_output`'s own rationale).
-#[allow(clippy::too_many_arguments)]
 fn fill_commitment_hold_box(
     lower: &mut [f64],
     upper: &mut [f64],
     layout: &StateSpace,
     stage_idx: usize,
     bounds: &ResolvedBounds,
-    anticipated_thermal_indices: &[usize],
+    anticipated_plants: &AnticipatedPlants,
     anticipated_windows: &[(Option<i32>, Option<i32>)],
-    delivery_stage_ids: &[i32],
-    post_study_resolved: &PostStudyResolved,
+    time_value: &TimeValue,
 ) {
     for j in layout.commit_out.clone() {
         lower[j] = 0.0;
@@ -127,21 +115,17 @@ fn fill_commitment_hold_box(
         return;
     }
     debug_assert_eq!(
-        anticipated_thermal_indices.len(),
-        layout.n_anticipated,
-        "anticipated_thermal_indices must have one entry per anticipated plant"
-    );
-    debug_assert_eq!(
         anticipated_windows.len(),
         layout.n_anticipated,
         "anticipated_windows must have one entry per anticipated plant"
     );
 
     let n_stages = bounds.n_stages();
-    let n_delivery = layout.delivery_stage_count(n_stages);
+    let n_delivery = layout.n_delivery();
     let points: Vec<_> = (0..layout.n_anticipated)
-        .map(|plant| anticipated_resolution_for(layout, AnticipatedLocal::new(plant), n_stages))
+        .map(|plant| anticipated_resolution_for(layout, AnticipatedLocal::new(plant)))
         .collect();
+    let ring = DeliveryRing::anticipated(layout);
 
     for depth in 0..layout.k_max {
         let r = stage_idx + depth + 1;
@@ -156,28 +140,30 @@ fn fill_commitment_hold_box(
                 continue;
             }
             if !is_anticipated_decision_active_for_delivery(
-                layout,
                 AnticipatedLocal::new(local_idx),
                 m,
                 n_delivery,
                 anticipated_windows,
-                delivery_stage_ids,
+                time_value.delivery_stage_ids(),
             ) {
                 continue;
             }
 
             let bound = if m < n_stages {
-                let thermal_idx = anticipated_thermal_indices[local_idx];
+                let thermal_idx = anticipated_plants
+                    .thermal_of(AnticipatedLocal::new(local_idx))
+                    .get();
                 let cap = bounds.thermal_block_base(thermal_idx, m);
                 Some((cap.min_generation_mw, cap.max_generation_mw))
             } else {
-                post_study_resolved
+                time_value
+                    .post_study()
                     .anticipated_bound(AnticipatedLocal::new(local_idx), m - n_stages)
                     .map(|(_, min_mw, max_mw)| (min_mw, max_mw))
             };
 
             if let Some((min_mw, max_mw)) = bound {
-                let j = layout.commit_out.start + slot * layout.n_anticipated + local_idx;
+                let j = ring.out_col(slot, local_idx);
                 lower[j] = min_mw;
                 upper[j] = max_mw;
             }
@@ -186,28 +172,40 @@ fn fill_commitment_hold_box(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::indexer::HydroSys;
     use crate::test_support::{
         state_layout_full, state_layout_with_transit_buckets, transit_bucket_only_template,
     };
+    use crate::time_value::PostStudyResolved;
 
-    fn empty_bounds_and_post_study() -> (ResolvedBounds, PostStudyResolved) {
-        (ResolvedBounds::empty(), PostStudyResolved::default())
+    fn empty_bounds_and_time_value() -> (ResolvedBounds, TimeValue) {
+        (
+            ResolvedBounds::empty(),
+            TimeValue::from_parts(vec![], vec![], vec![], vec![], PostStudyResolved::default()),
+        )
     }
 
     /// AC: a storage column bounded `[0.0, 50.0]` box-copies verbatim.
     #[test]
     fn state_box_storage_takes_the_outgoing_column_bounds() {
-        let layout = state_layout_full(1, 0, 0, 0, Vec::new());
+        let layout = state_layout_full(1, 0, Vec::new());
         let mut template = transit_bucket_only_template(layout.n_state, layout.n_state);
         let storage_j = layout.storage.start;
         template.col_lower[storage_j] = 0.0;
         template.col_upper[storage_j] = 50.0;
-        let (bounds, post_study) = empty_bounds_and_post_study();
+        let (bounds, time_value) = empty_bounds_and_time_value();
 
-        let state_box = build_state_box(&template, &layout, 0, &bounds, &[], &[], &[], &post_study);
+        let state_box = build_state_box(
+            &template,
+            &layout,
+            0,
+            &bounds,
+            &AnticipatedPlants::default(),
+            &[],
+            &time_value,
+        );
 
         assert_eq!(state_box.lower[storage_j], 0.0);
         assert_eq!(state_box.upper[storage_j], 50.0);
@@ -216,11 +214,19 @@ mod tests {
     /// AC: an inflow-lag dimension stays at the unbounded default.
     #[test]
     fn state_box_inflow_lag_is_unbounded() {
-        let layout = state_layout_full(1, 1, 0, 0, Vec::new());
+        let layout = state_layout_full(1, 1, Vec::new());
         let template = transit_bucket_only_template(layout.n_state, layout.n_state);
-        let (bounds, post_study) = empty_bounds_and_post_study();
+        let (bounds, time_value) = empty_bounds_and_time_value();
 
-        let state_box = build_state_box(&template, &layout, 0, &bounds, &[], &[], &[], &post_study);
+        let state_box = build_state_box(
+            &template,
+            &layout,
+            0,
+            &bounds,
+            &AnticipatedPlants::default(),
+            &[],
+            &time_value,
+        );
 
         let lag_j = layout.inflow_lags.start;
         assert_eq!(state_box.lower[lag_j], f64::NEG_INFINITY);
@@ -231,8 +237,12 @@ mod tests {
     /// `[0, 0]` bounds verbatim, exactly like storage.
     #[test]
     fn state_box_transit_bucket_reachable_is_zero_to_inf_frozen_is_zero_zero() {
-        let layout =
-            state_layout_with_transit_buckets(1, 0, 2, vec![(0, 0), (0, 1)], 0, 0, Vec::new());
+        let layout = state_layout_with_transit_buckets(
+            1,
+            0,
+            vec![(HydroSys::new(0), 0), (HydroSys::new(0), 1)],
+            Vec::new(),
+        );
         let mut template = transit_bucket_only_template(layout.n_state, layout.n_state);
         let reachable_j = layout.transit_buckets_out.start;
         let frozen_j = layout.transit_buckets_out.start + 1;
@@ -240,9 +250,17 @@ mod tests {
         template.col_upper[reachable_j] = f64::INFINITY;
         template.col_lower[frozen_j] = 0.0;
         template.col_upper[frozen_j] = 0.0;
-        let (bounds, post_study) = empty_bounds_and_post_study();
+        let (bounds, time_value) = empty_bounds_and_time_value();
 
-        let state_box = build_state_box(&template, &layout, 0, &bounds, &[], &[], &[], &post_study);
+        let state_box = build_state_box(
+            &template,
+            &layout,
+            0,
+            &bounds,
+            &AnticipatedPlants::default(),
+            &[],
+            &time_value,
+        );
 
         assert_eq!(state_box.lower[reachable_j], 0.0);
         assert_eq!(state_box.upper[reachable_j], f64::INFINITY);

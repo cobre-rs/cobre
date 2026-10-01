@@ -9,7 +9,8 @@
 //! for a single-bus study, so every consumer built on top of it stays
 //! byte-neutral until a multi-bus plant actually exists.
 //!
-//! Storage is CSR-shaped: [`Self::plant_cell_start`] and [`Self::cell_group_start`]
+//! Storage is CSR-shaped: [`HydroCellIndex::plant_cell_start`] and
+//! [`HydroCellIndex::cell_group_start`]
 //! are offset vectors of length `n + 1`, following the same `start[i]..start[i +
 //! 1]` convention as every other CSR range in this crate. The plant→cell map is
 //! a *range*, not the single-valued `Option` a filtering local index (e.g.

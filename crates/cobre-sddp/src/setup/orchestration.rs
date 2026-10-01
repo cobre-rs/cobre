@@ -13,8 +13,6 @@ use cobre_solver::{SolverError, SolverInterface};
 
 use crate::{
     config::{CutManagementConfig, EventConfig, LoopConfig, TrainingConfig},
-    context::{StageContext, TrainingContext},
-    dcs::DcsParams,
     error::SddpError,
     simulation::{
         SimulationOutputSpec, error::SimulationError, pipeline::SimulationRunResult,
@@ -22,7 +20,9 @@ use crate::{
     },
     solve::solver_phase::SolverProfiles,
     training::{TrainingOutcome, TrainingResult},
-    workspace::{CapturedBasis, SolverWorkspace, WorkspacePool, WorkspaceSizing},
+    workspace::{
+        CapturedBasis, NoisePreallocation, SolverWorkspace, WorkspacePool, WorkspaceSizing,
+    },
 };
 
 use super::node_graph::pool_fill_basis_cache;
@@ -100,12 +100,6 @@ impl StudySetup {
         )
     }
 
-    // Rationale: `solver_profiles` splits `train`'s config-resolved default from
-    // `train_with_solver_profiles`'s explicit override; both public callers stay
-    // at or below the pedantic threshold by fixing `event_sender`/`shutdown_flag`
-    // (the test-support caller has no use for either), so only this shared,
-    // private assembly step carries the full parameter count.
-    #[allow(clippy::too_many_arguments)]
     fn train_inner<S, C: Communicator>(
         &mut self,
         solver: &mut S,
@@ -126,14 +120,13 @@ impl StudySetup {
                 max_iterations: self.loop_params.max_iterations,
                 start_iteration: self.loop_params.start_iteration,
                 n_fwd_threads: n_threads,
-                max_blocks: self.loop_params.max_blocks,
                 stopping_rules: self.loop_params.stopping_rules.clone(),
             },
             cut_management: CutManagementConfig {
-                cut_selection: self.cut_management.cut_selection.clone(),
-                budget: self.cut_management.budget,
-                cut_activity_tolerance: self.cut_management.cut_activity_tolerance,
-                risk_measures: self.cut_management.risk_measures.clone(),
+                cut_selection: self.inputs.cut_management.cut_selection.clone(),
+                budget: self.inputs.cut_management.budget,
+                cut_activity_tolerance: self.inputs.cut_management.cut_activity_tolerance,
+                risk_measures: self.inputs.cut_management.risk_measures.clone(),
             },
             events: EventConfig {
                 event_sender,
@@ -143,62 +136,8 @@ impl StudySetup {
             },
         };
 
-        let stage_ctx = StageContext {
-            templates: &self.stage_data.stage_templates.templates,
-            state_boxes: &self.stage_data.stage_templates.state_boxes,
-            base_rows: &self.stage_data.stage_templates.base_rows,
-            geometry_per_stage: &self.stage_data.stage_templates.geometry_per_stage,
-            noise_scale: &self.stage_data.stage_templates.noise_scale,
-            n_hydros: self.stage_data.stage_templates.n_hydros,
-            cost_scale_factor: self.stage_data.stage_templates.cost_scale_factor,
-            n_load_buses: self.stage_data.stage_templates.n_load_buses,
-            load_balance_row_starts: &self.stage_data.stage_templates.load_balance_row_starts,
-            load_bus_indices: &self.stage_data.stage_templates.load_bus_indices,
-            block_counts_per_stage: &self.stage_data.block_counts_per_stage,
-            ncs_col_starts: &self.stage_data.stage_templates.ncs_col_starts,
-            n_ncs: self.stage_data.stage_templates.n_ncs,
-            ncs_stochastic_dense_col: &self.ncs_stochastic_dense_col,
-            ncs_stochastic_windows: &self.ncs_stochastic_windows,
-            anticipated_windows: &self.anticipated_windows,
-            study_stage_ids: &self.study_stage_ids,
-            ncs_max_gen: &self.ncs_max_gen,
-            ncs_allow_curtailment: &self.ncs_allow_curtailment,
-            discount_factors: self.stage_data.stage_templates.discount_factors(),
-            cumulative_discount_factors: self
-                .stage_data
-                .stage_templates
-                .cumulative_discount_factors(),
-            stage_lag_transitions: &self.stage_data.stage_lag_transitions,
-            noise_group_ids: &self.stage_data.noise_group_ids,
-            downstream_par_order: self.downstream_par_order,
-        };
-
-        let tr = &self.scenario_libraries.training;
-        let training_ctx = TrainingContext {
-            horizon: &self.horizon,
-            state: &self.stage_data.state,
-            cut_state_layouts: &self.stage_data.cut_state_layouts,
-            study_dims: &self.stage_data.study_dims,
-            inflow_method: &self.inflow_method,
-            stochastic: &self.stochastic,
-            initial_state: &self.initial_state,
-            inflow_scheme: tr.inflow_scheme,
-            load_scheme: tr.load_scheme,
-            ncs_scheme: tr.ncs_scheme,
-            stages: &self.stage_data.stages,
-            historical_library: tr.historical.as_ref(),
-            external_inflow_library: tr.external_inflow.as_ref(),
-            external_load_library: tr.external_load.as_ref(),
-            external_ncs_library: tr.external_ncs.as_ref(),
-            lag_accum_seed: &self.derived_inflow_seeds.accum,
-            lag_weight_seed: &self.derived_inflow_seeds.weight,
-            dcs: self
-                .cut_management
-                .cut_selection
-                .as_ref()
-                .and_then(DcsParams::from_strategy),
-            node_graph: &self.node_graph,
-        };
+        let stage_ctx = self.inputs.stage_ctx();
+        let training_ctx = self.inputs.training_ctx();
 
         let warm_start_basis_cache = self.warm_start_basis_cache.take();
 
@@ -245,7 +184,7 @@ impl StudySetup {
             SimulationEnumeratedRequest::Enumerated
         );
         let traversal = Traversal::resolve(
-            &self.node_graph,
+            &self.inputs.node_graph,
             is_enumerated,
             self.simulation_config().n_scenarios,
         );
@@ -257,8 +196,8 @@ impl StudySetup {
             let mut owned = stage_bases.to_vec();
             pool_fill_basis_cache(
                 &mut owned,
-                &self.node_graph.node_pool_ids(),
-                &self.node_graph.node_ids,
+                &self.inputs.node_graph.node_pool_ids(),
+                &self.inputs.node_graph.node_ids,
             );
             owned
         });
@@ -266,25 +205,20 @@ impl StudySetup {
 
         let output = SimulationOutputSpec {
             result_tx,
-            zeta_per_stage: &self.stage_data.stage_templates.zeta_per_stage,
-            block_hours_per_stage: &self.stage_data.stage_templates.block_hours_per_stage,
-            entity_counts: &self.stage_data.entity_counts,
+            block_hours_per_stage: &self.inputs.stage_data.stage_templates.block_hours_per_stage,
+            entity_counts: &self.inputs.stage_data.entity_counts,
             generic_constraint_row_entries: &self
+                .inputs
                 .stage_data
                 .stage_templates
                 .generic_constraint_row_entries,
-            ncs_col_starts: &self.stage_data.stage_templates.ncs_col_starts,
-            n_ncs: self.stage_data.stage_templates.n_ncs,
-            pumping_col_starts: &self.stage_data.stage_templates.pumping_col_starts,
-            n_pumping: self.stage_data.stage_templates.n_pumping,
-            geometry_per_stage: &self.stage_data.stage_templates.geometry_per_stage,
-            hydro_cell_index: &self.stage_data.hydro_cell_index,
-            pumping_consumption_mw_per_m3s: &self.stage_data.pumping_consumption_mw_per_m3s,
-            contract_prices_per_stage: &self.stage_data.contract_prices_per_stage,
-            contract_is_import: &self.stage_data.contract_is_import,
-            ncs_entity_ids_per_stage: &self.ncs_entity_ids_per_stage,
-            diversion_upstream: &self.stage_data.stage_templates.diversion_upstream,
+            hydro_cell_index: &self.inputs.stage_data.hydro_cell_index,
+            pumping_consumption_mw_per_m3s: &self.inputs.stage_data.pumping_consumption_mw_per_m3s,
+            contract_prices_per_stage: &self.inputs.stage_data.contract_prices_per_stage,
+            contract_slots: &self.inputs.stage_data.contract_slots,
+            diversion_upstream: &self.inputs.stage_data.stage_templates.diversion_upstream,
             hydro_productivities_per_stage: &self
+                .inputs
                 .stage_data
                 .stage_templates
                 .hydro_productivities_per_stage,
@@ -336,7 +270,10 @@ impl StudySetup {
     ///
     /// Panics if `comm.rank() > i32::MAX`. MPI world sizes are bounded well
     /// below this on all real systems.
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "an MPI rank is a C int, so its i32 conversion cannot fail"
+    )]
     pub fn create_workspace_pool<S: SolverInterface + Send, C: Communicator>(
         &self,
         comm: &C,
@@ -347,31 +284,23 @@ impl StudySetup {
         let mut pool = WorkspacePool::try_new(
             rank,
             n_threads,
-            self.stage_data.state.n_state,
+            &self.training_ctx(),
+            &self.stage_ctx(),
             WorkspaceSizing {
-                hydro_count: self.stage_data.state.hydro_count,
-                max_par_order: self.stage_data.state.max_par_order,
-                n_load_buses: self.stage_data.stage_templates.n_load_buses,
-                max_blocks: self.loop_params.max_blocks,
-                n_buckets: self.stage_data.state.n_buckets,
-                downstream_par_order: self.downstream_par_order,
-                max_openings: (0..self.stage_data.stage_templates.templates.len())
-                    .map(|t| self.stochastic.opening_tree().n_openings(t))
+                max_openings: (0..self.inputs.stage_data.stage_templates.templates.len())
+                    .map(|t| self.inputs.stochastic.opening_tree().n_openings(t))
                     .max()
                     .unwrap_or(0),
                 initial_pool_capacity: 0,
-                n_state: self.stage_data.state.n_state,
                 // Simulation-only pool: forward-worker scratch fields unused.
                 max_local_fwd: 0,
-                noise_dim: 0,
-                n_anticipated: self.stage_data.state.n_anticipated,
-                k_max: self.stage_data.state.k_max,
+                noise: NoisePreallocation::OnDemand,
             },
             solver_factory,
         )?;
         // Always pre-size scratch bases — basis reconstruction runs
         // unconditionally on every forward/backward apply with a stored basis.
-        let templates = &self.stage_data.stage_templates.templates;
+        let templates = &self.inputs.stage_data.stage_templates.templates;
         let max_cols = templates.iter().map(|t| t.num_cols).max().unwrap_or(0);
         let max_rows = templates.iter().map(|t| t.num_rows).max().unwrap_or(0);
         pool.resize_scratch_bases(max_cols, max_rows);

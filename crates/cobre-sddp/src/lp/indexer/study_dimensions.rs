@@ -1,7 +1,11 @@
 //! The [`StudyDimensions`] single owner of the study-invariant, non-state LP
-//! shape: the scalar entity counts, presence flags, and anticipated-thermal
-//! identity list constant across every stage and block of a study and not part
-//! of the state vector. No other long-lived type holds these facts.
+//! shape: the maximum deficit-segment count, the inflow non-negativity
+//! method, the anticipated-plant set, and the downstream PAR order —
+//! constant across every stage and block of a study and not part of the
+//! state vector. No other long-lived type holds these facts.
+
+use super::AnticipatedPlants;
+use crate::inflow_method::InflowNonNegativityMethod;
 
 /// Study-invariant, non-state LP shape for an SDDP study.
 ///
@@ -16,35 +20,30 @@
 ///   global `n_blks` is the footgun that mis-strides equipment columns at any
 ///   stage whose block count differs from stage 0's.
 ///
-/// `anticipated_thermal_indices` is study-invariant, so it is owned here; the
+/// `anticipated_plants` is study-invariant, so it is owned here; the
 /// per-stage FPHA / evaporation identity lists vary by stage and are owned by
 /// the per-stage geometry.
-// Rationale: the four bool fields are independent presence flags for optional
-// column groups, not states of one machine; the lint's suggested enum/state-
-// machine refactor would obscure that they vary independently.
-#[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct StudyDimensions {
-    /// Number of thermal units (T).
-    pub n_thermals: usize,
-    /// Number of transmission lines (`L_n`).
-    pub n_lines: usize,
-    /// Number of buses (B).
-    pub n_buses: usize,
     /// Maximum number of deficit segments across all buses (S).
     pub max_deficit_segments: usize,
-    /// Whether the study has NCS generation columns; only presence lives here,
-    /// the per-`(ncs, block)` column base is addressed per stage.
-    pub has_ncs: bool,
-    /// Whether inflow non-negativity penalty slack columns are present.
-    pub has_inflow_penalty: bool,
-    /// Whether withdrawal slack columns are present (`hydro_count > 0`).
-    pub has_withdrawal: bool,
-    /// Whether operational violation slack columns are present.
-    pub has_operational_violations: bool,
-    /// Maps anticipated-local position `i` to the i-th anticipated plant's
-    /// position within `system.thermals[]`.
-    pub anticipated_thermal_indices: Vec<usize>,
-    /// Number of pumping stations.
-    pub n_pumping: usize,
+    /// Inflow non-negativity enforcement method.
+    pub inflow_method: InflowNonNegativityMethod,
+    /// The study's anticipated-plant set.
+    pub anticipated_plants: AnticipatedPlants,
+    /// PAR order of the downstream (coarser) resolution model. Non-zero only when
+    /// the study includes stages with `season_id >= 12` (a monthly-to-quarterly
+    /// transition); zero for uniform-resolution studies.
+    pub downstream_par_order: usize,
+}
+
+impl Default for StudyDimensions {
+    fn default() -> Self {
+        Self {
+            max_deficit_segments: 0,
+            inflow_method: InflowNonNegativityMethod::None,
+            anticipated_plants: AnticipatedPlants::default(),
+            downstream_par_order: 0,
+        }
+    }
 }

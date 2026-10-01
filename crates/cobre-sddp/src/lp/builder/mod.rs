@@ -21,13 +21,12 @@
 //!
 //! ## Patch sequence
 //!
-//! Each forward-pass solve writes the row buffer (noise at
-//! `base_rows[stage]`, load balance when `n_load_buses > 0`,
-//! z-inflow) via `fill_forward_patches` / `fill_load_patches` /
+//! Each forward-pass solve writes the row buffer (load balance when
+//! `n_load_buses > 0`, z-inflow) via `fill_load_patches` /
 //! `fill_z_inflow_patches`, and the column buffer (incoming storage,
 //! AR lags, travel-time buckets, anticipated state) via `fill_col_state_patches`.
 //! The backward pass writes only the column buffer; noise comes from the fixed
-//! opening tree through `fill_forward_patches` with the opening-specific vector.
+//! opening tree through `fill_z_inflow_patches` with the opening-specific vector.
 //!
 //! ## Commissioning window
 //!
@@ -40,10 +39,13 @@
 //! exclusion — recomputes the phase by calling it; no caller may cache a per-stage
 //! [`cobre_core::commissioning::Phase`] mask.
 
+mod build_inputs;
 mod columns;
 pub(crate) mod delivery_ring;
 mod entries;
 mod fpha_cursor;
+mod generic_constraints;
+mod hydro_state;
 mod layout;
 mod patch;
 mod rows;
@@ -57,30 +59,32 @@ mod test_support;
 // --- Public re-exports (stable API) ---
 #[cfg(any(test, feature = "test-support"))]
 pub use delivery_ring::DeliveryRing;
+pub use layout::StageGeometry;
 pub use patch::PatchBuffer;
 pub use state_box::StateBox;
-#[cfg(any(test, feature = "test-support"))]
-pub use template::build_stage_templates_resolving_layout;
-pub use template::{StageGeometry, StageTemplates, build_stage_templates};
+pub use template::StageTemplates;
 
 // --- Crate-internal re-exports ---
+pub(crate) use build_inputs::LpBuildInputs;
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) use layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
+pub(crate) use layout::ResolvedTables;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use layout::{StageLayout, TemplateBuildCtx};
+pub(crate) use layout::{contract_family_slot, evaporation_slot, evaporation_slot_count};
 pub(crate) use scaling::{
     apply_col_scale, apply_commitment_hold_col_scale_unscale, apply_row_scale, compute_col_scale,
     compute_row_scale,
 };
 pub(crate) use state_box::build_state_box;
-pub(crate) use template::models_from_normal;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use template::canonical::{
+    FactGroups, encode_stage_templates_facts, encode_time_value_facts,
+};
+pub(crate) use template::{build_stage_templates, models_from_normal};
 
 // ---------------------------------------------------------------------------
 // Shared constants
 // ---------------------------------------------------------------------------
-
-/// Per-hour conversion factor from m³/s to hm³:
-/// `seconds_per_hour / m³_per_hm³ = 3600 / 1_000_000`. Callers multiply by
-/// `Block::duration_hours`: `volume_hm3 = flow_m3s * M3S_TO_HM3 * duration_hours`.
-pub(crate) const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0;
 
 /// Margin on the symmetric magnitude bound `[-q_max, +q_max]` of the evaporation
 /// outflow variable, absorbing linearization error where the area-volume curve
@@ -89,16 +93,11 @@ pub(crate) const M3S_TO_HM3: f64 = 3_600.0 / 1_000_000.0;
 /// a positive one is evaporative outflow.
 pub(crate) const EVAPORATION_FLOW_SAFETY_MARGIN: f64 = 2.0;
 
-/// Number of LP columns per `(evaporating hydro, block)` triple: evaporation
-/// outflow, `f_evap_plus`, `f_evap_minus`. Base column for evap-local index `i`,
-/// block `blk` is `col_evap_start + (i * n_blks + blk) * EVAP_COLS_PER_HYDRO`
-/// (hydro-outer, block-middle, offset-inner). The transposed
-/// `blk * n_evap_hydros + i` stride compiles and silently aliases one hydro's
-/// block onto another's. Single owner of the stride — [`StageLayout`]'s
-/// evaporation accessors and the indexer's `EvaporationIndices` constructor both
-/// reference this const.
-///
-/// [`StageLayout`]: layout::StageLayout
+/// Number of LP columns per `(evaporating hydro, slot)` triple: evaporation
+/// outflow, `f_evap_plus`, `f_evap_minus`. `StageLayout::evap_triple_base` is
+/// the single owner of the base-column address; this const only fixes the
+/// per-triple column width the indexer's `EvaporationIndices` constructor and
+/// `StageLayout`'s evaporation accessors both multiply by.
 pub(crate) const EVAP_COLS_PER_HYDRO: usize = 3;
 
 /// Offset of the signed evaporation-outflow column within a hydro's evaporation

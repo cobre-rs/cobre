@@ -92,7 +92,7 @@ pub(crate) struct RawNcs {
     /// Stage index when the source is decommissioned. Absent or null = never.
     #[serde(default)]
     exit_stage_id: Option<i32>,
-    /// Maximum generation (installed capacity) [MW].
+    /// Maximum generation (installed capacity) \[MW\].
     max_generation_mw: f64,
     /// Whether the LP is allowed to curtail this source.
     ///
@@ -106,7 +106,7 @@ pub(crate) struct RawNcs {
     /// dispatch LP runs.
     #[serde(default = "default_allow_curtailment")]
     allow_curtailment: bool,
-    /// Optional entity-level curtailment cost override [$/`MWh`].
+    /// Optional entity-level curtailment cost override \[$/`MWh`\].
     /// When absent, falls back to global `ncs_curtailment_cost`.
     #[serde(default)]
     curtailment_cost: Option<f64>,

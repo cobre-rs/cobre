@@ -53,13 +53,14 @@ use cobre_sddp::{
     SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
     aggregate_simulation, build_training_output,
     config::{CutManagementConfig, EventConfig, LoopConfig},
-    context::{StageContext, TrainingContext},
+    context::TrainingContext,
     cut::FutureCostFunction,
     energy_conversion::{EnergyConversion, EnergyConversionSet},
     horizon_mode::HorizonMode,
-    indexer::{CutStateProjection, StateSpace, StudyDimensions},
+    indexer::{AnticipatedPlants, CutStateProjection, StateSpace, StudyDimensions},
     inflow_method::InflowNonNegativityMethod,
-    lp::builder::{PatchBuffer, StateBox},
+    lead_time::AnticipatedResolution,
+    lp::builder::{PatchBuffer, StageGeometry},
     risk_measure::RiskMeasure,
     setup::{
         SimulationEnumeratedRequest, StudySetup,
@@ -72,9 +73,10 @@ use cobre_sddp::{
     },
     solver_stats::SolverStatsDelta,
     test_support::{
-        branching_tree_setup_enumerated, extensive_form_optimum, k_fan_setup_enumerated,
-        node_prefix_counts, node_scenario_count, single_path_enumerated_setup,
-        trunk_fan_setup_enumerated, water_binding_external_fan_setup,
+        StageContextFixture, branching_tree_setup_enumerated, extensive_form_optimum,
+        hydro_only_bus_geometry, k_fan_setup_enumerated, node_prefix_counts, node_scenario_count,
+        permissive_state_boxes, single_path_enumerated_setup, trunk_fan_setup_enumerated,
+        water_binding_external_fan_setup,
     },
     train,
     workspace::{SolverWorkspace, WorkspaceSizing},
@@ -92,36 +94,26 @@ fn state_layout_for(hydro_count: usize, max_par_order: usize) -> StateSpace {
     StateSpace::new(
         hydro_count,
         max_par_order,
-        0,
         Vec::new(),
-        0,
-        0,
         vec![],
+        AnticipatedResolution::default(),
         &vec![max_par_order; hydro_count],
     )
 }
 
 /// Carries the non-state study shape directly: this external test crate cannot see
 /// the parent crate's `#[cfg(test)]`/`test-support` surface. `max_deficit_segments`
-/// is `1`; `n_pumping`/`has_ncs`/anticipated are empty for these fixtures.
-fn study_dims_for(
-    n_thermals: usize,
-    n_lines: usize,
-    n_buses: usize,
-    hydro_count: usize,
-    has_inflow_penalty: bool,
-) -> StudyDimensions {
+/// is `1`; anticipated is empty for these fixtures.
+fn study_dims_for(has_inflow_penalty: bool) -> StudyDimensions {
     StudyDimensions {
-        n_thermals,
-        n_lines,
-        n_buses,
         max_deficit_segments: 1,
-        has_ncs: false,
-        has_inflow_penalty,
-        has_withdrawal: hydro_count > 0,
-        has_operational_violations: hydro_count != 0,
-        anticipated_thermal_indices: vec![],
-        n_pumping: 0,
+        inflow_method: if has_inflow_penalty {
+            InflowNonNegativityMethod::Penalty
+        } else {
+            InflowNonNegativityMethod::None
+        },
+        anticipated_plants: AnticipatedPlants::default(),
+        downstream_par_order: 0,
     }
 }
 
@@ -198,9 +190,9 @@ impl SolverInterface for MockSolver {
         let obj = self.objectives[call % self.objectives.len()];
         Ok(cobre_solver::SolutionView {
             objective: obj,
-            primal: &[0.0, 0.0, 0.0, 0.0],
-            dual: &[0.0, 0.0],
-            reduced_costs: &[0.0, 0.0, 0.0, 0.0],
+            primal: &[0.0; 15],
+            dual: &[0.0; 7],
+            reduced_costs: &[0.0; 15],
             iterations: 0,
             solve_time_seconds: 0.0,
         })
@@ -346,25 +338,37 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
 }
 
 fn minimal_template() -> StageTemplate {
-    // N=1, L=0 → cols: storage(0), z_inflow(1), storage_in(2), theta(3)
-    //             rows: storage_fixing(0), z_inflow(1)
+    // N=1, L=0 → cols: storage(0), z_inflow(1), storage_in(2), theta(3), then
+    // the decoupled hydro+bus equipment padding `test_support::geometry`
+    // addresses for N=1 hydro, 1 bus, 1 block (turbine..generation_below_slack,
+    // cols 4-14); `MockSolver::solve` mirrors this column count.
+    //             rows: z_inflow(0), mock_pin(1), then that same
+    //             layout's water_balance/load_balance/oper_violation rows (2-6)
+    let num_cols = 15;
+    let num_rows = 7;
+    let mut col_lower = vec![0.0; num_cols];
+    col_lower[1] = f64::NEG_INFINITY;
+    let mut objective = vec![0.0; num_cols];
+    objective[3] = 1.0;
     StageTemplate {
-        num_cols: 4,
-        num_rows: 2,
-        num_nz: 1,
-        col_starts: vec![0, 0, 0, 1, 1],
-        row_indices: vec![0],
-        values: vec![1.0],
-        col_lower: vec![0.0; 4],
-        col_upper: vec![f64::INFINITY; 4],
-        objective: vec![0.0, 0.0, 0.0, 1.0],
-        row_lower: vec![0.0; 2],
-        row_upper: vec![0.0; 2],
+        num_cols,
+        num_rows,
+        num_nz: 2,
+        col_starts: {
+            let mut v = vec![2_i32; num_cols + 1];
+            v[0] = 0;
+            v[1] = 0;
+            v[2] = 1;
+            v
+        },
+        row_indices: vec![0, 1],
+        values: vec![1.0, 1.0],
+        col_lower,
+        col_upper: vec![f64::INFINITY; num_cols],
+        objective,
+        row_lower: vec![0.0; num_rows],
+        row_upper: vec![0.0; num_rows],
         n_state: 1,
-        n_transfer: 0,
-        n_dual_relevant: 1,
-        n_hydro: 1,
-        max_par_order: 0,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     }
@@ -381,23 +385,37 @@ fn iteration_limit(limit: u64) -> StoppingRuleSet {
     }
 }
 
-/// A fully-permissive `(-inf, inf)` box per stage, for fixtures driving
-/// `train`/`simulate` through the seam without exercising the clamp.
-fn permissive_state_boxes(n_state: usize, n_stages: usize) -> Vec<StateBox> {
-    vec![
-        StateBox {
-            lower: vec![f64::NEG_INFINITY; n_state],
-            upper: vec![f64::INFINITY; n_state],
-        };
-        n_stages
-    ]
+fn default_single_hydro_entity_counts() -> EntityCounts {
+    EntityCounts {
+        hydro_ids: vec![1],
+        hydro_productivities: vec![1.0],
+        thermal_ids: vec![],
+        line_ids: vec![],
+        bus_ids: vec![0],
+        pumping_station_ids: vec![],
+        contract_ids: vec![],
+        non_controllable_ids: vec![],
+    }
+}
+
+fn zero_energy_conversion_set(n_stages: usize) -> EnergyConversionSet {
+    let zero_ec = EnergyConversion {
+        equivalent_productivity_mw_per_m3s: 0.0,
+        reference_volume_hm3: 0.0,
+        reference_outflow_m3s: 0.0,
+    };
+    EnergyConversionSet::new(
+        vec![vec![zero_ec; n_stages]; 1],
+        vec![vec![0.0_f64; n_stages]; 1],
+        &cobre_sddp::test_support::minimal_hydros(1),
+        n_stages,
+    )
 }
 
 /// All training parameters for a 2-stage, N=1 toy system.
 struct Fixture {
     n_stages: usize,
     templates: Vec<StageTemplate>,
-    base_rows: Vec<usize>,
     state: StateSpace,
     initial_state: Vec<f64>,
     stochastic: StochasticContext,
@@ -411,8 +429,6 @@ impl Fixture {
     fn new(n_stages: usize) -> Self {
         let state = state_layout_for(1, 0);
         let templates = vec![minimal_template(); n_stages];
-        // base_row: the AR-dynamics row offset is 1 (1 dual-relevant row)
-        let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; state.n_state];
         let stochastic = make_stochastic_context(n_stages, 1);
         let horizon = HorizonMode::Finite {
@@ -423,7 +439,6 @@ impl Fixture {
         Self {
             n_stages,
             templates,
-            base_rows,
             state,
             initial_state,
             stochastic,
@@ -597,7 +612,6 @@ fn train_simulate_write_cycle() {
             max_iterations: 10,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(3),
         },
         cut_management: CutManagementConfig {
@@ -614,36 +628,12 @@ fn train_simulate_write_cycle() {
         },
     };
 
-    let block_counts_per_stage = vec![1usize; fx.n_stages];
+    let geometry = vec![hydro_only_bus_geometry(); fx.n_stages];
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &block_counts_per_stage,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let cut_state_layouts = all_enabled_cut_state_layouts(&fx.state, fx.n_stages);
-    let study_dims = study_dims_for(0, 0, 0, 0, false);
+    let study_dims = study_dims_for(false);
     let training_context = TrainingContext {
         node_graph: &cobre_sddp::test_support::chain_node_graph(&fx.stochastic),
         horizon: &fx.horizon,
@@ -779,16 +769,7 @@ fn train_simulate_write_cycle() {
         profile: Phase::Simulation.profile(),
     };
 
-    let entity_counts = EntityCounts {
-        hydro_ids: vec![1],
-        hydro_productivities: vec![1.0],
-        thermal_ids: vec![],
-        line_ids: vec![],
-        bus_ids: vec![0],
-        pumping_station_ids: vec![],
-        contract_ids: vec![],
-        non_controllable_ids: vec![],
-    };
+    let entity_counts = default_single_hydro_entity_counts();
 
     let (result_tx, result_rx) = mpsc::sync_channel(4);
 
@@ -798,78 +779,29 @@ fn train_simulate_write_cycle() {
         0,
         0,
         sim_solver,
-        PatchBuffer::new(fx.state.hydro_count, fx.state.max_par_order, 0, 0, 0, 0, 0),
-        fx.state.n_state,
-        WorkspaceSizing {
-            hydro_count: fx.state.hydro_count,
-            max_par_order: fx.state.max_par_order,
-            n_load_buses: 0,
-            max_blocks: 0,
-            downstream_par_order: 0,
-            ..WorkspaceSizing::default()
-        },
+        PatchBuffer::new(&fx.state, &[], &[]),
+        &training_context,
+        &stage_ctx,
+        WorkspaceSizing::default(),
     )];
 
-    let zero_ec = EnergyConversion {
-        equivalent_productivity_mw_per_m3s: 0.0,
-        reference_volume_hm3: 0.0,
-        reference_outflow_m3s: 0.0,
-    };
-    let ec = EnergyConversionSet::new(
-        vec![vec![zero_ec; fx.n_stages]; 1],
-        vec![vec![0.0_f64; fx.n_stages]; 1],
-        1,
-        fx.n_stages,
-    );
+    let ec = zero_energy_conversion_set(fx.n_stages);
 
-    let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
     simulate(
         &mut sim_workspaces,
-        &StageContext {
-            state_boxes: &state_boxes,
-            geometry_per_stage: &[],
-            templates: &fx.templates,
-            base_rows: &fx.base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        },
+        &stage_ctx,
         &fcf,
         &training_context,
         &sim_config,
         SimulationOutputSpec {
             result_tx: &result_tx,
-            zeta_per_stage: &[],
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
-            block_hours_per_stage: &[],
+            block_hours_per_stage: &vec![vec![744.0]; fx.n_stages],
             entity_counts: &entity_counts,
-            generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            pumping_col_starts: &[],
-            n_pumping: 0,
-            geometry_per_stage: &[],
+            generic_constraint_row_entries: &vec![Vec::new(); fx.n_stages],
             pumping_consumption_mw_per_m3s: &[],
-            contract_prices_per_stage: &[],
-            contract_is_import: &[],
-            ncs_entity_ids_per_stage: &[],
+            contract_prices_per_stage: &vec![Vec::new(); fx.n_stages],
+            contract_slots: &[],
             diversion_upstream: &HashMap::new(),
             hydro_productivities_per_stage: &vec![vec![1.0]; fx.n_stages],
             energy_conversion: &ec,
@@ -1304,14 +1236,13 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
 
     let t0 = &templates_result.templates[0];
 
-    let study_dims = study_dims_for(0, 0, 1, 1, false);
+    let study_dims = study_dims_for(false);
     // The operational-violation constraint *row* range is owned by `StageLayout` and
     // pinned by `stage_layout_operational_violation_rows_are_contiguous_blocks`; this
     // end-to-end test covers only the slack-*column* extraction path.
     let geometry = &templates_result.geometry_per_stage[0];
     let state = state_layout_for(1, 0);
 
-    assert!(study_dims.has_operational_violations);
     assert!(!geometry.outflow_below_slack.is_empty());
 
     let slack_col = geometry.outflow_below_slack.start;
@@ -1338,7 +1269,6 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
     solver.set_primal(slack_col, sentinel_m3s);
 
     let templates = vec![t0.clone(); n_stages];
-    let base_rows = vec![templates_result.base_rows[0]; n_stages];
     // Every stage clones `t0`, so stage-0 geometry must be replicated across all
     // stages for extraction to read the stage-correct slack columns.
     let equipment_geometry = vec![templates_result.geometry_per_stage[0].clone(); n_stages];
@@ -1349,34 +1279,9 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
 
     let mut fcf = make_fcf(n_stages);
 
-    let block_counts = vec![1usize; n_stages];
     let state_boxes = permissive_state_boxes(state.n_state, n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &templates,
-        base_rows: &base_rows,
-        noise_scale: &templates_result.noise_scale,
-        n_hydros: 1,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &templates_result.load_balance_row_starts,
-        load_bus_indices: &[],
-        block_counts_per_stage: &block_counts,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let stage_ctx_fixture = StageContextFixture::new(&templates, &state_boxes, &equipment_geometry);
+    let stage_ctx = stage_ctx_fixture.ctx();
 
     let training_config = TrainingConfig {
         loop_config: LoopConfig {
@@ -1385,7 +1290,6 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             max_iterations: 1,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(1),
         },
         cut_management: CutManagementConfig {
@@ -1443,18 +1347,8 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         profile: Phase::Simulation.profile(),
     };
 
-    let entity_counts = EntityCounts {
-        hydro_ids: vec![1],
-        hydro_productivities: vec![1.0],
-        thermal_ids: vec![],
-        line_ids: vec![],
-        bus_ids: vec![0],
-        pumping_station_ids: vec![],
-        contract_ids: vec![],
-        non_controllable_ids: vec![],
-    };
+    let entity_counts = default_single_hydro_entity_counts();
 
-    let zeta_per_stage = vec![zeta; n_stages];
     let block_hours_per_stage = vec![vec![total_hours]; n_stages];
     let hydro_productivities_per_stage = vec![vec![1.0]; n_stages];
 
@@ -1469,29 +1363,13 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         0,
         0,
         sim_solver,
-        PatchBuffer::new(state.hydro_count, state.max_par_order, 0, 0, 0, 0, 0),
-        state.n_state,
-        WorkspaceSizing {
-            hydro_count: state.hydro_count,
-            max_par_order: state.max_par_order,
-            n_load_buses: 0,
-            max_blocks: 0,
-            downstream_par_order: 0,
-            ..WorkspaceSizing::default()
-        },
+        PatchBuffer::new(&state, &[], &[]),
+        &training_context,
+        &stage_ctx,
+        WorkspaceSizing::default(),
     )];
 
-    let zero_ec2 = EnergyConversion {
-        equivalent_productivity_mw_per_m3s: 0.0,
-        reference_volume_hm3: 0.0,
-        reference_outflow_m3s: 0.0,
-    };
-    let ec2 = EnergyConversionSet::new(
-        vec![vec![zero_ec2; n_stages]; 1],
-        vec![vec![0.0_f64; n_stages]; 1],
-        1,
-        n_stages,
-    );
+    let ec2 = zero_energy_conversion_set(n_stages);
 
     simulate(
         &mut sim_workspaces,
@@ -1501,20 +1379,13 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         &sim_config,
         SimulationOutputSpec {
             result_tx: &result_tx,
-            zeta_per_stage: &zeta_per_stage,
             hydro_cell_index: &cobre_sddp::test_support::identity_hydro_cell_index(256),
             block_hours_per_stage: &block_hours_per_stage,
             entity_counts: &entity_counts,
-            generic_constraint_row_entries: &[],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            pumping_col_starts: &[],
-            n_pumping: 0,
-            geometry_per_stage: &equipment_geometry,
+            generic_constraint_row_entries: &vec![Vec::new(); n_stages],
             pumping_consumption_mw_per_m3s: &[],
-            contract_prices_per_stage: &[],
-            contract_is_import: &[],
-            ncs_entity_ids_per_stage: &[],
+            contract_prices_per_stage: &vec![Vec::new(); n_stages],
+            contract_slots: &[],
             diversion_upstream: &HashMap::new(),
             hydro_productivities_per_stage: &hydro_productivities_per_stage,
             energy_conversion: &ec2,
@@ -1573,7 +1444,6 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
             max_iterations: 3,
             start_iteration: 0,
             n_fwd_threads: 1,
-            max_blocks: 1,
             stopping_rules: iteration_limit(3),
         },
         cut_management: CutManagementConfig {
@@ -1590,36 +1460,15 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
         },
     };
 
-    let block_counts_per_stage = vec![1usize; fx.n_stages];
+    // `default_single_hydro_entity_counts` (used below) declares both a hydro
+    // and a bus, so the geometry must address both families, matching
+    // `minimal_template`'s N=1 hydro, 1 bus, 1-block layout.
+    let geometry: Vec<StageGeometry> = vec![hydro_only_bus_geometry(); fx.n_stages];
     let state_boxes = permissive_state_boxes(fx.state.n_state, fx.n_stages);
-    let stage_ctx = StageContext {
-        state_boxes: &state_boxes,
-        geometry_per_stage: &[],
-        templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        cost_scale_factor: 1_000_000.0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &block_counts_per_stage,
-        ncs_col_starts: &[],
-        n_ncs: 0,
-        ncs_stochastic_dense_col: &[],
-        ncs_stochastic_windows: &[],
-        anticipated_windows: &[],
-        study_stage_ids: &[],
-        ncs_max_gen: &[],
-        ncs_allow_curtailment: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
+    let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
+    let stage_ctx = stage_ctx_fixture.ctx();
     let cut_state_layouts = all_enabled_cut_state_layouts(&fx.state, fx.n_stages);
-    let study_dims = study_dims_for(0, 0, 0, 0, false);
+    let study_dims = study_dims_for(false);
     let node_graph = cobre_sddp::test_support::chain_node_graph(&fx.stochastic);
     let training_context = TrainingContext {
         node_graph: &node_graph,
@@ -1662,27 +1511,8 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
         "the fixture's single-opening chain must derive exactly one enumerated path"
     );
 
-    let entity_counts = EntityCounts {
-        hydro_ids: vec![1],
-        hydro_productivities: vec![1.0],
-        thermal_ids: vec![],
-        line_ids: vec![],
-        bus_ids: vec![0],
-        pumping_station_ids: vec![],
-        contract_ids: vec![],
-        non_controllable_ids: vec![],
-    };
-    let zero_ec = EnergyConversion {
-        equivalent_productivity_mw_per_m3s: 0.0,
-        reference_volume_hm3: 0.0,
-        reference_outflow_m3s: 0.0,
-    };
-    let ec = EnergyConversionSet::new(
-        vec![vec![zero_ec; fx.n_stages]; 1],
-        vec![vec![0.0_f64; fx.n_stages]; 1],
-        1,
-        fx.n_stages,
-    );
+    let entity_counts = default_single_hydro_entity_counts();
+    let ec = zero_energy_conversion_set(fx.n_stages);
     let sim_config = SimulationConfig {
         n_scenarios: 1,
         io_channel_capacity: 4,
@@ -1699,16 +1529,10 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
                 0,
                 0,
                 sim_solver,
-                PatchBuffer::new(fx.state.hydro_count, fx.state.max_par_order, 0, 0, 0, 0, 0),
-                fx.state.n_state,
-                WorkspaceSizing {
-                    hydro_count: fx.state.hydro_count,
-                    max_par_order: fx.state.max_par_order,
-                    n_load_buses: 0,
-                    max_blocks: 0,
-                    downstream_par_order: 0,
-                    ..WorkspaceSizing::default()
-                },
+                PatchBuffer::new(&fx.state, &[], &[]),
+                &training_context,
+                &stage_ctx,
+                WorkspaceSizing::default(),
             )];
             let (result_tx, result_rx) = mpsc::sync_channel(4);
             simulate(
@@ -1719,20 +1543,13 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
                 &sim_config,
                 SimulationOutputSpec {
                     result_tx: &result_tx,
-                    zeta_per_stage: &[],
                     hydro_cell_index: &hydro_cell_index,
                     block_hours_per_stage: &block_hours_per_stage,
                     entity_counts: &entity_counts,
-                    generic_constraint_row_entries: &[],
-                    ncs_col_starts: &[],
-                    n_ncs: 0,
-                    pumping_col_starts: &[],
-                    n_pumping: 0,
-                    geometry_per_stage: &[],
+                    generic_constraint_row_entries: &vec![Vec::new(); fx.n_stages],
                     pumping_consumption_mw_per_m3s: &[],
-                    contract_prices_per_stage: &[],
-                    contract_is_import: &[],
-                    ncs_entity_ids_per_stage: &[],
+                    contract_prices_per_stage: &vec![Vec::new(); fx.n_stages],
+                    contract_slots: &[],
                     diversion_upstream: &HashMap::new(),
                     hydro_productivities_per_stage: &hydro_productivities_per_stage,
                     energy_conversion: &ec,
@@ -1821,7 +1638,7 @@ fn train_census_fixture_to_convergence(mut setup: StudySetup) -> StudySetup {
 /// `node_graph` regardless, but `assign_scenarios`/`aggregate_simulation`
 /// read `simulation_config.n_scenarios` directly, so it must match `K`.
 fn as_enumerated_census(mut setup: StudySetup) -> StudySetup {
-    let derived_k: u32 = node_scenario_count(&setup.node_graph)
+    let derived_k: u32 = node_scenario_count(&setup.inputs.node_graph)
         .expect("node_scenario_count must not overflow on these fixtures")
         .try_into()
         .expect("K must fit u32 on these fixtures");
@@ -1876,7 +1693,7 @@ fn run_census<C: Communicator>(setup: &StudySetup, comm: &C, n_threads: usize) -
         .sum();
 
     let traversal = Traversal::resolve(
-        &setup.node_graph,
+        &setup.inputs.node_graph,
         true,
         setup.simulation_config().n_scenarios,
     );
@@ -1982,8 +1799,8 @@ fn enumerated_census_pool_fill_warms_previously_cold_leaves() {
 
     let setup = as_enumerated_census(setup);
 
-    let leaves: Vec<usize> = (0..setup.node_graph.successors.len())
-        .filter(|&i| setup.node_graph.successors[NodePos(i)].is_empty())
+    let leaves: Vec<usize> = (0..setup.inputs.node_graph.successors.len())
+        .filter(|&i| setup.inputs.node_graph.successors[NodePos(i)].is_empty())
         .collect();
     assert!(
         leaves.len() >= 2,
@@ -2239,7 +2056,7 @@ fn census_shared_trunk_rows_extract_once_and_solve_count_matches_dedup() {
     }
 
     let prefix_counts =
-        node_prefix_counts(&setup.node_graph).expect("node_prefix_counts must not overflow");
+        node_prefix_counts(&setup.inputs.node_graph).expect("node_prefix_counts must not overflow");
     assert!(
         prefix_counts.iter().all(|&c| c == 1),
         "every node on this admitted (single-predecessor, |Ω|=1) fixture must have exactly \

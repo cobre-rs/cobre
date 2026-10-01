@@ -27,7 +27,7 @@ use cobre_io::{
 };
 use cobre_sddp::{
     SimulationWeighting, StudySetup, aggregate_simulation, hydro_models::prepare_hydro_models,
-    lead_time::resolve_spread, setup::prepare_stochastic,
+    indexer::HydroSys, lead_time::resolve_spread, setup::prepare_stochastic,
 };
 use cobre_solver::{ActiveSolver, SolverInterface};
 
@@ -527,13 +527,14 @@ fn d05_fpha_constant_head() {
 
     // ρ_eq = 1.0 is LP-neutral here: D05's FPHA hyperplane encodes
     // gen_h = 1.0 × turbined_m3s, matching the override scalar.
+    let case = copy_case_dir(case_dir);
     write_energy_productivity_override(
-        &case_dir.join("system/hydro_energy_productivity.parquet"),
+        &case.path().join("system/hydro_energy_productivity.parquet"),
         0,
         1.0,
     );
 
-    let result = run_deterministic(case_dir);
+    let result = run_deterministic(case.path());
     assert_cost(result.final_lb, D05_EXPECTED_COST, 1e-6, "D05");
     assert!(
         result.iterations <= 10,
@@ -569,7 +570,7 @@ fn d05_fpha_constant_head() {
 /// ```
 ///
 /// This encodes the average forebay head over the stage interval.
-/// V_in is fixed by the Benders storage-fixing row at the reference point
+/// V_in is pinned by the `storage_in` column bounds at the reference point
 /// (previous iteration's trial value or the initial condition).
 ///
 /// ## Analytical derivation (κ = 730·3600/10⁶ = 657/250 = 2.628 hm3 per m3/s)
@@ -631,13 +632,14 @@ fn d06_fpha_variable_head() {
 
     // ρ_eq value is irrelevant to D06 economics — assertions depend only on
     // FPHA hyperplane evaluation, not on ρ_eq.
+    let case = copy_case_dir(case_dir);
     write_energy_productivity_override(
-        &case_dir.join("system/hydro_energy_productivity.parquet"),
+        &case.path().join("system/hydro_energy_productivity.parquet"),
         0,
         1.0,
     );
 
-    let result = run_deterministic(case_dir);
+    let result = run_deterministic(case.path());
     assert_cost(result.final_lb, D06_EXPECTED_COST, 1e-4, "D06");
     assert!(
         result.iterations <= 10,
@@ -1093,9 +1095,9 @@ fn d09_multi_deficit() {
 /// Inflows: stage 0 = 40 m3/s (positive), stage 1 = -5 m3/s (negative).
 /// Config: `inflow_non_negativity: {method: "penalty", penalty_cost: 500.0}`.
 ///
-/// ## Penalty cost unit (verified from `lp::builder::template`)
+/// ## Penalty cost unit (verified from `build_stage_templates`)
 ///
-/// From `build_stage_templates_resolving_layout` in `lp::builder::template`:
+/// From `build_stage_templates_resolving_layout`, which delegates to it:
 /// ```text
 /// let obj_coeff = penalty_cost * total_stage_hours;
 /// objective[col] = obj_coeff;
@@ -1790,54 +1792,29 @@ fn d54_range_constraint() {
 )]
 #[test]
 fn d14_block_factors() {
-    use arrow::array::{Float64Array, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use std::sync::Arc;
+    use crate::common::parquet_fixtures::write_seasonal_stats;
 
     let case_dir = Path::new("../../examples/deterministic/d14-block-factors");
 
     let scenarios_dir = case_dir.join("scenarios");
     std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let load_schema = Arc::new(Schema::new(vec![
-        Field::new("bus_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_mw", DataType::Float64, false),
-        Field::new("std_mw", DataType::Float64, false),
-    ]));
-
-    let load_batch = RecordBatch::try_new(
-        Arc::clone(&load_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![20.0, 20.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("load RecordBatch");
-
-    let load_path = scenarios_dir.join("load_seasonal_stats.parquet");
-    let file = std::fs::File::create(&load_path).expect("create load parquet");
-    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
-    writer.write(&load_batch).expect("write load batch");
-    writer.close().expect("close load writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("load_seasonal_stats.parquet"),
+        "bus_id",
+        "mean_mw",
+        "std_mw",
+        &[(0, 0, 20.0, 0.0), (0, 1, 20.0, 0.0)],
+    );
 
     // Empty inflow stats: D14 has no hydros.
-    let inflow_schema = Arc::new(Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_m3s", DataType::Float64, false),
-        Field::new("std_m3s", DataType::Float64, false),
-    ]));
-    let inflow_batch = RecordBatch::new_empty(Arc::clone(&inflow_schema));
-    let inflow_path = scenarios_dir.join("inflow_seasonal_stats.parquet");
-    let file = std::fs::File::create(&inflow_path).expect("create inflow parquet");
-    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
-    writer.write(&inflow_batch).expect("write inflow batch");
-    writer.close().expect("close inflow writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("inflow_seasonal_stats.parquet"),
+        "hydro_id",
+        "mean_m3s",
+        "std_m3s",
+        &[],
+    );
 
     let result = run_deterministic(case_dir);
     assert_cost(result.final_lb, 176_900.0, 1e-4, "D14");
@@ -1880,82 +1857,39 @@ fn d14_block_factors() {
 )]
 #[test]
 fn d15_non_controllable_source() {
-    use arrow::array::{Float64Array, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use std::sync::Arc;
+    use crate::common::parquet_fixtures::write_seasonal_stats;
 
     let case_dir = Path::new("../../examples/deterministic/d15-non-controllable-source");
 
     let scenarios_dir = case_dir.join("scenarios");
     std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let load_schema = Arc::new(Schema::new(vec![
-        Field::new("bus_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_mw", DataType::Float64, false),
-        Field::new("std_mw", DataType::Float64, false),
-    ]));
-
-    let load_batch = RecordBatch::try_new(
-        Arc::clone(&load_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![80.0, 80.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("load RecordBatch");
-
-    let load_path = scenarios_dir.join("load_seasonal_stats.parquet");
-    let file = std::fs::File::create(&load_path).expect("create load parquet");
-    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
-    writer.write(&load_batch).expect("write load batch");
-    writer.close().expect("close load writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("load_seasonal_stats.parquet"),
+        "bus_id",
+        "mean_mw",
+        "std_mw",
+        &[(0, 0, 80.0, 0.0), (0, 1, 80.0, 0.0)],
+    );
 
     // Empty inflow stats: D15 has no hydros.
-    let inflow_schema = Arc::new(Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_m3s", DataType::Float64, false),
-        Field::new("std_m3s", DataType::Float64, false),
-    ]));
-    let inflow_batch = RecordBatch::new_empty(Arc::clone(&inflow_schema));
-    let inflow_path = scenarios_dir.join("inflow_seasonal_stats.parquet");
-    let file = std::fs::File::create(&inflow_path).expect("create inflow parquet");
-    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
-    writer.write(&inflow_batch).expect("write inflow batch");
-    writer.close().expect("close inflow writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("inflow_seasonal_stats.parquet"),
+        "hydro_id",
+        "mean_m3s",
+        "std_m3s",
+        &[],
+    );
 
     // NCS availability is a factor: mean 0.5 × max 100 MW = 50 MW. std 0 drives
     // the stochastic NCS pipeline with zero noise (deterministic).
-    let ncs_schema = Arc::new(Schema::new(vec![
-        Field::new("ncs_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean", DataType::Float64, false),
-        Field::new("std", DataType::Float64, false),
-    ]));
-
-    let ncs_batch = RecordBatch::try_new(
-        Arc::clone(&ncs_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![0.5, 0.5])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("non_controllable_stats RecordBatch");
-
-    let ncs_path = scenarios_dir.join("non_controllable_stats.parquet");
-    let file = std::fs::File::create(&ncs_path).expect("create non_controllable_stats parquet");
-    let mut writer = ArrowWriter::try_new(file, ncs_schema, None).expect("ArrowWriter");
-    writer
-        .write(&ncs_batch)
-        .expect("write non_controllable_stats batch");
-    writer.close().expect("close non_controllable_stats writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("non_controllable_stats.parquet"),
+        "ncs_id",
+        "mean",
+        "std",
+        &[(0, 0, 0.5, 0.0), (0, 1, 0.5, 0.0)],
+    );
 
     let result = run_deterministic(case_dir);
     assert_cost(result.final_lb, 437_927.0, 1e-2, "D15");
@@ -2084,10 +2018,11 @@ fn d33_per_stage_block_count_varies() {
     );
 
     // `block_hours_per_stage[t].len()` is the block count of stage `t`
-    // (`compute_noise_scale` collects one `duration_hours` per block of the
-    // stage), which equals `block_counts_per_stage[t]` threaded through the
+    // (`compute_stage_hours` collects one `duration_hours` per block of the
+    // stage), which equals `StageGeometry::n_blks` threaded through the
     // pipeline.
     let block_counts: Vec<usize> = setup
+        .inputs
         .stage_data
         .stage_templates
         .block_hours_per_stage
@@ -2444,60 +2379,28 @@ pub const D20_EXPECTED_COST: f64 = 195_744_837.222_222_24;
 )]
 #[test]
 fn d21_min_outflow_regression() {
-    use arrow::array::{Float64Array, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use std::sync::Arc;
+    use crate::common::parquet_fixtures::write_seasonal_stats;
 
     let case_dir = Path::new("../../examples/deterministic/d21-min-outflow-regression");
 
     let scenarios_dir = case_dir.join("scenarios");
     std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let load_schema = Arc::new(Schema::new(vec![
-        Field::new("bus_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_mw", DataType::Float64, false),
-        Field::new("std_mw", DataType::Float64, false),
-    ]));
-    let load_batch = RecordBatch::try_new(
-        Arc::clone(&load_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![20.0, 20.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("load RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("load_seasonal_stats.parquet"))
-        .expect("create load parquet");
-    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
-    writer.write(&load_batch).expect("write load batch");
-    writer.close().expect("close load writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("load_seasonal_stats.parquet"),
+        "bus_id",
+        "mean_mw",
+        "std_mw",
+        &[(0, 0, 20.0, 0.0), (0, 1, 20.0, 0.0)],
+    );
 
-    let inflow_schema = Arc::new(Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_m3s", DataType::Float64, false),
-        Field::new("std_m3s", DataType::Float64, false),
-    ]));
-    let inflow_batch = RecordBatch::try_new(
-        Arc::clone(&inflow_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![10.0, 10.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("inflow RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("inflow_seasonal_stats.parquet"))
-        .expect("create inflow parquet");
-    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
-    writer.write(&inflow_batch).expect("write inflow batch");
-    writer.close().expect("close inflow writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("inflow_seasonal_stats.parquet"),
+        "hydro_id",
+        "mean_m3s",
+        "std_m3s",
+        &[(0, 0, 10.0, 0.0), (0, 1, 10.0, 0.0)],
+    );
 
     let (result, scenario_results, summary) = run_with_simulation(case_dir);
 
@@ -2645,60 +2548,28 @@ pub const D21_EXPECTED_COST: f64 = 285_716_271.0;
 )]
 #[test]
 fn d22_per_block_min_outflow() {
-    use arrow::array::{Float64Array, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use std::sync::Arc;
+    use crate::common::parquet_fixtures::write_seasonal_stats;
 
     let case_dir = Path::new("../../examples/deterministic/d22-per-block-min-outflow");
 
     let scenarios_dir = case_dir.join("scenarios");
     std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let load_schema = Arc::new(Schema::new(vec![
-        Field::new("bus_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_mw", DataType::Float64, false),
-        Field::new("std_mw", DataType::Float64, false),
-    ]));
-    let load_batch = RecordBatch::try_new(
-        Arc::clone(&load_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![20.0, 20.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("load RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("load_seasonal_stats.parquet"))
-        .expect("create load parquet");
-    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
-    writer.write(&load_batch).expect("write load batch");
-    writer.close().expect("close load writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("load_seasonal_stats.parquet"),
+        "bus_id",
+        "mean_mw",
+        "std_mw",
+        &[(0, 0, 20.0, 0.0), (0, 1, 20.0, 0.0)],
+    );
 
-    let inflow_schema = Arc::new(Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_m3s", DataType::Float64, false),
-        Field::new("std_m3s", DataType::Float64, false),
-    ]));
-    let inflow_batch = RecordBatch::try_new(
-        Arc::clone(&inflow_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![10.0, 10.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("inflow RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("inflow_seasonal_stats.parquet"))
-        .expect("create inflow parquet");
-    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
-    writer.write(&inflow_batch).expect("write inflow batch");
-    writer.close().expect("close inflow writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("inflow_seasonal_stats.parquet"),
+        "hydro_id",
+        "mean_m3s",
+        "std_m3s",
+        &[(0, 0, 10.0, 0.0), (0, 1, 10.0, 0.0)],
+    );
 
     let (result, scenario_results, summary) = run_with_simulation(case_dir);
 
@@ -2805,54 +2676,28 @@ fn d23_bidirectional_withdrawal() {
     use parquet::arrow::ArrowWriter;
     use std::sync::Arc;
 
+    use crate::common::parquet_fixtures::write_seasonal_stats;
+
     let case_dir = Path::new("../../examples/deterministic/d23-bidirectional-withdrawal");
 
     let scenarios_dir = case_dir.join("scenarios");
     std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let load_schema = Arc::new(Schema::new(vec![
-        Field::new("bus_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_mw", DataType::Float64, false),
-        Field::new("std_mw", DataType::Float64, false),
-    ]));
-    let load_batch = RecordBatch::try_new(
-        Arc::clone(&load_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![80.0, 80.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("load RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("load_seasonal_stats.parquet"))
-        .expect("create load parquet");
-    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
-    writer.write(&load_batch).expect("write load batch");
-    writer.close().expect("close load writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("load_seasonal_stats.parquet"),
+        "bus_id",
+        "mean_mw",
+        "std_mw",
+        &[(0, 0, 80.0, 0.0), (0, 1, 80.0, 0.0)],
+    );
 
-    let inflow_schema = Arc::new(Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_m3s", DataType::Float64, false),
-        Field::new("std_m3s", DataType::Float64, false),
-    ]));
-    let inflow_batch = RecordBatch::try_new(
-        Arc::clone(&inflow_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![50.0, 50.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("inflow RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("inflow_seasonal_stats.parquet"))
-        .expect("create inflow parquet");
-    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
-    writer.write(&inflow_batch).expect("write inflow batch");
-    writer.close().expect("close inflow writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("inflow_seasonal_stats.parquet"),
+        "hydro_id",
+        "mean_m3s",
+        "std_m3s",
+        &[(0, 0, 50.0, 0.0), (0, 1, 50.0, 0.0)],
+    );
 
     let constraints_dir = case_dir.join("constraints");
     std::fs::create_dir_all(&constraints_dir).expect("create constraints dir");
@@ -3070,60 +2915,28 @@ pub const D24_EXPECTED_COST: f64 = 23_950_785.0 / 9.0;
 )]
 #[test]
 fn d24_productivity_override() {
-    use arrow::array::{Float64Array, Int32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use std::sync::Arc;
+    use crate::common::parquet_fixtures::write_seasonal_stats;
 
     let case_dir = Path::new("../../examples/deterministic/d24-productivity-override");
 
     let scenarios_dir = case_dir.join("scenarios");
     std::fs::create_dir_all(&scenarios_dir).expect("create scenarios dir");
 
-    let inflow_schema = Arc::new(Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_m3s", DataType::Float64, false),
-        Field::new("std_m3s", DataType::Float64, false),
-    ]));
-    let inflow_batch = RecordBatch::try_new(
-        Arc::clone(&inflow_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![40.0, 10.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("inflow RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("inflow_seasonal_stats.parquet"))
-        .expect("create inflow parquet");
-    let mut writer = ArrowWriter::try_new(file, inflow_schema, None).expect("ArrowWriter");
-    writer.write(&inflow_batch).expect("write inflow batch");
-    writer.close().expect("close inflow writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("inflow_seasonal_stats.parquet"),
+        "hydro_id",
+        "mean_m3s",
+        "std_m3s",
+        &[(0, 0, 40.0, 0.0), (0, 1, 10.0, 0.0)],
+    );
 
-    let load_schema = Arc::new(Schema::new(vec![
-        Field::new("bus_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, false),
-        Field::new("mean_mw", DataType::Float64, false),
-        Field::new("std_mw", DataType::Float64, false),
-    ]));
-    let load_batch = RecordBatch::try_new(
-        Arc::clone(&load_schema),
-        vec![
-            Arc::new(Int32Array::from(vec![0, 0])),
-            Arc::new(Int32Array::from(vec![0, 1])),
-            Arc::new(Float64Array::from(vec![80.0, 80.0])),
-            Arc::new(Float64Array::from(vec![0.0, 0.0])),
-        ],
-    )
-    .expect("load RecordBatch");
-    let file = std::fs::File::create(scenarios_dir.join("load_seasonal_stats.parquet"))
-        .expect("create load parquet");
-    let mut writer = ArrowWriter::try_new(file, load_schema, None).expect("ArrowWriter");
-    writer.write(&load_batch).expect("write load batch");
-    writer.close().expect("close load writer");
+    write_seasonal_stats(
+        &scenarios_dir.join("load_seasonal_stats.parquet"),
+        "bus_id",
+        "mean_mw",
+        "std_mw",
+        &[(0, 0, 80.0, 0.0), (0, 1, 80.0, 0.0)],
+    );
 
     let (result, scenario_results, _summary) = run_with_simulation(case_dir);
     assert_cost(result.final_lb, D24_EXPECTED_COST, 1e-4, "D24");
@@ -3420,9 +3233,10 @@ fn d56_external_load_reconstructs_external_value_not_seasonal_mean() {
 
     let (setup, _system, _result) = run_deterministic_with_setup(case_dir);
 
-    let mean = setup.stochastic.normal().mean(0, 0);
-    let std = setup.stochastic.normal().std(0, 0);
+    let mean = setup.inputs.stochastic.normal().mean(0, 0);
+    let std = setup.inputs.stochastic.normal().std(0, 0);
     let eta = setup
+        .inputs
         .scenario_libraries
         .training
         .external_load
@@ -3509,7 +3323,7 @@ fn d29_weekly_par_noise_sharing() {
     let mut setup = StudySetup::new(&system, &config, stochastic, hydro_models, Vec::new())
         .expect("StudySetup must build");
 
-    let groups = &setup.stage_data.noise_group_ids;
+    let groups = &setup.inputs.stage_data.noise_group_ids;
     assert_eq!(groups.len(), 4, "expected 4 study stages");
     assert!(
         groups.iter().all(|&g| g == groups[0]),
@@ -3883,7 +3697,7 @@ fn test_observation_free_case_bit_exact_pre_epic() {
 
     assert_eq!(
         result.final_lb.to_bits(),
-        0x4166_3c9e_e81a_835au64,
+        0x4166_3c9e_e81a_8359u64,
         "D43 final_lb must reproduce its pre-windowing value bit-for-bit: got {} ({:#018x})",
         result.final_lb,
         result.final_lb.to_bits()
@@ -3911,13 +3725,14 @@ fn test_fpha_variable_head_case_bit_exact() {
 
     // rho_eq is irrelevant to D06 economics (see d06_fpha_variable_head above);
     // pinned to the same neutral value so this golden's setup matches exactly.
+    let case = copy_case_dir(case_dir);
     write_energy_productivity_override(
-        &case_dir.join("system/hydro_energy_productivity.parquet"),
+        &case.path().join("system/hydro_energy_productivity.parquet"),
         0,
         1.0,
     );
 
-    let result = run_deterministic(case_dir);
+    let result = run_deterministic(case.path());
 
     assert_eq!(
         result.final_lb.to_bits(),
@@ -4129,7 +3944,7 @@ fn d44_travel_time_substage_transit_bucket_dual() {
 
 /// Pads `stage_hours` with copies of its trailing duration until the total
 /// covers `travel_time_hours` — mirrors the production padding
-/// (`setup::bucket_topology`'s calendar-extension helper) that lets
+/// (`bucket_topology::extend_for_resolution`) that lets
 /// `resolve_spread` resolve an anchor whose own remaining calendar runs out
 /// before its arrival window closes; without it `resolve_spread`'s own
 /// `Σ_d k_d = 1` debug_assert panics instead of resolving a real depth.
@@ -4416,7 +4231,10 @@ fn d47_travel_time_confluence_aggregation() {
         .expect("D47: J (hydro id 2) must exist in the canonical hydro order");
     assert_eq!(
         state.transit_bucket_column_order,
-        vec![(j_canonical_idx, 1), (j_canonical_idx, 2)],
+        vec![
+            (HydroSys::new(j_canonical_idx), 1),
+            (HydroSys::new(j_canonical_idx), 2)
+        ],
         "D47: both bucket slots must belong to J's single block (same plant \
          index, lags 1 and 2), never a separate block per upstream arc"
     );
@@ -4640,7 +4458,10 @@ fn d48_travel_time_ic_seed_windowed_defluence_cost() {
         .expect("D48: J (hydro id 1) must exist in the canonical hydro order");
     assert_eq!(
         state.transit_bucket_column_order,
-        vec![(j_canonical_idx, 1), (j_canonical_idx, 2)],
+        vec![
+            (HydroSys::new(j_canonical_idx), 1),
+            (HydroSys::new(j_canonical_idx), 2)
+        ],
         "D48: both bucket slots must belong to J's single block, lags 1 and 2"
     );
 
@@ -6032,7 +5853,7 @@ mod chronological_telescoping {
                 generation_model: HydroGenerationModel::ConstantProductivity,
                 specific_productivity_mw_per_m3s_per_m: Some(0.5),
                 max_generation_mw: 250.0,
-                penalties: zero_hydro_penalties(),
+                penalties: zero_hydro_stage_penalties(),
                 ..Default::default()
             },
         );
@@ -6201,27 +6022,6 @@ mod chronological_telescoping {
             .initial_conditions(initial_conditions)
             .build()
             .expect("build_system: valid constant-productivity study")
-    }
-
-    fn zero_hydro_penalties() -> HydroPenalties {
-        HydroPenalties {
-            spillage_cost: 0.0,
-            diversion_cost: 0.0,
-            turbined_cost: 0.0,
-            storage_violation_below_cost: 0.0,
-            filling_target_violation_cost: 0.0,
-            turbined_violation_below_cost: 0.0,
-            outflow_violation_below_cost: 0.0,
-            outflow_violation_above_cost: 0.0,
-            generation_violation_below_cost: 0.0,
-            evaporation_violation_cost: 0.0,
-            water_withdrawal_violation_cost: 0.0,
-            water_withdrawal_violation_pos_cost: 0.0,
-            water_withdrawal_violation_neg_cost: 0.0,
-            evaporation_violation_pos_cost: 0.0,
-            evaporation_violation_neg_cost: 0.0,
-            inflow_nonnegativity_cost: 0.0,
-        }
     }
 
     fn build_config() -> Config {
@@ -6493,7 +6293,7 @@ mod chronological_telescoping {
     /// whose cuts were never routed through the canonical-currency export
     /// transform, e.g. `FutureCostFunction::new_with_warm_start` fed
     /// `checkpoint.stage_cuts` directly). `scale ==
-    /// setup.stage_data.stage_templates.cost_scale_factor` compares against a
+    /// setup.inputs.stage_data.stage_templates.cost_scale_factor` compares against a
     /// checkpoint written by [`write_checkpoint`] (`orchestration.rs`), which
     /// multiplies every value by that same factor at export — a single
     /// multiply, so the comparison is exact, not tolerance-based.
@@ -6555,7 +6355,11 @@ mod chronological_telescoping {
     /// intentionally not asserted.
     fn assert_cross_mode_load_preserves_cut_bytes(train_mode: BlockMode, load_mode: BlockMode) {
         let (trained_setup, checkpoint, _policy_dir) = train_and_checkpoint(train_mode);
-        let cost_scale_factor = trained_setup.stage_data.stage_templates.cost_scale_factor;
+        let cost_scale_factor = trained_setup
+            .inputs
+            .stage_data
+            .stage_templates
+            .cost_scale_factor;
         assert_cuts_bit_identical(&trained_setup.fcf, &checkpoint, cost_scale_factor);
 
         let config = build_config();
@@ -7370,7 +7174,7 @@ mod boundary_season_gate_round_trip {
                 boundary_date,
                 state_dim,
                 &current_manifest,
-                setup.stage_data.stage_templates.cost_scale_factor,
+                setup.inputs.stage_data.stage_templates.cost_scale_factor,
             )
             .with_study_seasons(&study_seasons),
         )
@@ -7787,7 +7591,7 @@ mod chronological_attribution {
         TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
     use cobre_sddp::lead_time::resolve_spread;
-    use cobre_solver::StageTemplate;
+    use cobre_sddp::test_support::assert_all_templates_byte_identical;
 
     use super::common::build_setup_in_code;
     use super::common::builders::{
@@ -8207,81 +8011,6 @@ mod chronological_attribution {
         );
     }
 
-    /// Field-by-field byte-identity check: CSC structure, bounds, objective,
-    /// scaling, and the state/transfer/dual-relevant/hydro/PAR-order
-    /// dimensions. Every `f64` slice compares by `to_bits()` — true
-    /// bit-identity, not approximate.
-    fn assert_templates_byte_identical(tpl_a: &StageTemplate, tpl_b: &StageTemplate, stage: usize) {
-        assert_eq!(tpl_a.num_cols, tpl_b.num_cols, "stage {stage}: num_cols");
-        assert_eq!(tpl_a.num_rows, tpl_b.num_rows, "stage {stage}: num_rows");
-        assert_eq!(tpl_a.num_nz, tpl_b.num_nz, "stage {stage}: num_nz");
-        assert_eq!(tpl_a.n_state, tpl_b.n_state, "stage {stage}: n_state");
-        assert_eq!(
-            tpl_a.n_transfer, tpl_b.n_transfer,
-            "stage {stage}: n_transfer"
-        );
-        assert_eq!(
-            tpl_a.n_dual_relevant, tpl_b.n_dual_relevant,
-            "stage {stage}: n_dual_relevant"
-        );
-        assert_eq!(tpl_a.n_hydro, tpl_b.n_hydro, "stage {stage}: n_hydro");
-        assert_eq!(
-            tpl_a.max_par_order, tpl_b.max_par_order,
-            "stage {stage}: max_par_order"
-        );
-
-        assert_eq!(
-            tpl_a.col_starts, tpl_b.col_starts,
-            "stage {stage}: col_starts"
-        );
-        assert_eq!(
-            tpl_a.row_indices, tpl_b.row_indices,
-            "stage {stage}: row_indices"
-        );
-
-        let bits = |xs: &[f64]| xs.iter().map(|v| v.to_bits()).collect::<Vec<u64>>();
-        assert_eq!(
-            bits(&tpl_a.values),
-            bits(&tpl_b.values),
-            "stage {stage}: values"
-        );
-        assert_eq!(
-            bits(&tpl_a.col_lower),
-            bits(&tpl_b.col_lower),
-            "stage {stage}: col_lower"
-        );
-        assert_eq!(
-            bits(&tpl_a.col_upper),
-            bits(&tpl_b.col_upper),
-            "stage {stage}: col_upper"
-        );
-        assert_eq!(
-            bits(&tpl_a.objective),
-            bits(&tpl_b.objective),
-            "stage {stage}: objective"
-        );
-        assert_eq!(
-            bits(&tpl_a.row_lower),
-            bits(&tpl_b.row_lower),
-            "stage {stage}: row_lower"
-        );
-        assert_eq!(
-            bits(&tpl_a.row_upper),
-            bits(&tpl_b.row_upper),
-            "stage {stage}: row_upper"
-        );
-        assert_eq!(
-            bits(&tpl_a.col_scale),
-            bits(&tpl_b.col_scale),
-            "stage {stage}: col_scale"
-        );
-        assert_eq!(
-            bits(&tpl_a.row_scale),
-            bits(&tpl_b.row_scale),
-            "stage {stage}: row_scale"
-        );
-    }
-
     /// `K = 1` chronological (single 720 h block) must be byte-identical to
     /// the parallel build, WITH the travel-time arc declared (`χ_{0,d} = k_d`
     /// — the fixed-delivery-density contract). A single chronological block
@@ -8292,20 +8021,13 @@ mod chronological_attribution {
         let parallel = build_setup(BlockMode::Parallel, single_block("B0", 720.0));
         let chronological = build_setup(BlockMode::Chronological, single_block("B0", 720.0));
 
-        let parallel_templates = &parallel.stage_data.stage_templates.templates;
-        let chrono_templates = &chronological.stage_data.stage_templates.templates;
-        assert_eq!(
-            parallel_templates.len(),
-            chrono_templates.len(),
-            "stage count must match between block modes"
+        let parallel_templates = &parallel.inputs.stage_data.stage_templates.templates;
+        let chrono_templates = &chronological.inputs.stage_data.stage_templates.templates;
+        assert_all_templates_byte_identical(
+            parallel_templates,
+            chrono_templates,
+            "parallel vs chronological (travel time on)",
         );
-        for (stage, (p, c)) in parallel_templates
-            .iter()
-            .zip(chrono_templates.iter())
-            .enumerate()
-        {
-            assert_templates_byte_identical(p, c, stage);
-        }
     }
 
     /// Mode-independent sizing: the bucket state is a pure function of stage
@@ -8801,7 +8523,7 @@ mod k_fan_branching_sampled_coverage {
     #[test]
     fn k_fan_sampled_routing_sums_to_forward_passes_with_no_oob() {
         let (fixture, _outcome) = train_k_fan();
-        let node_graph = &fixture.setup.node_graph;
+        let node_graph = &fixture.setup.inputs.node_graph;
 
         let cut_generating: Vec<NodePos> = (0..node_graph.nodes.len())
             .map(NodePos)
@@ -8902,6 +8624,7 @@ mod k_fan_branching_sampled_coverage {
 
         let path_length = 1 + fixture
             .setup
+            .inputs
             .node_graph
             .nodes
             .iter()
@@ -8968,7 +8691,7 @@ mod k_fan_branching_sampled_coverage {
         // The frozen overlay is one template per POOL, and this fixture has
         // strictly more pools than stages (leaf sharing gives n_pools = K+2 over
         // 3 stages) — so a per-stage overlay could not have produced this length.
-        let node_graph = &fixture.setup.node_graph;
+        let node_graph = &fixture.setup.inputs.node_graph;
         let n_pools = node_graph.n_pools;
         let n_stages: usize = node_graph
             .nodes
@@ -9159,7 +8882,7 @@ mod k_fan_enumerated_exact_bound {
     #[test]
     fn enumerated_k_fan_forward_solves_equal_dedup_total_below_naive() {
         let (fixture, outcome) = train();
-        let node_graph = &fixture.setup.node_graph;
+        let node_graph = &fixture.setup.inputs.node_graph;
 
         // Σ forward_solve_counts on a |Ω|=1 tree == the node count (π(n) = 1).
         let dedup_total = node_graph.nodes.len() as u64;
@@ -9248,7 +8971,7 @@ mod visit_bound_overflow_guard {
         // stride sits STRICTLY below forward_passes, the realizable routed
         // ceiling — otherwise an overflow cannot occur on this fixture at
         // all and the test below would pass vacuously.
-        let node_graph = &fixture.setup.node_graph;
+        let node_graph = &fixture.setup.inputs.node_graph;
         let capped_pool = (0..node_graph.nodes.len())
             .map(NodePos)
             .filter(|&pos| !node_graph.successors[pos].is_empty())
@@ -9407,12 +9130,12 @@ mod heterogeneous_visit_bound_resume {
         // sentinel.
         let pool_owner_node_id = |pool: usize| -> i32 {
             let mut owner: Option<i32> = None;
-            for (pos, node) in cold.setup.node_graph.nodes.iter_indexed() {
+            for (pos, node) in cold.setup.inputs.node_graph.nodes.iter_indexed() {
                 if node.pool_id == pool {
                     if owner.is_some() {
                         return STAGE_CUTS_NODE_ID_SENTINEL;
                     }
-                    owner = Some(cold.setup.node_graph.node_ids[pos].0);
+                    owner = Some(cold.setup.inputs.node_graph.node_ids[pos].0);
                 }
             }
             owner.unwrap_or(STAGE_CUTS_NODE_ID_SENTINEL)
@@ -9837,7 +9560,12 @@ mod enumerated_external {
         )
         .expect("StudySetup::from_broadcast_params must build");
         assert!(
-            setup.scenario_libraries.training.external_inflow.is_some(),
+            setup
+                .inputs
+                .scenario_libraries
+                .training
+                .external_inflow
+                .is_some(),
             "external inflow library must be present under the External scheme"
         );
 
@@ -10011,10 +9739,18 @@ fn cut_selection_scores_reduced_projection_in_projected_space() {
     use cobre_sddp::cut::CutPool;
     use cobre_sddp::cut_selection::CutSelectionStrategy;
     use cobre_sddp::indexer::{CutSlot, CutStateProjection, StateSpace};
+    use cobre_sddp::lead_time::AnticipatedResolution;
     use cobre_sddp::setup::NodeId;
 
     // 1 hydro, PAR(1): global state = [storage, lag] → n_state = 2.
-    let global = StateSpace::new(1, 1, 0, Vec::new(), 0, 0, Vec::new(), &[1]);
+    let global = StateSpace::new(
+        1,
+        1,
+        Vec::new(),
+        Vec::new(),
+        AnticipatedResolution::default(),
+        &[1],
+    );
     assert_eq!(global.n_state, 2);
 
     let proj = CutStateProjection::new(
@@ -10163,8 +9899,8 @@ mod dual_folding_f34 {
     /// Pool ids of the trunk nodes (nodes with a successor own their own pool).
     fn trunk_pool_ids(setup: &StudySetup) -> Vec<usize> {
         let mut ids = Vec::new();
-        for (pos, node) in setup.node_graph.nodes.iter_indexed() {
-            if !setup.node_graph.successors[pos].is_empty() && !ids.contains(&node.pool_id) {
+        for (pos, node) in setup.inputs.node_graph.nodes.iter_indexed() {
+            if !setup.inputs.node_graph.successors[pos].is_empty() && !ids.contains(&node.pool_id) {
                 ids.push(node.pool_id);
             }
         }
@@ -10175,10 +9911,11 @@ mod dual_folding_f34 {
     /// Widest successor count over all nodes — the terminal fan's width.
     fn fan_width(setup: &StudySetup) -> usize {
         setup
+            .inputs
             .node_graph
             .nodes
             .iter_indexed()
-            .map(|(pos, _)| setup.node_graph.successors[pos].len())
+            .map(|(pos, _)| setup.inputs.node_graph.successors[pos].len())
             .max()
             .unwrap_or(0)
     }
@@ -10481,7 +10218,7 @@ mod enumerated_checkpoint {
         let _training_output = fixture.setup.build_training_output(&result, &[]);
 
         // Partition pools into leaf (stride 0) and non-leaf (stride 1).
-        let node_graph = &fixture.setup.node_graph;
+        let node_graph = &fixture.setup.inputs.node_graph;
         let mut leaf_pools: HashSet<usize> = HashSet::new();
         let mut nonleaf_pools: HashSet<usize> = HashSet::new();
         for i in 0..node_graph.nodes.len() {
@@ -10753,7 +10490,7 @@ mod water_terminal_fcf_valuation {
         let pos = state
             .transit_bucket_column_order
             .iter()
-            .position(|&(p, l)| p == j_idx && l == lag)
+            .position(|&(p, l)| p.get() == j_idx && l == lag)
             .unwrap_or_else(|| panic!("lag {lag} must be a declared bucket slot"));
         state.transit_buckets_out.start + pos
     }
@@ -10811,7 +10548,7 @@ mod water_terminal_fcf_valuation {
             1.0,
         ))
         .expect("boundary cut must load");
-        inject_boundary_cuts(setup, &boundary_cuts);
+        inject_boundary_cuts(setup, &boundary_cuts).unwrap();
     }
 
     /// Build the terminal pool's FROZEN LP template: the base structural
@@ -10860,9 +10597,9 @@ mod water_terminal_fcf_valuation {
     /// column (never assumed equal to a pin), since the ring's shift-row
     /// definition (`b_d^out = b_{d+1}^in + k_d * D`) makes the outgoing value
     /// an affine, not identity, function of whichever incoming slot is
-    /// pinned. `raw_noise` is sized from `ctx`'s own hydro/load-bus/
-    /// stochastic-NCS counts (never hand-picked), so an all-zero draw is
-    /// always the correct shape regardless of which fixture calls this.
+    /// pinned. `raw_noise` is sized from `training_ctx.stochastic.dim()`
+    /// (never hand-picked), so an all-zero draw is always the correct shape
+    /// regardless of which fixture calls this.
     fn terminal_theta(
         setup: &StudySetup,
         template: &StageTemplate,
@@ -10881,8 +10618,7 @@ mod water_terminal_fcf_valuation {
         let theta_col = setup.stage_state().theta;
         let terminal_stage = setup.num_stages() - 1;
 
-        let raw_noise =
-            vec![0.0_f64; ctx.n_hydros + ctx.n_load_buses + ctx.ncs_stochastic_dense_col.len()];
+        let raw_noise = vec![0.0_f64; training_ctx.stochastic.dim()];
 
         ws.solver.reset_solver_state();
         ws.solver.load_model(template);
@@ -11035,7 +10771,11 @@ mod water_terminal_fcf_valuation {
         let tmp = tempfile::tempdir().expect("tempdir");
         inject_bucket_boundary(&mut setup, &tmp.path().join("boundary"), bucket_col);
 
-        let terminal_pool_id = setup.fcf.pools.len() - 1;
+        let terminal_pool_id = setup
+            .inputs
+            .node_graph
+            .terminal_pool(setup.num_stages())
+            .unwrap();
         let template = freeze_terminal_template(&setup, terminal_pool_id);
         let pool = &setup.fcf.pools[terminal_pool_id];
         let terminal_node = NodeId(i32::try_from(setup.num_stages() - 1).expect("fits i32"));

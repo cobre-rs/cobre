@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 
-use cobre_core::{EntityId, StudyPos, System};
+use cobre_core::{EntityId, Hydro, StudyPos, System};
 use cobre_io::FphaDeviationPointRow;
 use cobre_io::FphaHyperplaneRow;
 use cobre_io::HydroGeometryRow;
@@ -67,8 +67,6 @@ pub enum ResolvedProductionModel {
 pub struct ProductionModelSet {
     /// `stage_models[h][t]` is the resolved production model for hydro `h` at stage `t`.
     stage_models: Vec<Vec<ResolvedProductionModel>>,
-    /// Number of hydro plants (outer dimension).
-    n_hydros: usize,
     /// Number of stages (inner dimension).
     n_stages: usize,
 }
@@ -78,26 +76,25 @@ impl ProductionModelSet {
     ///
     /// # Panics
     ///
-    /// In debug builds, panics if `models.len() != n_hydros` or any inner
-    /// `Vec` length differs from `n_stages`.
+    /// Panics if `models.len() != hydros.len()` or any inner `Vec` length
+    /// differs from `n_stages`.
     #[must_use]
     pub fn new(
         models: Vec<Vec<ResolvedProductionModel>>,
-        n_hydros: usize,
+        hydros: &[Hydro],
         n_stages: usize,
     ) -> Self {
-        debug_assert_eq!(
+        assert_eq!(
             models.len(),
-            n_hydros,
-            "outer dimension must equal n_hydros"
+            hydros.len(),
+            "outer dimension must equal hydros.len()"
         );
-        debug_assert!(
+        assert!(
             models.iter().all(|row| row.len() == n_stages),
             "each hydro's stage vector must have length n_stages"
         );
         Self {
             stage_models: models,
-            n_hydros,
             n_stages,
         }
     }
@@ -110,9 +107,9 @@ impl ProductionModelSet {
     #[must_use]
     pub fn model(&self, hydro: usize, stage: usize) -> &ResolvedProductionModel {
         debug_assert!(
-            hydro < self.n_hydros,
+            hydro < self.stage_models.len(),
             "hydro index {hydro} out of bounds (n_hydros = {})",
-            self.n_hydros
+            self.stage_models.len()
         );
         debug_assert!(
             stage < self.n_stages,
@@ -125,7 +122,7 @@ impl ProductionModelSet {
     /// Number of hydro plants.
     #[must_use]
     pub fn n_hydros(&self) -> usize {
-        self.n_hydros
+        self.stage_models.len()
     }
 
     /// Number of stages.
@@ -400,7 +397,6 @@ impl PrepareHydroModelsResult {
     #[must_use]
     pub fn default_from_system(system: &System) -> Self {
         let n_stages = system.stages().iter().filter(|s| s.id >= 0).count();
-        let n_hydros = system.hydros().len();
 
         let production_models: Vec<Vec<ResolvedProductionModel>> = system
             .hydros()
@@ -412,7 +408,7 @@ impl PrepareHydroModelsResult {
             })
             .collect();
 
-        let production = ProductionModelSet::new(production_models, n_hydros, n_stages);
+        let production = ProductionModelSet::new(production_models, system.hydros(), n_stages);
 
         let evaporation_models: Vec<EvaporationModel> = system
             .hydros()
@@ -488,6 +484,7 @@ mod tests {
 
     use super::*;
     use crate::HydroEnergyProductivityOverride;
+    use crate::test_support::minimal_hydros;
 
     /// 4-hydro 12-stage system with 2 FPHA and 2 constant hydros: model(h, s) returns correct variant.
     #[test]
@@ -518,7 +515,7 @@ mod tests {
             all_models.push(row);
         }
 
-        let set = ProductionModelSet::new(all_models, n_hydros, n_stages);
+        let set = ProductionModelSet::new(all_models, &minimal_hydros(n_hydros), n_stages);
 
         // Constant hydros (0, 1) at all stages.
         for s in 0..n_stages {
@@ -642,7 +639,7 @@ mod tests {
             vec![vec![ResolvedProductionModel::ConstantProductivity {
                 productivity: 0.95,
             }]],
-            1,
+            &minimal_hydros(1),
             1,
         );
         let evap_set = EvaporationModelSet::new(vec![EvaporationModel::None]);
@@ -700,7 +697,7 @@ mod tests {
             ],
         ];
 
-        let set = ProductionModelSet::new(models, 2, 3);
+        let set = ProductionModelSet::new(models, &minimal_hydros(2), 3);
 
         // hydro 0, stage 0 → ConstantProductivity 0.90
         assert!(
@@ -752,11 +749,23 @@ mod tests {
                     ResolvedProductionModel::ConstantProductivity { productivity: 0.82 },
                 ],
             ],
-            2,
+            &minimal_hydros(2),
             3,
         );
         // hydro index 2 is out of bounds for n_hydros = 2 → debug_assert! fires
         let _ = set.model(2, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "outer dimension must equal hydros.len()")]
+    fn production_model_set_new_panics_on_hydro_count_mismatch() {
+        let _ = ProductionModelSet::new(
+            vec![vec![ResolvedProductionModel::ConstantProductivity {
+                productivity: 0.9,
+            }]],
+            &minimal_hydros(2),
+            1,
+        );
     }
 
     // ── EvaporationModelSet tests ─────────────────────────────────────────────

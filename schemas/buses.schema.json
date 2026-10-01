@@ -40,7 +40,7 @@
       "description": "Intermediate type for a single deficit segment entry.",
       "properties": {
         "cost": {
-          "description": "Cost per `MWh` of deficit in this segment [$/`MWh`].",
+          "description": "Cost per `MWh` of deficit in this segment \\[$/`MWh`\\].",
           "format": "double",
           "type": "number"
         },

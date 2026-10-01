@@ -3,8 +3,6 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use cobre_core::temporal::SeasonCycleType::Monthly;
-use cobre_core::temporal::SeasonMap;
 use cobre_core::{
     EntityId, System,
     scenario::{SamplingScheme, ScenarioSource},
@@ -21,20 +19,16 @@ use cobre_io::scenarios::parse_load_factors;
 use cobre_io::scenarios::validate_noise_openings;
 use cobre_stochastic::BlockFactorPair;
 use cobre_stochastic::ClassSchemes;
-use cobre_stochastic::DerivedInflowSeeds;
 use cobre_stochastic::HistoricalScenarioLibrary;
-use cobre_stochastic::PrecomputedPar;
+use cobre_stochastic::build_inflow_par;
 use cobre_stochastic::build_stochastic_context;
-use cobre_stochastic::derive_inflow_seeds;
-use cobre_stochastic::discover_historical_windows;
 use cobre_stochastic::noise_entity_order;
 use cobre_stochastic::normal::precompute::EntityFactorEntry;
-use cobre_stochastic::par::lag_transition::derive_downstream_par_order;
 use cobre_stochastic::par::lag_transition::precompute_noise_groups;
-use cobre_stochastic::par::lag_transition::precompute_stage_lag_transitions;
-use cobre_stochastic::standardize_historical_windows;
 use cobre_stochastic::{OpeningTreeInputs, StochasticContext, context::OpeningTree};
 
+use super::resolve_inflow_seeds;
+use super::scenario_libraries;
 use super::widen_lag_state_depth;
 use crate::{EstimationPath, EstimationReport, SddpError};
 
@@ -109,8 +103,7 @@ fn load_user_opening_tree_inner(
 
             validate_noise_openings(&rows, expected_dim, &expected_openings_per_stage, &resolver)?;
 
-            let tree = assemble_opening_tree(rows, expected_dim, &resolver);
-            Ok(Some(tree))
+            Ok(Some(assemble_opening_tree(rows, expected_dim, &resolver)))
         }
     }
 }
@@ -157,7 +150,11 @@ pub fn build_ncs_factor_entries(system: &System) -> Vec<(EntityId, i32, Vec<Bloc
             continue;
         }
         for (stage_idx, stage) in study_stages.iter().enumerate() {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_possible_wrap,
+                reason = "block indices are far below i32::MAX"
+            )]
             let block_pairs: Vec<BlockFactorPair> = stage
                 .blocks
                 .iter()
@@ -166,7 +163,6 @@ pub fn build_ncs_factor_entries(system: &System) -> Vec<(EntityId, i32, Vec<Bloc
                     let factor = system
                         .resolved_ncs_factors()
                         .factor(ncs_idx, stage_idx, block_idx);
-                    // block_idx is a small count (< 1000 in practice); fits in i32.
                     (block_idx as i32, factor)
                 })
                 .collect();
@@ -208,70 +204,16 @@ fn build_opening_tree_library(
     if !needs_historical_tree {
         return Ok(None);
     }
-    let study_stages: Vec<_> = system
-        .stages()
-        .iter()
-        .filter(|s| s.id >= 0)
-        .cloned()
-        .collect();
-    let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
-    let season_map_ref = system.policy_graph().season_map.as_ref();
-    let cycle_len = season_map_ref.map(|sm| sm.seasons.len());
-    let par = PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids, cycle_len)?;
-    let max_order = widen_lag_state_depth(par.max_order(), declared_lag_depth);
-    let user_pool = training_source.historical_years.as_ref();
-    let window_years = discover_historical_windows(
-        system.inflow_history(),
-        &hydro_ids,
-        &study_stages,
-        max_order,
-        user_pool,
-        season_map_ref,
-        1,
-    )?;
-    let mut lib = HistoricalScenarioLibrary::new(
-        window_years.len(),
-        study_stages.len(),
-        hydro_ids.len(),
-        max_order,
-        window_years.clone(),
-    );
-    // η-inversion rolling chain must match the forward-pass lag accumulator;
-    // `max_order` width covers all AR lags.
-    // `precompute_stage_lag_transitions` requires a non-optional &SeasonMap.
-    let noop_season_map = SeasonMap {
-        cycle_type: Monthly,
-        seasons: Vec::new(),
-    };
-    let effective_season_map: &SeasonMap = season_map_ref.unwrap_or(&noop_season_map);
-    let downstream_par_order =
-        derive_downstream_par_order(&study_stages, max_order, season_map_ref);
-    let stage_lag_transitions =
-        precompute_stage_lag_transitions(&study_stages, effective_season_map, downstream_par_order);
-    let derived_inflow_seeds = match study_stages.first() {
-        None => DerivedInflowSeeds::zero(hydro_ids.len(), max_order),
-        Some(first_stage) => derive_inflow_seeds(
-            system.inflow_history(),
-            &system.initial_conditions().recent_observations,
-            system.hydros(),
-            first_stage,
-            effective_season_map,
-            max_order,
-        ),
-    };
-    standardize_historical_windows(
-        &mut lib,
-        system.inflow_history(),
-        &hydro_ids,
-        &study_stages,
+    let par = build_inflow_par(system, class_schemes_for(training_source).inflow)?;
+    let lag_depth = widen_lag_state_depth(par.max_order(), declared_lag_depth);
+    let seeds = resolve_inflow_seeds(system, lag_depth);
+    Ok(Some(scenario_libraries::build_historical_inflow_library(
+        system,
         &par,
-        &window_years,
-        season_map_ref,
-        derived_inflow_seeds.as_seed(max_order),
-        &stage_lag_transitions,
-        downstream_par_order,
-    );
-    Ok(Some(lib))
+        seeds.as_seed(lag_depth),
+        training_source.historical_years.as_ref(),
+        1,
+    )?))
 }
 
 /// Per-class per-stage raw scenario count for opening-tree clamping, keyed by the
@@ -405,8 +347,7 @@ pub fn prepare_stochastic(
 /// factors re-read from `case_dir`), the opening-tree historical library, and the
 /// forward seed. Both rank 0 (via [`prepare_stochastic`], after PAR estimation and
 /// user-tree loading) and the CLI non-root reconstruction call this one builder, so
-/// the non-root path is no longer a hand-mirror of this derivation across the crate
-/// boundary. `user_tree` and `external_scenario_counts` are the two inputs that
+/// the two paths cannot drift. `user_tree` and `external_scenario_counts` are the two inputs that
 /// differ by rank — rank 0 loads / computes them; a non-root rank receives the tree
 /// over the wire and passes `None` counts.
 ///
@@ -449,7 +390,7 @@ pub fn build_stochastic_context_for_study(
         build_opening_tree_library(system, training_source, inflow_lag_depth)?;
 
     let forward_seed = training_source.seed.map(i64::unsigned_abs);
-    let stochastic = build_stochastic_context(
+    Ok(build_stochastic_context(
         system,
         seed,
         forward_seed,
@@ -462,8 +403,7 @@ pub fn build_stochastic_context_for_study(
             noise_group_ids: Some(study_stage_noise_group_ids(system)),
         },
         class_schemes_for(training_source),
-    )?;
-    Ok(stochastic)
+    )?)
 }
 
 #[cfg(test)]
@@ -493,7 +433,7 @@ mod tests {
         derive_downstream_par_order, precompute_stage_lag_transitions,
     };
     use cobre_stochastic::{
-        PrecomputedPar,
+        PrecomputedPar, derive_inflow_seeds,
         par::lag_kernel::{DownstreamLagAccum, LagMajor, PrimaryLagAccum, advance_lag_chain},
         solve_par_noise,
     };
@@ -541,33 +481,34 @@ mod tests {
         }
     }
 
-    /// A `System` with 5 study stages (three monthly, Jan-Mar 2026, then two
-    /// quarterly, Q2-Q3 2026) and one hydro on `HistoricalResiduals`, wired so
-    /// `build_opening_tree_library` runs its production derivation end to end
-    /// rather than a hand-supplied `downstream_par_order`.
+    /// A `System` wired so `build_opening_tree_library` runs its production
+    /// derivation end to end, rather than a hand-supplied `downstream_par_order`,
+    /// for one hydro on `HistoricalResiduals`. [`ring_stage`] and [`ring_system`]
+    /// build the calendar and the surrounding `System`; each of
+    /// [`build_ring_fixture`] and [`build_nonaligned_ring_fixture`] supplies its
+    /// own stages, PAR models, and history.
     struct RingFixture {
         system: System,
         stages: Vec<Stage>,
         hydro_id: EntityId,
-        raw: [f64; 5],
+        raw: Vec<f64>,
         past_inflow_seed: f64,
     }
 
-    // Rationale: one flat literal `System` fixture (bus, hydro, 5 stages,
-    // inflow models, bounds, penalties) mirroring `setup/tests.rs`'s
-    // `minimal_system_2_hydros_with_history`; splitting it fragments a
-    // single-purpose, single-call fixture across artificial sub-functions.
-    #[allow(clippy::too_many_lines)]
-    fn build_ring_fixture() -> RingFixture {
-        let hydro_id = EntityId(2);
-        let bus_id = EntityId(1);
+    const RING_HYDRO_ID: EntityId = EntityId(2);
+    const RING_BUS_ID: EntityId = EntityId(1);
 
-        let stage = |index: usize,
-                     id: i32,
-                     start: NaiveDate,
-                     end: NaiveDate,
-                     season_id: usize,
-                     duration_hours: f64| Stage {
+    /// One `Stage` for the ring fixtures: single-block, `Parallel`, one hydro
+    /// on `HistoricalResiduals` with both storage and inflow-lag state.
+    fn ring_stage(
+        index: usize,
+        id: i32,
+        start: NaiveDate,
+        end: NaiveDate,
+        season_id: usize,
+        duration_hours: f64,
+    ) -> Stage {
+        Stage {
             index,
             id,
             start_date: start,
@@ -588,101 +529,37 @@ mod tests {
                 branching_factor: 1,
                 noise_method: NoiseMethod::HistoricalResiduals,
             },
-        };
-
-        let stages = vec![
-            stage(
-                0,
-                0,
-                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
-                0,
-                31.0 * 24.0,
-            ),
-            stage(
-                1,
-                1,
-                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
-                1,
-                28.0 * 24.0,
-            ),
-            stage(
-                2,
-                2,
-                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
-                2,
-                31.0 * 24.0,
-            ),
-            stage(
-                3,
-                3,
-                NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
-                12,
-                91.0 * 24.0,
-            ),
-            stage(
-                4,
-                4,
-                NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
-                13,
-                92.0 * 24.0,
-            ),
-        ];
-
-        let raw = [80.0, 150.0, 40.0, 190.0, 60.0];
-        let past_inflow_seed = 70.0;
-
-        let mut inflow_models = Vec::with_capacity(6);
-        for stage_id in -1..5_i32 {
-            inflow_models.push(InflowModel {
-                hydro_id,
-                stage_id,
-                mean_m3s: 100.0,
-                std_m3s: 20.0,
-                ar_coefficients: if stage_id >= 0 { vec![0.6] } else { vec![] },
-                residual_std_ratio: 1.0,
-                annual: None,
-            });
         }
+    }
 
-        let mut inflow_history: Vec<InflowHistoryRow> = stages
+    /// The one-hydro, one-bus `System` shell shared by every ring fixture:
+    /// `stages` supplies its calendar, `inflow_models`/`inflow_history` its PAR
+    /// and window-discovery data, `season_map` its policy-graph season map.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
+    )]
+    fn ring_system(
+        stages: &[Stage],
+        inflow_models: Vec<InflowModel>,
+        inflow_history: Vec<InflowHistoryRow>,
+        season_map: SeasonMap,
+        external_scenarios: Vec<ExternalScenarioRow>,
+    ) -> System {
+        let n_stages = stages.len();
+
+        let load_models: Vec<LoadModel> = stages
             .iter()
-            .enumerate()
-            .map(|(t, stage)| InflowHistoryRow {
-                hydro_id,
-                start_date: stage.start_date,
-                end_date: stage.end_date,
-                value_m3s: raw[t],
-            })
-            .collect();
-        // `discover_historical_windows` also requires one lag observation
-        // (season 13, the wraparound lag season for PAR order 1 immediately
-        // before the first study season). Its value is never read by
-        // `standardize_historical_windows`, which only consumes the 5
-        // study-stage entries above.
-        let lag_start = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
-        inflow_history.push(InflowHistoryRow {
-            hydro_id,
-            start_date: lag_start,
-            end_date: lag_start.succ_opt().unwrap(),
-            value_m3s: 999.0,
-        });
-
-        let load_models: Vec<LoadModel> = (0..5_i32)
-            .map(|stage_id| LoadModel {
-                bus_id,
-                stage_id,
+            .map(|s| LoadModel {
+                bus_id: RING_BUS_ID,
+                stage_id: s.id,
                 mean_mw: 100.0,
                 std_mw: 0.0,
             })
             .collect();
 
         let bus = Bus {
-            id: bus_id,
+            id: RING_BUS_ID,
             name: "B1".to_string(),
             operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
             deficit_segments: vec![DeficitSegment {
@@ -693,7 +570,7 @@ mod tests {
         };
         let mut hydro = Hydro {
             unit_groups: Vec::new(),
-            id: hydro_id,
+            id: RING_HYDRO_ID,
             name: "H1".to_string(),
             operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
             downstream_id: None,
@@ -736,7 +613,7 @@ mod tests {
                 inflow_nonnegativity_cost: 1000.0,
             },
         };
-        hydro.declare_mirror_unit_group(bus_id);
+        hydro.declare_mirror_unit_group(RING_BUS_ID);
 
         let bounds = ResolvedBounds::new(
             &BoundsCountsSpec {
@@ -745,7 +622,7 @@ mod tests {
                 n_lines: 0,
                 n_pumping: 0,
                 n_contracts: 0,
-                n_stages: 5,
+                n_stages,
                 k_max: 0,
             },
             &BoundsDefaults {
@@ -786,7 +663,7 @@ mod tests {
                 n_buses: 1,
                 n_lines: 0,
                 n_ncs: 0,
-                n_stages: 5,
+                n_stages,
             },
             &PenaltiesDefaults {
                 hydro: HydroPenalties {
@@ -821,16 +698,17 @@ mod tests {
             annual_discount_rate: 0.0,
             transitions: vec![],
             nodes: Vec::new(),
-            season_map: Some(ring_season_map()),
+            season_map: Some(season_map),
         };
 
-        let system = SystemBuilder::new()
+        SystemBuilder::new()
             .buses(vec![bus])
             .hydros(vec![hydro])
-            .stages(stages.clone())
+            .stages(stages.to_vec())
             .inflow_models(inflow_models)
             .load_models(load_models)
             .inflow_history(inflow_history)
+            .external_scenarios(external_scenarios)
             .bounds(bounds)
             .penalties(penalties)
             .policy_graph(policy_graph)
@@ -842,34 +720,132 @@ mod tests {
                 past_defluences: vec![],
             })
             .build()
-            .expect("ring fixture: valid system");
+            .expect("ring fixture: valid system")
+    }
+
+    /// A [`RingFixture`] with 5 study stages (three monthly, Jan-Mar 2026,
+    /// then two quarterly, Q2-Q3 2026), AR(1) throughout.
+    fn build_ring_fixture() -> RingFixture {
+        let stages = vec![
+            ring_stage(
+                0,
+                0,
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                0,
+                31.0 * 24.0,
+            ),
+            ring_stage(
+                1,
+                1,
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                1,
+                28.0 * 24.0,
+            ),
+            ring_stage(
+                2,
+                2,
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+                2,
+                31.0 * 24.0,
+            ),
+            ring_stage(
+                3,
+                3,
+                NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+                12,
+                91.0 * 24.0,
+            ),
+            ring_stage(
+                4,
+                4,
+                NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
+                13,
+                92.0 * 24.0,
+            ),
+        ];
+
+        let raw = vec![80.0, 150.0, 40.0, 190.0, 60.0];
+        let past_inflow_seed = 70.0;
+
+        let mut inflow_models = Vec::with_capacity(6);
+        for stage_id in -1..5_i32 {
+            inflow_models.push(InflowModel {
+                hydro_id: RING_HYDRO_ID,
+                stage_id,
+                mean_m3s: 100.0,
+                std_m3s: 20.0,
+                ar_coefficients: if stage_id >= 0 { vec![0.6] } else { vec![] },
+                residual_std_ratio: 1.0,
+                annual: None,
+            });
+        }
+
+        let mut inflow_history: Vec<InflowHistoryRow> = stages
+            .iter()
+            .enumerate()
+            .map(|(t, stage)| InflowHistoryRow {
+                hydro_id: RING_HYDRO_ID,
+                start_date: stage.start_date,
+                end_date: stage.end_date,
+                value_m3s: raw[t],
+            })
+            .collect();
+        // `discover_historical_windows`'s season-map walk needs one lag
+        // observation at its predecessor of Jan 2026 (season 0): season 13
+        // (Jul-Sep 2025), the ring's last declared season — see
+        // `ring_season_map`'s `Custom` cycle. Its value is never read by
+        // `standardize_historical_windows`, which only consumes the 5
+        // study-stage entries above.
+        let lag_start = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
+        inflow_history.push(InflowHistoryRow {
+            hydro_id: RING_HYDRO_ID,
+            start_date: lag_start,
+            end_date: lag_start.succ_opt().unwrap(),
+            value_m3s: 999.0,
+        });
+
+        let system = ring_system(
+            &stages,
+            inflow_models,
+            inflow_history,
+            ring_season_map(),
+            Vec::new(),
+        );
 
         RingFixture {
             system,
             stages,
-            hydro_id,
+            hydro_id: RING_HYDRO_ID,
             raw,
             past_inflow_seed,
         }
     }
 
-    /// Drive `advance_lag_chain::<LagMajor>` across `fx`'s 5 stages, returning
-    /// the incoming (pre-advance) lag at stage 4 — the value the AR(1) model
-    /// there reads. `downstream_par_order = 0` (`accumulator`/`completed_lags`
-    /// empty) reproduces the literal-`0` regression `build_opening_tree_library`
-    /// used to pass to `standardize_historical_windows`; a positive value
-    /// reproduces the ring-aware, fixed behavior.
-    fn ring_fixture_incoming_lag_at_stage4(
+    /// Drive `advance_lag_chain::<LagMajor>` across `fx`'s stages with lag
+    /// width `lag_width`, returning the incoming (pre-advance) lag vector at
+    /// `at_stage` — the values the PAR model there reads. `downstream_par_order
+    /// = 0` (`accumulator`/`completed_lags` empty) reproduces the literal-`0`
+    /// regression `build_opening_tree_library` used to pass to
+    /// `standardize_historical_windows`; a positive value reproduces the
+    /// ring-aware, fixed behavior.
+    fn ring_incoming_lags(
         fx: &RingFixture,
         transitions: &[StageLagTransition],
         downstream_par_order: usize,
-    ) -> f64 {
+        lag_width: usize,
+        at_stage: usize,
+    ) -> Vec<f64> {
         let layout = LagMajor {
             entity_count: 1,
-            max_order: 1,
+            max_order: lag_width,
         };
-        let mut lag_state = vec![fx.past_inflow_seed];
-        let mut incoming = vec![0.0];
+        let mut lag_state = vec![fx.past_inflow_seed; lag_width];
+        let mut incoming = vec![0.0; lag_width];
         let mut primary_acc = vec![0.0];
         let mut primary_w = vec![0.0];
         let mut ds_acc = if downstream_par_order > 0 {
@@ -880,12 +856,12 @@ mod tests {
         let mut ds_completed = vec![0.0; downstream_par_order];
         let mut ds_w = 0.0_f64;
         let mut ds_n = 0usize;
-        let mut incoming_stage4 = 0.0;
+        let mut captured = vec![0.0; lag_width];
 
         for (t, (stage_lag, &raw)) in transitions.iter().zip(fx.raw.iter()).enumerate() {
             incoming.copy_from_slice(&lag_state);
-            if t == 4 {
-                incoming_stage4 = incoming[0];
+            if t == at_stage {
+                captured.copy_from_slice(&incoming);
             }
             let mut primary = PrimaryLagAccum {
                 accumulator: &mut primary_acc,
@@ -908,7 +884,7 @@ mod tests {
                 &mut downstream,
             );
         }
-        incoming_stage4
+        captured
     }
 
     /// `build_opening_tree_library` (rank-0 opening-tree build) must thread
@@ -943,7 +919,7 @@ mod tests {
 
         let derived = derive_downstream_par_order(
             &fx.stages,
-            par.max_order(),
+            &par,
             fx.system.policy_graph().season_map.as_ref(),
         );
         assert_eq!(
@@ -955,8 +931,8 @@ mod tests {
         let season_map = ring_season_map();
         let transitions = precompute_stage_lag_transitions(&fx.stages, &season_map, derived);
 
-        let ring_aware_incoming = ring_fixture_incoming_lag_at_stage4(&fx, &transitions, derived);
-        let naive_incoming = ring_fixture_incoming_lag_at_stage4(&fx, &transitions, 0);
+        let ring_aware_incoming = ring_incoming_lags(&fx, &transitions, derived, 1, 4)[0];
+        let naive_incoming = ring_incoming_lags(&fx, &transitions, 0, 1, 4)[0];
         assert!(
             (ring_aware_incoming - naive_incoming).abs() > 1.0,
             "ring-rebuilt lag feeding stage 4 must differ from the primary-only advance, \
@@ -985,6 +961,550 @@ mod tests {
         );
     }
 
+    fn build_pool_divergence_system() -> System {
+        let stages = vec![
+            ring_stage(
+                0,
+                0,
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                0,
+                31.0 * 24.0,
+            ),
+            ring_stage(
+                1,
+                1,
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                1,
+                28.0 * 24.0,
+            ),
+            ring_stage(
+                2,
+                2,
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+                2,
+                31.0 * 24.0,
+            ),
+        ];
+
+        let mut inflow_models = Vec::with_capacity(4);
+        for stage_id in -1..3_i32 {
+            inflow_models.push(InflowModel {
+                hydro_id: RING_HYDRO_ID,
+                stage_id,
+                mean_m3s: 100.0,
+                std_m3s: 20.0,
+                ar_coefficients: if stage_id >= 0 { vec![0.5] } else { vec![] },
+                residual_std_ratio: 1.0,
+                annual: None,
+            });
+        }
+
+        let month_row = |year: i32, month: u32, value: f64| InflowHistoryRow {
+            hydro_id: RING_HYDRO_ID,
+            start_date: NaiveDate::from_ymd_opt(year, month, 1).unwrap(),
+            end_date: if month == 12 {
+                NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap()
+            } else {
+                NaiveDate::from_ymd_opt(year, month + 1, 1).unwrap()
+            },
+            value_m3s: value,
+        };
+
+        let mut inflow_history = vec![month_row(1989, 12, 110.0)];
+        for m in 1..=3u32 {
+            inflow_history.push(month_row(1990, m, 200.0 + f64::from(m)));
+        }
+        for m in 10..=12u32 {
+            inflow_history.push(month_row(1990, m, 300.0 + f64::from(m)));
+        }
+        for m in 1..=3u32 {
+            inflow_history.push(month_row(1991, m, 400.0 + f64::from(m)));
+        }
+
+        ring_system(
+            &stages,
+            inflow_models,
+            inflow_history,
+            monthly_season_map(),
+            Vec::new(),
+        )
+    }
+
+    /// The opening tree's window pool and eta must equal the forward pass's:
+    /// both read the SAME applied PAR and the SAME derived seed, so the pool
+    /// (and every shared window's eta) can never diverge.
+    #[test]
+    fn opening_tree_and_forward_libraries_share_windows_and_eta() {
+        let system = build_pool_divergence_system();
+        let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+        let study_stages: Vec<Stage> = system
+            .stages()
+            .iter()
+            .filter(|s| s.id >= 0)
+            .cloned()
+            .collect();
+        let par = PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids, None)
+            .expect("par must build");
+        assert_eq!(par.max_order(), 1, "fixture precondition: p = 1");
+
+        let training_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::Historical,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: Some(7),
+            historical_years: None,
+        };
+        let config = config_from_json(&format!(
+            r#"{{"training": {{{SAMPLED_TRAINING}, "scenario_source": {{"seed": 7, "inflow": {{"scheme": "historical"}}}}}}}}"#
+        ));
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+
+        let stochastic = build_stochastic_context_for_study(
+            &system,
+            tmp.path(),
+            42,
+            &training_source,
+            Some(3),
+            None,
+            None,
+        )
+        .expect("stochastic context must build");
+
+        let setup = crate::setup::StudySetup::new_with_boundary_requirements(
+            &system,
+            &config,
+            stochastic,
+            crate::hydro_models::PrepareHydroModelsResult::default_from_system(&system),
+            crate::setup::BoundaryStateRequirements::present(3),
+            Vec::new(),
+        )
+        .expect("StudySetup must build");
+
+        assert_eq!(
+            setup.inputs.stage_data.state.max_par_order, 3,
+            "precondition: the state layout widens to the declared boundary depth"
+        );
+        let fwd = setup
+            .inputs
+            .scenario_libraries
+            .training
+            .historical
+            .as_ref()
+            .expect("training scheme is Historical: a forward library must build");
+        let fwd_years: Vec<i32> = (0..fwd.n_windows()).map(|w| fwd.window_year(w)).collect();
+        assert_eq!(
+            fwd_years,
+            vec![1990, 1991],
+            "precondition: the forward pass discovers at the applied PAR's own coverage (p = 1)"
+        );
+
+        let tree = build_opening_tree_library(&system, &training_source, Some(3))
+            .expect("build_opening_tree_library must succeed")
+            .expect("HistoricalResiduals noise method must build a library");
+        let tree_years: Vec<i32> = (0..tree.n_windows()).map(|w| tree.window_year(w)).collect();
+
+        assert_eq!(
+            tree_years, fwd_years,
+            "the opening tree's window pool must equal the forward pass's"
+        );
+        assert_eq!(tree.max_order(), fwd.max_order());
+        assert_eq!(tree.seed_digest(), fwd.seed_digest());
+        for w in 0..fwd.n_windows() {
+            for t in 0..study_stages.len() {
+                assert_eq!(
+                    tree.eta_slice(w, t),
+                    fwd.eta_slice(w, t),
+                    "window {w} stage {t}: eta must match between the tree and the forward pass"
+                );
+            }
+        }
+    }
+
+    /// A two-stage (Jan-Feb 2026), one-AR(0)-hydro system with `External`
+    /// inflow scenarios (mean 400, std 100) that diverge sharply from the
+    /// fitted moments (mean 100, std 10) and a 1990 historical window the
+    /// opening tree draws its eta from.
+    fn build_external_ar0_system() -> System {
+        let stages = vec![
+            ring_stage(
+                0,
+                0,
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                0,
+                31.0 * 24.0,
+            ),
+            ring_stage(
+                1,
+                1,
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                1,
+                28.0 * 24.0,
+            ),
+        ];
+
+        let mut inflow_models = Vec::with_capacity(3);
+        for stage_id in -1..2_i32 {
+            inflow_models.push(InflowModel {
+                hydro_id: RING_HYDRO_ID,
+                stage_id,
+                mean_m3s: 100.0,
+                std_m3s: 10.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+                annual: None,
+            });
+        }
+
+        let inflow_history = vec![
+            InflowHistoryRow {
+                hydro_id: RING_HYDRO_ID,
+                start_date: NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(1990, 2, 1).unwrap(),
+                value_m3s: 120.0,
+            },
+            InflowHistoryRow {
+                hydro_id: RING_HYDRO_ID,
+                start_date: NaiveDate::from_ymd_opt(1990, 2, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(1990, 3, 1).unwrap(),
+                value_m3s: 130.0,
+            },
+        ];
+
+        let external_scenarios = vec![
+            ExternalScenarioRow {
+                stage_id: 0,
+                scenario_id: 0,
+                hydro_id: RING_HYDRO_ID,
+                value_m3s: 300.0,
+            },
+            ExternalScenarioRow {
+                stage_id: 0,
+                scenario_id: 1,
+                hydro_id: RING_HYDRO_ID,
+                value_m3s: 500.0,
+            },
+            ExternalScenarioRow {
+                stage_id: 1,
+                scenario_id: 0,
+                hydro_id: RING_HYDRO_ID,
+                value_m3s: 300.0,
+            },
+            ExternalScenarioRow {
+                stage_id: 1,
+                scenario_id: 1,
+                hydro_id: RING_HYDRO_ID,
+                value_m3s: 500.0,
+            },
+        ];
+
+        ring_system(
+            &stages,
+            inflow_models,
+            inflow_history,
+            monthly_season_map(),
+            external_scenarios,
+        )
+    }
+
+    /// Under training `External`, the opening tree must invert eta with the
+    /// PAR the LP applies (the External-overridden moments), not the fitted
+    /// one — otherwise the reconstructed value diverges from the raw
+    /// historical observation the tree drew its window from.
+    #[test]
+    fn opening_tree_inverts_eta_with_the_applied_par_under_external_training() {
+        let system = build_external_ar0_system();
+        let raw = [120.0, 130.0];
+
+        let training_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::External,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: Some(7),
+            historical_years: None,
+        };
+        let counts = compute_external_scenario_counts(&system, &training_source);
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let stochastic = build_stochastic_context_for_study(
+            &system,
+            tmp.path(),
+            42,
+            &training_source,
+            None,
+            None,
+            counts,
+        )
+        .expect("stochastic context must build");
+        let applied = stochastic.par();
+
+        assert_eq!(applied.max_order(), 0, "fixture precondition: AR(0)");
+        assert!(
+            (applied.deterministic_base(0, 0) - 100.0).abs() > 1.0,
+            "negative control: the External override must have moved the mean away from \
+             the fitted value (100.0)"
+        );
+
+        let tree = build_opening_tree_library(&system, &training_source, None)
+            .expect("build_opening_tree_library must succeed")
+            .expect("HistoricalResiduals noise method must build a library");
+
+        for (t, &raw_t) in raw.iter().enumerate() {
+            let reconstructed =
+                applied.deterministic_base(t, 0) + applied.sigma(t, 0) * tree.eta_slice(0, t)[0];
+            assert!(
+                (reconstructed - raw_t).abs() <= 1e-9 * raw_t.abs(),
+                "stage {t}: reconstructing with the applied PAR must reproduce the raw \
+                 historical observation ({raw_t}), got {reconstructed}"
+            );
+        }
+    }
+
+    /// Season definitions for the non-calendar-aligned ring fixture below:
+    /// monthly Nov-Apr (seasons 10, 11, 0-3), then quarterly May-Jul and
+    /// Aug-Oct (seasons 12, 13) — a quarterly regime that starts mid-calendar-
+    /// quarter (May, not a calendar-quarter boundary). Declared in
+    /// chronological order so the `Custom` cycle's position-based backward walk
+    /// resolves each season's immediate calendar predecessor.
+    fn nonaligned_ring_season_map() -> SeasonMap {
+        let month = |id: usize, month_start: u32| SeasonDefinition {
+            id,
+            label: format!("S{id}"),
+            month_start,
+            day_start: None,
+            month_end: None,
+            day_end: None,
+        };
+        let quarter = |id: usize, month_start: u32, month_end: u32| SeasonDefinition {
+            id,
+            label: format!("S{id}"),
+            month_start,
+            day_start: None,
+            month_end: Some(month_end),
+            day_end: None,
+        };
+        SeasonMap {
+            cycle_type: SeasonCycleType::Custom,
+            seasons: vec![
+                month(10, 11),
+                month(11, 12),
+                month(0, 1),
+                month(1, 2),
+                month(2, 3),
+                month(3, 4),
+                quarter(12, 5, 7),
+                quarter(13, 8, 10),
+            ],
+        }
+    }
+
+    /// A [`RingFixture`] whose quarterly regime starts mid-calendar-quarter
+    /// (May, not a calendar-quarter boundary): 5 monthly stages (Dec 2025,
+    /// season 11, through Apr 2026, season 3), then 2 quarterly stages
+    /// (May-Jul 2026, season 12; Aug-Oct 2026, season 13), AR(1) on the
+    /// monthly stages and AR(2) on the quarterly ones — only an AR order
+    /// `p >= 2` lets the downstream ring's width (the PAR order, not a
+    /// declared lag depth) change which completed quarter survives eviction
+    /// at the transition.
+    fn build_nonaligned_ring_fixture() -> RingFixture {
+        let stages = vec![
+            ring_stage(
+                0,
+                0,
+                NaiveDate::from_ymd_opt(2025, 12, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                11,
+                31.0 * 24.0,
+            ),
+            ring_stage(
+                1,
+                1,
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                0,
+                31.0 * 24.0,
+            ),
+            ring_stage(
+                2,
+                2,
+                NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                1,
+                28.0 * 24.0,
+            ),
+            ring_stage(
+                3,
+                3,
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+                2,
+                31.0 * 24.0,
+            ),
+            ring_stage(
+                4,
+                4,
+                NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+                3,
+                30.0 * 24.0,
+            ),
+            ring_stage(
+                5,
+                5,
+                NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
+                12,
+                92.0 * 24.0,
+            ),
+            ring_stage(
+                6,
+                6,
+                NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 11, 1).unwrap(),
+                13,
+                92.0 * 24.0,
+            ),
+        ];
+
+        let raw = vec![60.0, 150.0, 40.0, 190.0, 80.0, 120.0, 90.0];
+        let past_inflow_seed = 70.0;
+
+        let inflow_models: Vec<InflowModel> = stages
+            .iter()
+            .enumerate()
+            .map(|(idx, stage)| InflowModel {
+                hydro_id: RING_HYDRO_ID,
+                stage_id: stage.id,
+                mean_m3s: 100.0,
+                std_m3s: 20.0,
+                ar_coefficients: if idx < 5 { vec![0.6] } else { vec![0.5, 0.3] },
+                residual_std_ratio: 1.0,
+                annual: None,
+            })
+            .collect();
+
+        let mut inflow_history: Vec<InflowHistoryRow> = stages
+            .iter()
+            .enumerate()
+            .map(|(t, stage)| InflowHistoryRow {
+                hydro_id: RING_HYDRO_ID,
+                start_date: stage.start_date,
+                end_date: stage.end_date,
+                value_m3s: raw[t],
+            })
+            .collect();
+        // `discover_historical_windows`'s season-map walk needs one pre-study
+        // row at its lag-2 predecessor of Dec 2025 (season 11): the walk steps
+        // to Nov 2025 (season 10), then to Aug-Oct 2024 (season 13) — see
+        // `nonaligned_ring_season_map`'s `Custom` cycle. This value is never
+        // read by `standardize_historical_windows`.
+        inflow_history.push(InflowHistoryRow {
+            hydro_id: RING_HYDRO_ID,
+            start_date: NaiveDate::from_ymd_opt(2024, 8, 15).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 8, 16).unwrap(),
+            value_m3s: 999.0,
+        });
+        inflow_history.push(InflowHistoryRow {
+            hydro_id: RING_HYDRO_ID,
+            start_date: NaiveDate::from_ymd_opt(2025, 11, 15).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2025, 11, 16).unwrap(),
+            value_m3s: 999.0,
+        });
+
+        let system = ring_system(
+            &stages,
+            inflow_models,
+            inflow_history,
+            nonaligned_ring_season_map(),
+            Vec::new(),
+        );
+
+        RingFixture {
+            system,
+            stages,
+            hydro_id: RING_HYDRO_ID,
+            raw,
+            past_inflow_seed,
+        }
+    }
+
+    /// `build_opening_tree_library` must size the downstream ring from the
+    /// PAR model's own order, not the (possibly wider) declared lag depth: on
+    /// this fixture the two diverge (`par.max_order() == 2` vs. the declared
+    /// depth `3`), and only a `p >= 2` model with a mid-calendar-quarter
+    /// transition can observe it.
+    #[test]
+    fn opening_tree_ring_order_is_par_order_not_declared_depth() {
+        let fx = build_nonaligned_ring_fixture();
+        let training_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+
+        let lib = build_opening_tree_library(&fx.system, &training_source, Some(3))
+            .expect("build_opening_tree_library must succeed")
+            .expect("HistoricalResiduals noise method must build a library");
+        assert_eq!(
+            lib.n_windows(),
+            1,
+            "exactly one historical window (2025) is discoverable"
+        );
+
+        let par = PrecomputedPar::build(
+            fx.system.inflow_models(),
+            &fx.stages,
+            &[fx.hydro_id],
+            fx.system
+                .policy_graph()
+                .season_map
+                .as_ref()
+                .map(|sm| sm.seasons.len()),
+        )
+        .expect("oracle PrecomputedPar must build");
+        assert_eq!(par.max_order(), 2);
+
+        let derived = derive_downstream_par_order(
+            &fx.stages,
+            &par,
+            fx.system.policy_graph().season_map.as_ref(),
+        );
+        assert_eq!(
+            derived, 2,
+            "the fixture crosses season_id >= 12 at stage 5; derive_downstream_par_order \
+             must gate to par.max_order(), not the declared lag depth"
+        );
+
+        let season_map = nonaligned_ring_season_map();
+        let transitions = precompute_stage_lag_transitions(&fx.stages, &season_map, derived);
+
+        let q1_lag1 = ring_incoming_lags(&fx, &transitions, 3, 2, 6)[1];
+        let dec_lag1 = ring_incoming_lags(&fx, &transitions, 2, 2, 6)[1];
+        assert!(
+            (q1_lag1 - dec_lag1).abs() > 1.0,
+            "a width-3 ring keeps the Q1 average a width-2 ring evicts at the third \
+             completed quarter, got q1_lag1={q1_lag1} vs dec_lag1={dec_lag1}"
+        );
+
+        let lags_p = ring_incoming_lags(&fx, &transitions, derived, 2, 6);
+        let det_base = par.deterministic_base(6, 0);
+        let psi = par.psi_slice(6, 0);
+        let sigma = par.sigma(6, 0);
+        let expected_eta = solve_par_noise(det_base, psi, &lags_p, sigma, fx.raw[6]);
+
+        let eta_stage6 = lib.eta_slice(0, 6)[0];
+        assert_eq!(
+            eta_stage6, expected_eta,
+            "build_opening_tree_library's eta at the quarterly transition must match the \
+             PAR-order-sized ring oracle, not a ring sized by the declared lag depth"
+        );
+    }
+
     /// 12 monthly study stages (season 0=Jan .. 11=Dec, year 2026), one hydro,
     /// AR(0) — the declared depth alone drives widening, with no fitted lag
     /// dependence to entangle it, and a real monthly `SeasonMap` (needed for
@@ -996,14 +1516,9 @@ mod tests {
     /// each carrying a distinct `value_m3s = 1000.0 + k` (`k` = 1 for December
     /// 2025, the most recent, up to `n_lag_months` for the oldest) so a caller
     /// can identify exactly which calendar month landed in which lag slot.
-    // Rationale: one flat literal `System` fixture (bus, hydro, 12 stages,
-    // inflow models, bounds, penalties) mirroring `build_ring_fixture` above;
-    // splitting it fragments a single-purpose, single-call fixture across
-    // artificial sub-functions.
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
-        clippy::cast_possible_truncation,
-        clippy::cast_possible_wrap
+        reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
     )]
     fn build_ar0_fixture_with_declared_lag_history(n_lag_months: u32) -> (System, ScenarioSource) {
         let hydro_id = EntityId(1);
@@ -1269,38 +1784,15 @@ mod tests {
         (system, training_source)
     }
 
-    /// Given a declared lag depth (3) greater than the fixture's fitted AR
-    /// order (0), `build_opening_tree_library` must widen the returned
-    /// library's `max_order()` to 3 — matching `resolve_state_layout`'s
-    /// `max_par_order` for the same declared depth — rather than leaving it at
-    /// the un-widened `par.max_order()` (0). A regression that fails if this
-    /// source is left un-widened while another (e.g. `resolve_state_layout`)
-    /// is fixed, exactly the divergent-sources bug these regressions guard against.
-    #[test]
-    fn build_opening_tree_library_widens_max_order_to_declared_depth() {
-        let (system, training_source) = build_ar0_fixture_with_declared_lag_history(3);
-
-        let lib = build_opening_tree_library(&system, &training_source, Some(3))
-            .expect("build_opening_tree_library must succeed with a declared depth")
-            .expect("HistoricalResiduals noise method must build a library");
-
-        assert_eq!(
-            lib.max_order(),
-            3,
-            "library max_order must widen to the declared depth (fixture AR order is 0)"
-        );
-    }
-
     /// Cross-source regression at the SAME declared depth (24, the worked
     /// acceptance example): `resolve_state_layout` (the dense-stride + mask
-    /// source) and `build_opening_tree_library` (the opening-tree historical
-    /// library source) must agree on `L_state`, both widening past the
-    /// fixture's AR(0) order to exactly 24. `rebuild_historical_library_non_root`
-    /// (cobre-cli) is unreachable from this crate and is realigned to the same
-    /// depth-24 fixture in its own test module
-    /// (`rebuild_historical_library_non_root_widens_max_order_to_declared_depth`)
-    /// — no single Rust test spans the crate boundary, but all three sources
-    /// are pinned to the identical value.
+    /// source) still widens past the fixture's AR(0) order to exactly 24, but
+    /// the historical library's width and coverage are the applied PAR's own
+    /// order — the two sources address different facts and no longer agree.
+    /// A forward twin built from the same applied PAR and the same depth-24
+    /// seed (`resolve_inflow_seeds` at `state_layout.max_par_order`, the one
+    /// seed owner at one depth) must be bit-identical to the tree: same
+    /// window years, same `seed_digest()`, same eta.
     #[test]
     fn build_opening_tree_library_and_resolve_state_layout_agree_at_declared_depth() {
         let (system, training_source) = build_ar0_fixture_with_declared_lag_history(24);
@@ -1315,38 +1807,74 @@ mod tests {
         let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
         let par_lp = PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids, None)
             .expect("PrecomputedPar must build");
-        let topology = crate::setup::bucket_topology::build_transit_bucket_topology(&system, false);
-        let (state_layout, _, _) =
-            crate::setup::resolve_state_layout(&system, &par_lp, &topology, declared_depth)
-                .expect("resolve_state_layout must succeed with a declared depth");
+        let calendar = crate::time_value::DeliveryCalendar::from_system(&system);
+        let topology =
+            crate::bucket_topology::build_transit_bucket_topology(&system, &calendar, false);
+        let layout = crate::setup::resolve_state_layout(
+            &system,
+            &calendar,
+            &par_lp,
+            &topology,
+            declared_depth,
+        )
+        .expect("resolve_state_layout must succeed with a declared depth");
 
         let lib = build_opening_tree_library(&system, &training_source, declared_depth)
             .expect("build_opening_tree_library must succeed with a declared depth")
             .expect("HistoricalResiduals noise method must build a library");
 
         assert_eq!(
-            state_layout.max_par_order, 24,
+            layout.state.max_par_order, 24,
             "resolve_state_layout must widen to the declared depth"
         );
         assert_eq!(
             lib.max_order(),
-            24,
-            "build_opening_tree_library must widen to the declared depth"
+            par_lp.max_order(),
+            "the historical library's width is the applied PAR's own order, never the \
+             declared lag depth resolve_state_layout widens its dense stride to"
         );
+
+        let fwd = resolve_inflow_seeds(&system, layout.state.max_par_order);
+        let forward_twin = scenario_libraries::build_historical_inflow_library(
+            &system,
+            &par_lp,
+            fwd.as_seed(24),
+            None,
+            1,
+        )
+        .expect("forward twin must build");
+
+        assert_eq!(lib.n_windows(), forward_twin.n_windows());
+        for w in 0..lib.n_windows() {
+            assert_eq!(
+                lib.window_year(w),
+                forward_twin.window_year(w),
+                "window {w}: the tree and the forward twin must draw the same year pool"
+            );
+        }
         assert_eq!(
-            state_layout.max_par_order,
-            lib.max_order(),
-            "resolve_state_layout and build_opening_tree_library must agree on L_state \
-             at the same declared depth"
+            lib.seed_digest(),
+            forward_twin.seed_digest(),
+            "the tree and the forward twin share one seed owner at one depth"
         );
+        for w in 0..lib.n_windows() {
+            for t in 0..study_stages.len() {
+                assert_eq!(
+                    lib.eta_slice(w, t),
+                    forward_twin.eta_slice(w, t),
+                    "window {w} stage {t}: eta must be bit-identical between the tree and \
+                     the forward twin"
+                );
+            }
+        }
     }
 
     /// Given a declared lag depth (24) exceeding the fitted AR(0) order,
-    /// `derive_inflow_seeds` — the function `build_opening_tree_library` calls
-    /// to build the `DerivedSeed` `run_eta_inversion`'s
-    /// `max_order.min(seed.l_state)` copy loop reads — must actually seed the
-    /// DEEPEST declared lag slot from real history, not merely report a wider
-    /// `max_order()`. Complements
+    /// `derive_inflow_seeds` must actually seed the DEEPEST declared lag slot
+    /// from real history, not merely report a wider `max_order()` — the LP's
+    /// stage-0 seed, `InitialConditions.inflow_seeds.as_seed(state.max_par_order)`,
+    /// is what `run_eta_inversion`'s `max_order.min(seed.l_state)` copy loop
+    /// reads. Complements
     /// `build_opening_tree_library_and_resolve_state_layout_agree_at_declared_depth`'s
     /// dimension-only check with the concrete seeded value.
     #[test]
@@ -1416,7 +1944,10 @@ mod tests {
     /// directly — a disagreement P-B1 (cobre-io) would reject at load, unreachable
     /// through the public API but the exact input that separates take-first from an
     /// element-wise minimum.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture spells out one complete study inline so each assertion traces to a literal"
+    )]
     fn external_count_system(
         stage_ids: &[i32],
         inflow_per_stage: usize,
@@ -1795,6 +2326,65 @@ mod tests {
                 "the error must name the missing file, got: {e}"
             ),
             other => panic!("expected SddpError::Io, got: {other:?}"),
+        }
+    }
+
+    /// `build_opening_tree_library`'s rank-0 opening-tree build routes through
+    /// `build_inflow_par`, which must surface `InvalidParParameters` itself —
+    /// not some other error from downstream history discovery — when a PAR
+    /// model carries AR order > 0 with zero standard deviation.
+    #[test]
+    fn build_opening_tree_library_rejects_invalid_par_parameters() {
+        let stages = vec![ring_stage(
+            0,
+            0,
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+            0,
+            31.0 * 24.0,
+        )];
+        let inflow_models = vec![
+            InflowModel {
+                hydro_id: RING_HYDRO_ID,
+                stage_id: -1,
+                mean_m3s: 100.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+                annual: None,
+            },
+            InflowModel {
+                hydro_id: RING_HYDRO_ID,
+                stage_id: 0,
+                mean_m3s: 100.0,
+                std_m3s: 0.0,
+                ar_coefficients: vec![0.6],
+                residual_std_ratio: 1.0,
+                annual: None,
+            },
+        ];
+        let system = ring_system(
+            &stages,
+            inflow_models,
+            Vec::new(),
+            monthly_season_map(),
+            Vec::new(),
+        );
+        let training_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+
+        let err = build_opening_tree_library(&system, &training_source, None)
+            .expect_err("a zero-std AR(1) model must be rejected");
+        match err {
+            SddpError::Stochastic(cobre_stochastic::StochasticError::InvalidParParameters {
+                ..
+            }) => {}
+            other => panic!("expected InvalidParParameters, got: {other:?}"),
         }
     }
 }

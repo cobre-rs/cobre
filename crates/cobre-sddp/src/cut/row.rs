@@ -360,6 +360,7 @@ mod tests {
     use super::{append_new_cuts_to_lp, build_cut_row_batch, build_cut_row_batch_into};
     use crate::cut::FutureCostFunction;
     use crate::indexer::{CutStateProjection, StateSpace};
+    use crate::lead_time::AnticipatedResolution;
     use crate::setup::NodeId;
 
     /// Build a finalized storage+lag [`StateSpace`] (no anticipated thermals)
@@ -371,11 +372,9 @@ mod tests {
         StateSpace::new(
             hydro_count,
             max_par_order,
-            0,
             Vec::new(),
-            0,
-            0,
             vec![],
+            AnticipatedResolution::default(),
             &lag_counts,
         )
     }

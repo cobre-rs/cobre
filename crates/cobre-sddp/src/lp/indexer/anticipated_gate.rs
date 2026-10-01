@@ -9,12 +9,8 @@
 //! and `anticipated_resolution` (`pub(crate)`) it already carries where
 //! needed; nothing new is threaded.
 
-use std::borrow::Cow;
-
 use super::{AnticipatedLocal, StateSpace};
-use crate::lead_time::LeadTime::Stages;
 use crate::lead_time::PointResolution;
-use crate::lead_time::{DeliveryAxis, resolve_point};
 
 use cobre_core::commissioning::commissioning_active;
 
@@ -71,7 +67,6 @@ pub(crate) fn is_anticipated_decision_active(
     );
     let delivery_stage = stage_idx.saturating_add(state.anticipated_lead_stages[local_idx]);
     is_anticipated_decision_active_for_delivery(
-        state,
         AnticipatedLocal::new(local_idx),
         delivery_stage,
         n_stages,
@@ -88,7 +83,6 @@ pub(crate) fn is_anticipated_decision_active(
 #[inline]
 #[must_use]
 pub(crate) fn is_anticipated_decision_active_for_delivery(
-    _state: &StateSpace,
     local_idx: AnticipatedLocal,
     delivery_stage: usize,
     n_delivery: usize,
@@ -115,30 +109,102 @@ pub(crate) fn is_anticipated_decision_active_for_delivery(
 }
 
 /// Plant `local_idx`'s delivery-anchored resolution: the setup-threaded
-/// [`crate::lead_time::PointResolution`] when
-/// [`StateSpace::anticipated_resolution`] is attached (production always
-/// attaches it), else an on-the-fly `LeadTime::Stages`-equivalent built from
-/// the plant's constant [`StateSpace::anticipated_lead_stages`] — the
-/// fixture fallback for constant-lead tests that thread no resolution.
+/// [`crate::lead_time::PointResolution`] [`StateSpace::anticipated_resolution`]
+/// carries, one per anticipated plant, unconditionally once construction
+/// requires it.
 #[must_use]
 pub(crate) fn anticipated_resolution_for(
     state: &StateSpace,
     local_idx: AnticipatedLocal,
-    n_stages: usize,
-) -> Cow<'_, PointResolution> {
-    let local_idx = local_idx.get();
-    if !state.anticipated_resolution.per_plant.is_empty() {
-        return Cow::Borrowed(&state.anticipated_resolution.per_plant[local_idx]);
+) -> &PointResolution {
+    &state.anticipated_resolution.per_plant[local_idx.get()]
+}
+
+/// One anticipated ring-window visit: a plant's modular ring slot and its own
+/// physical delivery target for one ring-axis position. Bundled `Copy` struct
+/// rather than separate closure arguments, mirroring
+/// `lp::builder::fpha_cursor::FphaVisit`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RingResidue {
+    /// Modular ring slot `ring_index(target) mod k_max` this visit lands on.
+    pub(crate) slot: usize,
+    /// Anticipated-local plant (ring lane) index.
+    pub(crate) plant: usize,
+    /// The plant's own physical delivery target at this ring-axis position
+    /// ([`PointResolution::physical_target`] of the window index).
+    pub(crate) target: usize,
+}
+
+/// Walk the stage's strictly-future anticipated ring window
+/// `{stage_idx + 1 ..= stage_idx + k_max}`, invoking `visit` once per
+/// `(ring residue, plant)` in depth-major/plant-minor order.
+///
+/// Single owner of the anticipated delivery-axis → ring-slot map the three
+/// anticipated fills share: each visit resolves the ring-axis slot and the
+/// plant's OWN physical delivery target through its per-plant excision, so
+/// `slot = ring_index(target) mod k_max` has one home instead of three inlined
+/// residue loops. Keying the slot on the raw delivery axis (`m mod k_max`) is
+/// the forbidden alternative — injective only on a contiguous run, which a
+/// plant's excised fixed post-horizon window breaks; see
+/// [`PointResolution::ring_index`]/[`PointResolution::physical_target`] (the
+/// ring-axis contract) and [`crate::lp::builder::delivery_ring::DeliveryRing`]'s
+/// out/in columns, pinned via `state_to_lp_incoming_column` (the
+/// column-bound-pinning contract).
+///
+/// The depth-major/plant-minor order is load-bearing: the carry-row family
+/// compacts its row positions in exactly this order. A plant whose physical
+/// target lands beyond the extended delivery calendar
+/// (`target >= state.n_delivery()`) is skipped, never visited. The closure
+/// is a monomorphised `FnMut` reusing the caller's buffers — no `Box<dyn>` and
+/// no per-residue allocation; the per-stage resolution set is built once and
+/// reused across the whole window.
+pub(crate) fn for_each_ring_residue<F>(state: &StateSpace, stage_idx: usize, mut visit: F)
+where
+    F: FnMut(RingResidue, &PointResolution),
+{
+    let n_anticipated = state.n_anticipated;
+    let k_max = state.k_max;
+    if n_anticipated == 0 || k_max == 0 {
+        return;
     }
-    let lead = u32::try_from(state.anticipated_lead_stages[local_idx]).unwrap_or(u32::MAX);
-    Cow::Owned(resolve_point(
-        Stages(lead),
-        DeliveryAxis {
-            stage_lengths_hours: &[],
-            n_decision: n_stages,
-            n_delivery: state.delivery_stage_count(n_stages),
-        },
-    ))
+    let n_delivery = state.n_delivery();
+    let points: Vec<&PointResolution> = (0..n_anticipated)
+        .map(|plant| anticipated_resolution_for(state, AnticipatedLocal::new(plant)))
+        .collect();
+    for depth in 0..k_max {
+        let r = stage_idx + depth + 1;
+        let slot = r % k_max;
+        for (plant, point) in points.iter().enumerate() {
+            let target = point.physical_target(r);
+            if target >= n_delivery {
+                continue;
+            }
+            visit(
+                RingResidue {
+                    slot,
+                    plant,
+                    target,
+                },
+                point,
+            );
+        }
+    }
+}
+
+/// Filter [`for_each_ring_residue`] to the LP's own latch set: a residue is
+/// live at the pool's stage `stage_idx` iff `PointResolution::is_ready_at`
+/// holds for its target — the union of every carry row (interior, not yet
+/// due) and every deposit row (`decider[target] == Some(stage_idx)`, itself
+/// always ready). The order stays depth-major, then plant-minor.
+pub(crate) fn for_each_live_commitment_slot<F>(state: &StateSpace, stage_idx: usize, mut visit: F)
+where
+    F: FnMut(RingResidue, &PointResolution),
+{
+    for_each_ring_residue(state, stage_idx, |res, point| {
+        if point.is_ready_at(res.target, stage_idx) {
+            visit(res, point);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -148,12 +214,15 @@ mod tests {
         is_anticipated_decision_active_for_delivery,
     };
     use crate::lead_time::{AnticipatedResolution, PointResolution};
+    use crate::test_support::constant_lead_resolution;
 
     /// Build a [`StateSpace`] for the gating tests below — both fixtures use
     /// `hydro_count == 0`, matching `state_space.rs`'s `finalized` helper
     /// under that fixture shape.
-    fn ant_layout(n_anticipated: usize, k_max: usize, leads: Vec<usize>) -> StateSpace {
-        StateSpace::new(0, 0, 0, Vec::new(), n_anticipated, k_max, leads, &[])
+    fn ant_layout(leads: Vec<usize>) -> StateSpace {
+        let n_stages = leads.iter().copied().max().unwrap_or(0) + 2;
+        let resolution = constant_lead_resolution(&leads, n_stages);
+        StateSpace::new(0, 0, Vec::new(), leads, resolution, &[])
     }
 
     /// The strict horizon clause is active iff `stage_idx + K_i < n_stages`:
@@ -165,7 +234,7 @@ mod tests {
     #[test]
     fn is_anticipated_decision_active_strict_horizon_gate() {
         // Two plants: K_0 = 1, K_1 = 2; k_max = 2; n_stages = 5.
-        let idx = ant_layout(2, 2, vec![1, 2]);
+        let idx = ant_layout(vec![1, 2]);
         let n_stages = 5;
         // Windowless: the operation-window clause is identically true.
         let windows = [(None, None); 2];
@@ -220,7 +289,7 @@ mod tests {
     #[test]
     fn is_anticipated_decision_active_delivery_stage_window_gate() {
         // One plant, K=2, k_max=2; n_stages=6; window [entry=2, exit=4).
-        let idx = ant_layout(1, 2, vec![2]);
+        let idx = ant_layout(vec![2]);
         let n_stages = 6;
         let windows = [(Some(2), Some(4))];
         let stage_ids = [0, 1, 2, 3, 4, 5];
@@ -256,13 +325,11 @@ mod tests {
     /// last defined delivery stage.
     #[test]
     fn is_anticipated_decision_active_for_delivery_strict_extended_bound() {
-        let idx = ant_layout(1, 1, vec![1]);
         let n_delivery = 5;
         let windows = [(None, None)];
         let delivery_stage_ids = [0, 1, 2, 3, 4];
 
         assert!(is_anticipated_decision_active_for_delivery(
-            &idx,
             AnticipatedLocal::new(0),
             4,
             n_delivery,
@@ -270,7 +337,6 @@ mod tests {
             &delivery_stage_ids,
         ));
         assert!(!is_anticipated_decision_active_for_delivery(
-            &idx,
             AnticipatedLocal::new(0),
             5,
             n_delivery,
@@ -286,13 +352,11 @@ mod tests {
     #[test]
     fn is_anticipated_decision_active_for_delivery_post_study_delivery_admitted_for_windowless_plant()
      {
-        let idx = ant_layout(1, 1, vec![1]);
         let n_delivery = 8;
         let windows = [(None, None)];
         let delivery_stage_ids = [0, 1, 2, 3, 4, 5, 6, 7];
 
         assert!(is_anticipated_decision_active_for_delivery(
-            &idx,
             AnticipatedLocal::new(0),
             6,
             n_delivery,
@@ -310,13 +374,11 @@ mod tests {
     #[test]
     fn is_anticipated_decision_active_for_delivery_uniform_gate_rejects_post_study_delivery_for_exited_plant()
      {
-        let idx = ant_layout(1, 1, vec![1]);
         let n_delivery = 8;
         let windows = [(Some(0), Some(5))];
         let delivery_stage_ids = [0, 1, 2, 3, 4, 5, 6, 7];
 
         assert!(!is_anticipated_decision_active_for_delivery(
-            &idx,
             AnticipatedLocal::new(0),
             6,
             n_delivery,
@@ -325,27 +387,10 @@ mod tests {
         ));
     }
 
-    /// The fallback axis (no resolution attached) reports exactly `n_stages`:
-    /// `delivery_stage_count` falls back to the caller's value when
-    /// `n_delivery == 0`, so the resolved decider's length is byte-identical
-    /// to the pre-widening study-only axis.
-    #[test]
-    fn anticipated_resolution_for_fallback_reports_n_stages_without_a_resolution() {
-        let idx = ant_layout(1, 1, vec![1]);
-        let n_stages = 5;
-
-        let point = anticipated_resolution_for(&idx, AnticipatedLocal::new(0), n_stages);
-
-        assert_eq!(point.decider.len(), n_stages);
-    }
-
-    /// Once a resolution is attached, `anticipated_resolution_for` returns it
-    /// verbatim — including a delivery width extended past `n_stages` — so the
-    /// secondary axis site reports the same extended width the primary site
-    /// attaches (the no-half-switch invariant).
+    /// `anticipated_resolution_for` returns the attached resolution verbatim —
+    /// including a delivery width extended past `n_stages`.
     #[test]
     fn anticipated_resolution_for_attached_resolution_reports_extended_delivery_width() {
-        let mut idx = ant_layout(1, 2, vec![2]);
         let n_stages = 4;
         let n_post = 3;
         let n_delivery = n_stages + n_post;
@@ -356,12 +401,10 @@ mod tests {
                 depth: vec![0; n_stages],
                 occupancy: vec![0; n_stages],
             }],
-            k_max: 2,
-            max_fanout: 0,
         };
-        idx.set_anticipated_resolution(resolution);
+        let idx = StateSpace::new(0, 0, Vec::new(), vec![2], resolution, &[]);
 
-        let point = anticipated_resolution_for(&idx, AnticipatedLocal::new(0), n_stages);
+        let point = anticipated_resolution_for(&idx, AnticipatedLocal::new(0));
 
         assert_eq!(point.decider.len(), n_delivery);
     }

@@ -141,7 +141,6 @@ fn lhs_marginal_uniformity() {
     let tree = generate_opening_tree(
         42,
         &stages,
-        dim,
         &corr,
         &entity_order,
         dims,
@@ -183,7 +182,6 @@ fn lhs_no_stratum_collision() {
     let tree = generate_opening_tree(
         99,
         &stages,
-        dim,
         &corr,
         &entity_order,
         dims,
@@ -223,7 +221,6 @@ fn lhs_normal_statistics() {
     let tree = generate_opening_tree(
         12345,
         &stages,
-        dim,
         &corr,
         &entity_order,
         dims,
@@ -266,7 +263,6 @@ fn lhs_correlation_applied() {
     let tree = generate_opening_tree(
         54321,
         &stages,
-        2,
         &corr,
         &entity_order,
         dims,

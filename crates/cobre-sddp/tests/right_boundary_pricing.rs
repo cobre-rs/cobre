@@ -385,7 +385,7 @@ fn inject_ring_boundary(setup: &mut cobre_sddp::StudySetup, dir: &Path) {
         1.0,
     ))
     .expect("boundary cut must load");
-    inject_boundary_cuts(setup, &boundary_cuts);
+    inject_boundary_cuts(setup, &boundary_cuts).unwrap();
 }
 
 /// Build the terminal pool's FROZEN LP template: the base structural template
@@ -508,7 +508,11 @@ fn boundary_cut_prices_the_committed_mw_by_beta_times_x() {
     let tmp = tempfile::tempdir().expect("tempdir");
     inject_ring_boundary(&mut setup, &tmp.path().join("boundary"));
 
-    let terminal_pool_id = setup.fcf.pools.len() - 1;
+    let terminal_pool_id = setup
+        .inputs
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .unwrap();
     let template = freeze_terminal_template(&setup, terminal_pool_id);
     let pool = &setup.fcf.pools[terminal_pool_id];
 
@@ -654,7 +658,7 @@ fn terminal_valuation_and_decision_fuel_are_disjoint_columns() {
 fn shared_boundary_prices_each_fanned_leaf_by_its_own_ring_state() {
     let mut setup = build_setup_in_code(build_system(true, true), &config());
 
-    let leaves = leaf_positions(&setup.node_graph);
+    let leaves = leaf_positions(&setup.inputs.node_graph);
     assert_eq!(
         leaves.len(),
         2,
@@ -662,7 +666,7 @@ fn shared_boundary_prices_each_fanned_leaf_by_its_own_ring_state() {
     );
     let leaf_pool_ids: Vec<usize> = leaves
         .iter()
-        .map(|&pos| setup.node_graph.nodes[pos].pool_id)
+        .map(|&pos| setup.inputs.node_graph.nodes[pos].pool_id)
         .collect();
     assert_eq!(
         leaf_pool_ids[0], leaf_pool_ids[1],
@@ -675,7 +679,11 @@ fn shared_boundary_prices_each_fanned_leaf_by_its_own_ring_state() {
     let shared_pool_id = leaf_pool_ids[0];
     assert_eq!(
         shared_pool_id,
-        setup.fcf.pools.len() - 1,
+        setup
+            .inputs
+            .node_graph
+            .terminal_pool(setup.num_stages())
+            .unwrap(),
         "the shared leaf pool is the terminal pool the boundary overwrites"
     );
     let pool = &setup.fcf.pools[shared_pool_id];
@@ -742,7 +750,11 @@ fn no_boundary_leaves_theta_zero_with_ring_columns_present() {
         "the post-study-targeted ring slot must be present in the state dimension"
     );
 
-    let terminal_pool_id = setup.fcf.pools.len() - 1;
+    let terminal_pool_id = setup
+        .inputs
+        .node_graph
+        .terminal_pool(setup.num_stages())
+        .unwrap();
     let pool = &setup.fcf.pools[terminal_pool_id];
     assert_eq!(pool.populated(), 0, "no boundary cut must be loaded");
 

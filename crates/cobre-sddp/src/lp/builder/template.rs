@@ -1,33 +1,19 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ops::Range;
+use std::collections::HashMap;
 
-use cobre_core::scenario::{LoadModel, SamplingScheme};
-use cobre_core::{BlockMode, ContractType, EntityId, Hydro, ResolvedBounds, Stage, System};
-use cobre_io::StageIdResolver;
+use cobre_core::{EntityId, Stage, System};
 use cobre_solver::StageTemplate;
 use cobre_stochastic::normal::precompute::PrecomputedNormal;
 use cobre_stochastic::par::precompute::PrecomputedPar;
 
-use crate::error::SddpError;
-use crate::hydro_models::{EvaporationModelSet, ProductionModelSet, ResolvedProductionModel};
-use crate::inflow_method::InflowNonNegativityMethod;
-use crate::lead_time::{AnticipatedResolution, SpreadResolution};
-use crate::resolved_parameters::ResolvedParameters;
-use crate::setup::resolve_post_study_artifacts;
-use crate::setup::template_postprocess::{
-    compute_cumulative_discount_factors, compute_per_stage_discount_factors,
-};
+use crate::bucket_topology::TransitBucketTopology;
+use crate::hydro_models::{EvaporationModelSet, ProductionModelSet};
 
-use super::layout::{ResolvedTables, StageLayout, TemplateBuildCtx};
-use super::{GenericConstraintRowEntry, M3S_TO_HM3, StateBox, columns, entries, rows, scaling};
-use crate::lp::indexer::{
-    Boundary, EvaporationIndices, HydroCellIndex, HydroSys, StateSpace, StorageBoundaryGrid,
-    ThermalSys,
-};
+use super::layout::{ResolvedTables, StageGeometry, StageLayout, TemplateBuildCtx};
+use super::{GenericConstraintRowEntry, LpBuildInputs, StateBox, columns, entries, rows, scaling};
+use crate::lp::indexer::StateSpace;
+
 #[cfg(any(test, feature = "test-support"))]
-use crate::setup::bucket_topology::build_transit_bucket_topology;
-#[cfg(any(test, feature = "test-support"))]
-use crate::setup::resolve_state_layout;
+pub(crate) mod canonical;
 
 /// Outcome of [`build_stage_templates`]: one [`StageTemplate`] per study stage
 /// plus the per-stage offsets and counts the forward/backward/simulation passes
@@ -36,83 +22,27 @@ use crate::setup::resolve_state_layout;
 pub struct StageTemplates {
     /// One structural LP template per study stage, in stage order.
     pub templates: Vec<StageTemplate>,
-    /// Per-stage admissible box for every outgoing state dimension, populated by
-    /// `postprocess_templates` after scaling. Length equals `templates.len()`.
-    pub(crate) state_boxes: Vec<StateBox>,
-    /// Row index of the first water-balance constraint in each stage's LP (the
-    /// noise-injection `base_row`). Length equals `templates.len()`.
-    pub base_rows: Vec<usize>,
-    /// Pre-computed noise scale `ζ_stage * σ_{stage,hydro}`, flat stage-major:
-    /// `noise_scale[stage * n_hydros + hydro]`, length `n_study_stages * n_hydros`.
-    ///
-    /// The full water-balance patch is `ζ*base + ζ*σ*η`: `ζ*base` is already encoded
-    /// in the template's `row_lower`/`row_upper`, and the caller adds `ζ*σ*η` at solve
-    /// time using this scale.
-    pub noise_scale: Vec<f64>,
-    /// Per-stage time-conversion factor `ζ = total_hours * M3S_TO_HM3`, length
-    /// `templates.len()`. Inverts the water-balance RHS back to inflow:
-    /// `inflow_m3s = rhs_hm3 / zeta_per_stage[stage]`.
-    pub zeta_per_stage: Vec<f64>,
+    /// Per-stage admissible box for every outgoing state dimension, built by
+    /// `postprocess_templates` from the physical column bounds before column
+    /// scaling. Empty until then; read it through `state_boxes()`.
+    state_boxes: Vec<StateBox>,
     /// Per-stage block durations in hours (`block_hours_per_stage[stage]` is length
     /// `n_blocks`). Converts load-balance duals $/MW → $/`MWh`:
     /// `spot_price = dual / block_hours`.
     pub block_hours_per_stage: Vec<Vec<f64>>,
-    /// Number of hydro plants (N) used to stride into `noise_scale`.
-    pub n_hydros: usize,
     /// Resolved objective cost-scale factor (`modeling.cost_scale_factor`,
-    /// [`ResolvedParameters::cost_scale_factor`]). Every non-theta objective
+    /// the resolved `cost_scale_factor` scalar). Every non-theta objective
     /// coefficient was divided by this at template build time; cost-domain
     /// reporting boundaries multiply back by it.
     pub cost_scale_factor: f64,
-    /// Per-stage row index of the first load-balance constraint.
-    ///
-    /// `load_balance_row_starts[s]` is `StageLayout::row_load_balance_start()`
-    /// for stage `s` — NOT a hand-derived `row_water_balance_start + n_hydros`
-    /// offset, which only held before the chronological per-block water rows
-    /// and the travel-time bucket-definition rows sat between the two.
-    /// Length equals `templates.len()`.
-    pub load_balance_row_starts: Vec<usize>,
-    /// Number of buses with stochastic load noise (`std_mw > 0`); equals
-    /// `normal_lp.n_entities()`. Load noise occupies opening-tree noise-vector
-    /// indices `[n_hydros, n_hydros + n_load_buses)`.
-    pub n_load_buses: usize,
-    /// Position in the `buses` slice for each stochastic load bus, length
-    /// `n_load_buses`, sorted by [`cobre_core::EntityId`] for declaration-order
-    /// invariance. Bus `i`'s load-balance base row is
-    /// `load_balance_row_start + load_bus_indices[i] * n_blks + blk`.
+    /// Position in the `buses` slice for each stochastic load bus, sorted by
+    /// [`cobre_core::EntityId`] for declaration-order invariance. Bus `i`'s
+    /// load-balance base row is [`StageGeometry::load_balance_row`].
     pub load_bus_indices: Vec<usize>,
     /// Per-stage metadata for active generic constraint rows: one
     /// [`GenericConstraintRowEntry`] per active `(constraint, block)` pair at
     /// stage `s`. Empty for stages with no active generic constraints.
     pub generic_constraint_row_entries: Vec<Vec<GenericConstraintRowEntry>>,
-    /// Per-stage NCS column start indices.
-    ///
-    /// `ncs_col_starts[stage_idx]` is the column index of the first NCS generation
-    /// variable for that stage. The base shifts per stage with `n_blks`, so it is
-    /// legitimate per-stage geometry; the COUNT it strides is the scalar
-    /// [`Self::n_ncs`].
-    pub ncs_col_starts: Vec<usize>,
-    /// NCS column count — the full system NCS count, identical at every stage.
-    ///
-    /// Under the dense layout every NCS keeps a column at every stage, so the count
-    /// is a single scalar, not a per-stage Vec; a commissioning-dormant NCS keeps
-    /// its column (pinned to `[0, 0]`).
-    pub n_ncs: usize,
-    /// Per-stage pumping-flow column start indices.
-    ///
-    /// `pumping_col_starts[stage_idx]` is the column index of the first
-    /// pumping-flow variable for that stage, sourced from
-    /// `StageLayout::col_pumping_start`, the sole owner of the pumping-flow column
-    /// base. Pumping columns are block-major over ALL system stations (dense):
-    /// `pumping_col_starts[stage_idx] + p_sys * n_blks + blk`, where `p_sys` is the
-    /// SYSTEM station index. The base shifts per stage with `n_blks`, so it is
-    /// legitimate per-stage geometry; the COUNT it strides is the scalar
-    /// [`Self::n_pumping`]. A commissioning-dormant station keeps its column
-    /// (pinned to `[0, 0]`).
-    pub pumping_col_starts: Vec<usize>,
-    /// Pumping-station column count — the full system station count, identical at
-    /// every stage (dense). A commissioning-dormant station keeps its column.
-    pub n_pumping: usize,
     /// Per-stage equipment geometry for simulation extraction.
     ///
     /// `geometry_per_stage[stage_idx]` holds the stage-correct column and row
@@ -133,232 +63,56 @@ pub struct StageTemplates {
     /// `hydro_productivities_per_stage[stage][h]` is the productivity of hydro `h`
     /// at stage `stage`, accounting for per-stage overrides.  FPHA hydros have 0.0.
     pub hydro_productivities_per_stage: Vec<Vec<f64>>,
-    /// Per-stage one-step discount factor for the transition departing stage `t`:
-    /// `discount_factors[t] = 1 / (1 + r_t)^(Dt / 365.25)` (`r_t` the annual rate,
-    /// `Dt` the stage duration in days); all `1.0` when the rate is `0.0` with no
-    /// overrides. Applied to the theta objective coefficient.
-    ///
-    /// Private with a getter/setter: [`build_stage_templates`] leaves a
-    /// `1.0`-placeholder until [`StageTemplates::set_discount_factors`]. A `pub`
-    /// field would let a caller read the placeholder as the discounted value —
-    /// silently yielding undiscounted NPV. Read via
-    /// [`StageTemplates::discount_factors`].
-    discount_factors: Vec<f64>,
-    /// Cumulative discount factor for reporting: `cumulative[0] = 1.0`,
-    /// `cumulative[t] = cumulative[t-1] * discount_factors[t-1]`. The present value
-    /// of stage `t`'s immediate cost is `cumulative[t] * immediate_cost_t`.
-    ///
-    /// Private for the same reason as [`StageTemplates::discount_factors`] (shares
-    /// the placeholder window). Read via
-    /// [`StageTemplates::cumulative_discount_factors`].
-    cumulative_discount_factors: Vec<f64>,
 }
 
 impl StageTemplates {
-    /// All-empty [`StageTemplates`] for a study with zero stages. `n_hydros` (the
-    /// stride into `noise_scale`) and `cost_scale_factor` carry through; both are
-    /// system-level values well-defined even with no stages.
+    /// All-empty [`StageTemplates`] for a study with zero stages.
+    /// `cost_scale_factor` carries through — a system-level value well-defined
+    /// even with no stages.
     #[must_use]
-    pub(crate) fn empty(n_hydros: usize, cost_scale_factor: f64) -> Self {
+    pub(crate) fn empty(cost_scale_factor: f64) -> Self {
         Self {
             templates: Vec::new(),
             state_boxes: Vec::new(),
-            base_rows: Vec::new(),
-            noise_scale: Vec::new(),
-            zeta_per_stage: Vec::new(),
             block_hours_per_stage: Vec::new(),
-            n_hydros,
             cost_scale_factor,
-            load_balance_row_starts: Vec::new(),
-            n_load_buses: 0,
             load_bus_indices: Vec::new(),
             generic_constraint_row_entries: Vec::new(),
-            ncs_col_starts: Vec::new(),
-            n_ncs: 0,
-            pumping_col_starts: Vec::new(),
-            n_pumping: 0,
             geometry_per_stage: Vec::new(),
             diversion_upstream: HashMap::new(),
             hydro_productivities_per_stage: Vec::new(),
-            discount_factors: Vec::new(),
-            cumulative_discount_factors: Vec::new(),
         }
     }
 
-    /// Per-stage one-step discount factors (read access). A `1.0`-placeholder until
-    /// [`StageTemplates::set_discount_factors`] runs.
-    #[must_use]
-    pub(crate) fn discount_factors(&self) -> &[f64] {
-        &self.discount_factors
-    }
-
-    /// Cumulative discount factors for reporting (read access). A `1.0`-placeholder
-    /// until [`StageTemplates::set_discount_factors`] runs.
-    #[must_use]
-    pub(crate) fn cumulative_discount_factors(&self) -> &[f64] {
-        &self.cumulative_discount_factors
-    }
-
-    /// Install the per-stage discount factors and recompute the cumulative factors
-    /// from them in one call, so the two slices cannot drift out of step (a caller
-    /// cannot set per-stage factors while leaving a stale cumulative vector behind).
-    pub(crate) fn set_discount_factors(&mut self, per_stage: Vec<f64>) {
-        self.cumulative_discount_factors = compute_cumulative_discount_factors(&per_stage);
-        self.discount_factors = per_stage;
-    }
-}
-
-/// Per-stage equipment geometry for simulation extraction: the stage-correct
-/// column/row `Range`s, identity lists, and block count for every block-major
-/// family, each computed from **this** stage's `StageLayout`.
-///
-/// A single global stage-0 geometry is the bug this struct forbids: every family
-/// after `turbine` has a base `turbine.start + Σ(prior)·n_blks` and length
-/// `count·n_blks`, both striped by stage 0's block count, so at any stage with a
-/// differing block count the stage-0 base/length addresses the WRONG primal
-/// columns. The per-stage `n_blks` stride was already correct; this closes the
-/// matching base/length gap. Uniform-block studies coincide with stage 0.
-///
-/// [`Default`] is the all-`0..0` geometry — every extraction read it gates returns
-/// zero — the safe fallback when no per-stage geometry is available, matching the
-/// sibling `ncs_col_starts` / `pumping_col_starts` empty-slice fallbacks.
-#[derive(Debug, Clone, Default)]
-pub struct StageGeometry {
-    /// Future-cost epigraph (θ) column index — the authoritative value from
-    /// `StageLayout::col_theta`, which accounts for the commitment-hold region's
-    /// `commit_out`/`commit_in` column offset when `n_anticipated > 0`.
-    /// Single source of truth for code that must address θ outside the builder
-    /// (e.g. discount-factor postprocessing); do not re-derive the index from
-    /// `n_state`/`n_hydros` by hand.
-    pub theta_col: usize,
-    /// Turbined-flow column range (one per hydro per block). `turbine.start` is
-    /// `theta + 1` and stage-invariant, but `turbine.end` is `n_blks`-dependent,
-    /// so the cost-breakdown `range_sum` still needs the per-stage range.
-    pub turbine: Range<usize>,
-    /// Spillage column range (one per hydro per block).
-    pub spillage: Range<usize>,
-    /// Diversion-flow column range (one per hydro per block).
-    pub diversion: Range<usize>,
-    /// Thermal-generation column range (one per thermal per block).
-    pub thermal: Range<usize>,
-    /// Anticipated-decision column range (one per anticipated thermal,
-    /// stage-level). Starts at `thermal.end`, which is `n_blks`-dependent, so the
-    /// cost-breakdown `range_sum` needs the per-stage base.
-    pub anticipated_decision: Range<usize>,
-    /// Forward line-flow column range (one per line per block).
-    pub line_fwd: Range<usize>,
-    /// Reverse line-flow column range (one per line per block).
-    pub line_rev: Range<usize>,
-    /// Bus-deficit column range (`B · S · K` columns).
-    pub deficit: Range<usize>,
-    /// Bus-excess column range (one per bus per block).
-    pub excess: Range<usize>,
-    /// FPHA-generation column range (one per FPHA hydro per block).
-    pub generation: Range<usize>,
-    /// Per-`(evaporation hydro, block)` column/row indices, block-major
-    /// (`local_evap_idx * n_blks + blk`). Anchored at the `n_blks`-dependent
-    /// FPHA-generation-block end, so they shift under a non-uniform schedule —
-    /// this per-stage copy carries the stage-correct columns. A reader wanting a
-    /// hydro's block 0 indexes `local_evap_idx * n_blks`.
-    pub evap_indices: Vec<EvaporationIndices>,
-    /// Inflow non-negativity slack column range (one per hydro, stage-level).
-    pub inflow_slack: Range<usize>,
-    /// Under-withdrawal slack column range (one per hydro, stage-level).
-    pub withdrawal_slack_neg: Range<usize>,
-    /// Over-withdrawal slack column range (one per hydro, stage-level).
-    pub withdrawal_slack_pos: Range<usize>,
-    /// Outflow-below-minimum slack column range (one per hydro per block).
-    pub outflow_below_slack: Range<usize>,
-    /// Outflow-above-maximum slack column range (one per hydro per block).
-    pub outflow_above_slack: Range<usize>,
-    /// Turbine-below-minimum slack column range (one per hydro CELL per block).
-    pub turbine_below_slack: Range<usize>,
-    /// Generation-below-minimum slack column range (one per hydro CELL per block).
-    pub generation_below_slack: Range<usize>,
-    /// Import-contract column range (one per import contract per block); empty
-    /// `start..start` (not `0..0`) at the pumping-end column when there are none.
-    pub contract_import: Range<usize>,
-    /// Export-contract column range (one per export contract per block); empty
-    /// `start..start` at the import-end column when there are none.
-    pub contract_export: Range<usize>,
-
-    // ── Per-stage row ranges, identity lists, and block count ────────────────
-    /// Water-balance row range (one row per hydro). Count is stage-invariant
-    /// (`n_hydros`) but the base rides the per-stage block-major rows before it.
-    pub water_balance: Range<usize>,
-    /// Load-balance row range (one row per bus per block; `n_buses · n_blks`).
-    pub load_balance: Range<usize>,
-    /// FPHA hyperplane row range, immediately following `load_balance`. Length
-    /// varies per stage: `for_each_fpha_plane` sums plane counts that differ per
-    /// hydro (`fpha_hydro_indices.len() * n_blks` is NOT the row count).
-    pub fpha: Range<usize>,
-    /// Per-stage `σ_fill`-target row range (one row per Filling-phase hydro); empty
-    /// `start..start` (not `0..0`) at every non-Filling stage.
-    // Rationale (dead_code): no read site consumes this yet — the per-stage carrier
-    // that keeps `StageGeometry` a faithful mirror of the row shape, the seam the
-    // sibling `σ^{v-}` family extends.
-    #[allow(dead_code)]
-    pub filling_target: Range<usize>,
-    /// Per-stage `σ_fill`-target slack column range (one column per Filling-phase
-    /// hydro); empty `start..start` at every non-Filling stage. Simulation
-    /// extraction reads the `σ_fill` primal at `start + local_idx`, resolving
-    /// `local_idx` via `filling_target_hydro_indices`.
-    pub filling_target_col: Range<usize>,
-    /// Soft `σ^{v-}` operating-floor row range (one row per Operating-phase filling
-    /// hydro); empty `start..start` (not `0..0`) at every non-operating stage.
-    // Rationale (dead_code): no read site consumes this yet — the per-stage row-shape
-    // carrier mirroring the `filling_target` seam.
-    #[allow(dead_code)]
-    pub filled_min_storage_floor: Range<usize>,
-    /// Soft `σ^{v-}` operating-floor slack column range (one column per
-    /// Operating-phase filling hydro); empty `start..start` at every non-operating
-    /// stage. Simulation extraction reads the `σ^{v-}` primal at `start + local_idx`,
-    /// resolving `local_idx` via `filled_min_storage_floor_hydro_indices`.
-    pub filled_min_storage_floor_col: Range<usize>,
-    /// Row index of the first z-inflow definition constraint. Always `0`: state
-    /// pinning uses column bounds, so no state-fixing rows precede the z-inflow
-    /// block. Carried per stage to mirror `StageLayout::z_inflow_row_start`.
-    pub z_inflow_row_start: usize,
-    /// Number of operating blocks (K) at this stage — the block-major stride for
-    /// every equipment family.
-    pub n_blks: usize,
-    /// Storage-boundary address primitive for this stage, carrying both state
-    /// bases plus the interior control-region anchor mirroring
-    /// `StageLayout::storage_boundary_grid`; feeds [`StageGeometry::block_storage_col`].
-    pub storage_boundary_grid: StorageBoundaryGrid,
-    /// Block formulation mode at this stage. Selects per-block storage extraction
-    /// (`Chronological` reads each block's own `(Sᵇ, Sᵇ⁺¹)` boundary) versus the
-    /// stage-level `(S⁰, Sᴷ)` pair (`Parallel`); defaults to `Parallel`.
-    pub block_mode: BlockMode,
-    /// System hydro indices using FPHA at this stage, in slot order. FPHA
-    /// membership is per `(hydro, stage)`, so this is the stage-correct list.
-    pub fpha_hydro_indices: Vec<HydroSys>,
-    /// System hydro indices with linearized evaporation at this stage, in slot
-    /// order. Parallel to `evap_indices`.
-    pub evap_hydro_indices: Vec<HydroSys>,
-    /// System hydro indices owning a `σ_fill`-target slack column at this stage (the
-    /// Filling-phase hydros), in slot order. Parallel to `filling_target_col` (slot
-    /// `i` → `filling_target_col.start + i`). The family is SPARSE — one column per
-    /// filling hydro — so extraction resolves a system hydro's column via this
-    /// system→slot list, never by the dense system index `h`.
-    pub filling_target_hydro_indices: Vec<HydroSys>,
-    /// System hydro indices owning a `σ^{v-}` operating-floor slack column at this
-    /// stage (the Operating-phase filling hydros), in slot order. Parallel to
-    /// `filled_min_storage_floor_col`; SPARSE like `filling_target_hydro_indices`,
-    /// resolved the same way.
-    pub filled_min_storage_floor_hydro_indices: Vec<HydroSys>,
-}
-
-impl StageGeometry {
-    /// Storage column at chronological `boundary` for hydro `h`, so the
-    /// simulation read-path resolves per-block boundaries without a
-    /// `StageLayout`; delegates to
-    /// [`StorageBoundaryGrid::col`](crate::lp::indexer::StorageBoundaryGrid::col),
-    /// the single owner of the endpoints-vs-interior split.
+    /// Buses with stochastic load noise.
     #[inline]
     #[must_use]
-    pub fn block_storage_col(&self, h: HydroSys, boundary: Boundary) -> usize {
-        self.storage_boundary_grid.col(h.get(), boundary)
+    pub fn n_load_buses(&self) -> usize {
+        self.load_bus_indices.len()
+    }
+
+    /// The per-stage state boxes, one per template.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when read before `postprocess_templates` fills them.
+    pub(crate) fn state_boxes(&self) -> &[StateBox] {
+        debug_assert_eq!(
+            self.state_boxes.len(),
+            self.templates.len(),
+            "state_boxes read before postprocess_templates filled them"
+        );
+        &self.state_boxes
+    }
+
+    /// Fills the per-stage state boxes, one per template.
+    pub(crate) fn set_state_boxes(&mut self, state_boxes: Vec<StateBox>) {
+        debug_assert_eq!(
+            state_boxes.len(),
+            self.templates.len(),
+            "set_state_boxes needs one state box per stage"
+        );
+        self.state_boxes = state_boxes;
     }
 }
 
@@ -367,77 +121,36 @@ impl StageGeometry {
 /// [`StageTemplates`]. Adding a per-stage datum is one field here plus one
 /// transpose line in the assembler.
 pub(super) struct StageBuildOutput {
-    /// Structural LP template for the stage.
     pub template: StageTemplate,
-    /// Row index of the first water-balance constraint (the `PatchBuffer`
-    /// noise-injection `base_row`).
-    pub stage_base_row: usize,
-    /// Row index of the first load-balance constraint (load-noise patches).
-    pub load_balance_row_start: usize,
-    /// Active generic-constraint row metadata for the stage.
     pub gc_entries: Vec<GenericConstraintRowEntry>,
-    /// Column index of the first NCS generation variable.
-    pub ncs_col_start: usize,
-    /// Number of NCS entities at the stage — the full system count (dense).
-    pub ncs_count: usize,
-    /// Column index of the first pumping-flow variable (sourced from
-    /// `StageLayout::col_pumping_start`).
-    pub pumping_col_start: usize,
-    /// Number of pumping stations ACTIVE (contributing columns) at the stage
-    /// (the commissioning-gated count, sourced from [`StageLayout::n_pumping`]).
-    pub n_pumping: usize,
     /// Stage-correct equipment column ranges for simulation extraction, computed
     /// from this stage's [`StageLayout`].
     pub equipment_geometry: StageGeometry,
 }
 
 /// Construct the [`StageBuildOutput`] for a single study stage.
-// Rationale: `clippy::similar_names` flags the `state` handle next to `stage`/`stage_idx`;
-// both names are established (the `StageLayout`/`StageData` field is `state`, the per-stage
-// inputs are `stage`/`stage_idx`), so renaming either to satisfy the heuristic would obscure
-// intent rather than clarify it.
-#[allow(clippy::similar_names)]
 pub(super) fn build_single_stage_template(
     ctx: &TemplateBuildCtx<'_>,
-    state: &StateSpace,
     stage: &Stage,
     stage_idx: usize,
 ) -> StageBuildOutput {
-    let layout = StageLayout::new(ctx, state, stage, stage_idx);
-    let stage_base_row = layout.rows.water_balance.start;
-    let load_balance_row_start = layout.rows.load_balance.start;
+    let layout = StageLayout::new(ctx, stage, stage_idx);
 
     let (col_lower, mut col_upper, mut objective) =
         columns::fill_stage_columns(ctx, stage, stage_idx, &layout);
     let (mut row_lower, mut row_upper) = rows::fill_stage_rows(ctx, stage, stage_idx, &layout);
     let mut col_entries = entries::build_stage_matrix_entries(ctx, stage, stage_idx, &layout);
 
-    {
-        let mut buffers = entries::LpMatrixBuffers {
-            col_entries: &mut col_entries,
-            col_upper: &mut col_upper,
-            objective: &mut objective,
-            row_lower: &mut row_lower,
-            row_upper: &mut row_upper,
-        };
-        entries::fill_generic_constraint_entries(ctx, stage, stage_idx, &layout, &mut buffers);
-    }
+    let mut buffers = entries::LpMatrixBuffers {
+        col_entries: &mut col_entries,
+        col_upper: &mut col_upper,
+        objective: &mut objective,
+        row_lower: &mut row_lower,
+        row_upper: &mut row_upper,
+    };
+    entries::fill_generic_constraint_entries(ctx, stage_idx, &layout, &mut buffers);
 
-    // Scale every monetary objective coefficient by 1/K for numerical
-    // conditioning; outputs are unscaled at the reporting boundary.
-    //
-    // Theta must NOT be divided: the Benders cuts already enforce
-    // `theta >= Q_successor / K`, so theta holds the SCALED future cost. Dividing
-    // it too would make the LP `stage_cost/K + (1/K)*theta`, which recovers
-    // `stage_cost + future_cost/K` at the boundary — wrong. `layout.col_theta()`
-    // reads the correct index even when `n_anticipated > 0` shifts theta.
-    let theta_col = layout.col_theta();
-    let cost_scale_factor = ctx.resolved.resolved_parameters.cost_scale_factor;
-    for (i, coeff) in objective.iter_mut().enumerate() {
-        if i != theta_col {
-            *coeff /= cost_scale_factor;
-        }
-    }
+    finalize_stage_objective(ctx, stage_idx, &layout, &mut objective);
 
     // CSC invariant: each column's entries must be row-sorted.
     for col_entry_vec in &mut col_entries {
@@ -445,8 +158,6 @@ pub(super) fn build_single_stage_template(
     }
 
     let (col_starts, row_indices, values) = entries::assemble_csc(&col_entries);
-
-    let n_transfer = ctx.n_hydros * ctx.max_par_order;
 
     let template = StageTemplate {
         num_cols: layout.num_cols,
@@ -461,59 +172,55 @@ pub(super) fn build_single_stage_template(
         row_lower,
         row_upper,
         n_state: layout.n_state(),
-        n_transfer,
-        n_dual_relevant: layout.rows.n_dual_relevant,
-        n_hydro: layout.n_h,
-        max_par_order: layout.lag_order,
         col_scale: Vec::new(),
         row_scale: Vec::new(),
     };
 
-    // Snapshot the per-stage equipment geometry BEFORE moving `layout`'s owned
-    // `generic_constraint_rows` Vec into the output: `geometry` only borrows
-    // `layout`, so it must run while `layout` is intact.
-    let equipment_geometry = layout.geometry(stage.block_mode);
-
     StageBuildOutput {
         template,
-        stage_base_row,
-        load_balance_row_start,
         gc_entries: layout.generic_constraint_rows,
-        ncs_col_start: layout.equipment.col_ncs_start,
-        ncs_count: layout.equipment.n_ncs,
-        pumping_col_start: layout.equipment.col_pumping_start,
-        n_pumping: layout.equipment.n_pumping,
-        equipment_geometry,
+        equipment_geometry: layout.geometry,
     }
 }
 
-/// Bus-slice positions of every load-noise-member bus
-/// ([`System::load_noise_member_bus_ids`] — the single membership authority
-/// `noise_entity_order` and the external library builders also route
-/// through), sorted by `EntityId` for declaration-order invariance.
-fn collect_load_bus_indices(
-    system: &System,
-    bus_pos: &BTreeMap<EntityId, usize>,
-    load_scheme: SamplingScheme,
-) -> Vec<usize> {
-    system
-        .load_noise_member_bus_ids(load_scheme)
-        .iter()
-        .filter_map(|id| bus_pos.get(id).copied())
-        .collect()
+/// Turn the stage's raw costs into its final objective: every coefficient but
+/// θ's is divided by the cost scale factor, and θ takes the stage's one-step
+/// discount factor, which cascades every later stage's cost to the root exactly
+/// once.
+///
+/// θ is not divided because the Benders cuts already bound it by the scaled
+/// future cost.
+fn finalize_stage_objective(
+    ctx: &TemplateBuildCtx<'_>,
+    stage_idx: usize,
+    layout: &StageLayout,
+    objective: &mut [f64],
+) {
+    debug_assert_eq!(
+        ctx.time_value.discount_factors().len(),
+        ctx.resolved.bounds.n_stages(),
+        "time_value.discount_factors must have length n_stages"
+    );
+    let theta_col = layout.col_theta();
+    let cost_scale_factor = ctx.resolved.resolved_parameters.cost_scale_factor;
+    for (i, coeff) in objective.iter_mut().enumerate() {
+        if i != theta_col {
+            *coeff /= cost_scale_factor;
+        }
+    }
+    objective[theta_col] = ctx.time_value.discount_factors()[stage_idx];
 }
 
 /// Synthesize one entity-model per `(entity, stage)` for every entity in
 /// `entity_ids`, reading `(mean, std)` from `normal_lp` at its own canonical
 /// position. `entity_ids`/`study_stages` MUST be exactly the shape `normal_lp`
 /// was built over (a `debug_assert` enforces it) — this is a pure positional
-/// read, never a re-derivation from raw rows. Shared by
-/// [`load_models_from_normal`]'s own conversion and by the external library
+/// read, never a re-derivation from raw rows. Shared by the external library
 /// builders' standardization-moment derivation
-/// (`setup::scenario_libraries::build_external_load_library` /
-/// `build_external_ncs_library`), so a library's standardization and
-/// `cobre_stochastic::context`'s reconstruction read the identical moments
-/// rather than each re-deriving independently.
+/// (`build_external_load_library` / `build_external_ncs_library`), so a
+/// library's standardization and `cobre_stochastic::context`'s
+/// reconstruction read the identical moments rather than each re-deriving
+/// independently.
 pub(crate) fn models_from_normal<M>(
     normal_lp: &PrecomputedNormal,
     entity_ids: &[EntityId],
@@ -544,53 +251,6 @@ pub(crate) fn models_from_normal<M>(
     models
 }
 
-/// The static load-balance RHS [`fill_load_balance_rows`] reads for every
-/// load-noise-member bus, sourced from `normal_lp` — the SAME derivation
-/// [`PrecomputedNormal::build`] used to build it (external-derived under
-/// `External`, seasonal-derived otherwise) — mirroring inflow's
-/// `external_ar0_inflow_models` override so the LP template's static default
-/// and the runtime noise reconstruction never disagree. A non-member bus's
-/// declared row (a deterministic, `std_mw == 0.0` load under a non-External
-/// scheme) passes through unchanged: `normal_lp`'s entity set excludes it.
-///
-/// A `normal_lp` whose shape does not match `member_ids`/`study_stages` (a
-/// placeholder `PrecomputedNormal::default()`, the same escape hatch
-/// `build_stage_templates`'s own `n_entities() == 0` `debug_assert` tolerance
-/// grants a caller that has not built the real stochastic context) falls
-/// back to the raw declared rows unconditionally — indexing `normal_lp` at
-/// that shape would panic, and today's structural-layout-only test callers
-/// pass exactly this placeholder.
-fn load_models_from_normal(
-    system: &System,
-    normal_lp: &PrecomputedNormal,
-    load_scheme: SamplingScheme,
-    study_stages: &[&Stage],
-) -> Vec<LoadModel> {
-    let member_ids = system.load_noise_member_bus_ids(load_scheme);
-    if normal_lp.n_entities() != member_ids.len() || normal_lp.n_stages() != study_stages.len() {
-        return system.load_models().to_vec();
-    }
-    let member_set: HashSet<EntityId> = member_ids.iter().copied().collect();
-    let mut models: Vec<LoadModel> = system
-        .load_models()
-        .iter()
-        .filter(|lm| !member_set.contains(&lm.bus_id))
-        .cloned()
-        .collect();
-    models.extend(models_from_normal(
-        normal_lp,
-        &member_ids,
-        study_stages,
-        |bus_id, stage_id, mean_mw, std_mw| LoadModel {
-            bus_id,
-            stage_id,
-            mean_mw,
-            std_mw,
-        },
-    ));
-    models
-}
-
 /// Build one [`StageTemplate`] per study stage from a fully loaded [`System`].
 ///
 /// The templates encode the complete structural LP for each SDDP subproblem
@@ -607,18 +267,6 @@ fn load_models_from_normal(
 /// - `num_cols` and `num_rows` are computed by `layout::StageLayout` —
 ///   see `layout.rs` for the authoritative column and row counts
 /// - `n_state  = N*(1+L)`
-/// - `n_transfer = N*L`  (storage + all lags except the oldest)
-/// - `n_dual_relevant = 0`  (state pinning uses column bounds, not state-fixing rows, so no
-///   structural row contributes to cut gradients; the cut path reads `view.reduced_costs`)
-///
-/// ## PAR order and `max_par_order`
-///
-/// `max_par_order` is the maximum of (a) the maximum AR coefficient count
-/// across all hydro inflow models and (b) `par_lp.max_order()`.  The latter
-/// is non-classical only when an annual component is present, in which case
-/// the precompute widens the lag stride to 12 and the LP must allocate
-/// matching column and row slots.  All hydros use the same uniform lag stride
-/// `max_par_order` to enable SIMD-friendly contiguous access.
 ///
 /// ## Objective coefficients
 ///
@@ -643,9 +291,9 @@ fn load_models_from_normal(
 ///
 /// ## FPHA hydros
 ///
-/// For hydros whose resolved production model at a given stage is
-/// [`ResolvedProductionModel::Fpha`], generation becomes a free variable
-/// `g_{h,k} ∈ [0, max_generation_mw]` bounded by M hyperplane constraints:
+/// For hydros whose resolved production model at a given stage is FPHA,
+/// generation becomes a free variable `g_{h,k} ∈ [0, max_generation_mw]`
+/// bounded by M hyperplane constraints:
 ///
 /// ```text
 /// g_{h,k} - gamma_v/2*v - gamma_v/2*v_in - gamma_q*q_{h,k} - gamma_s*s_{h,k} <= gamma_0
@@ -656,14 +304,8 @@ fn load_models_from_normal(
 /// column's bounds its value automatically enters the FPHA constraint
 /// right-hand side.
 ///
-/// Returns `Ok` with empty templates for a system with zero stages.  All
-/// entity counts may be zero (valid for degenerate test systems).
-///
-/// # Errors
-///
-/// Returns [`SddpError`] if the PAR precomputation data is inconsistent with
-/// the system (e.g., a hydro in `par_lp` is not present in `system`), or if
-/// the production model set has incompatible dimensions.
+/// Returns empty templates for a system with zero stages.  All entity counts
+/// may be zero (valid for degenerate test systems).
 ///
 /// ## Evaporation hydros
 ///
@@ -677,512 +319,78 @@ fn load_models_from_normal(
 /// 0.0; the violation slacks carry the evaporation penalty.  One equality
 /// constraint row is added per evaporation hydro with
 /// `row_lower == row_upper == intercept_m3s`.
-///
-/// # Examples
-///
-/// ```
-/// use chrono::NaiveDate;
-/// use cobre_core::scenario::SamplingScheme;
-/// use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-/// use cobre_sddp::InflowNonNegativityMethod;
-/// use cobre_sddp::hydro_models::PrepareHydroModelsResult;
-/// use cobre_sddp::indexer::{HydroCellIndex, StateSpace};
-/// use cobre_sddp::build_stage_templates;
-/// use cobre_sddp::resolved_parameters::ResolvedParameters;
-/// use cobre_stochastic::par::precompute::PrecomputedPar;
-///
-/// let bus = Bus {
-///     id: EntityId(1),
-///     name: "B1".to_string(),
-///     operational_start_date: NaiveDate::from_ymd_opt(2024, 1, 1).expect("valid date"),
-///     deficit_segments: vec![DeficitSegment { depth_mw: None, cost_per_mwh: 1000.0 }],
-///     excess_cost: 0.0,
-/// };
-/// let system = SystemBuilder::new().buses(vec![bus]).build().expect("valid");
-/// let method = InflowNonNegativityMethod::None;
-/// let par_lp = PrecomputedPar::build(&[], &[], &[], None).expect("empty ok");
-/// let normal_lp = cobre_stochastic::normal::precompute::PrecomputedNormal::default();
-/// let hydro_models = PrepareHydroModelsResult::default_from_system(&system);
-/// let resolved_parameters = ResolvedParameters::default();
-/// // No stages, so the state layout is empty too.
-/// let state_layout = StateSpace::new(0, 0, 0, Vec::new(), 0, 0, Vec::new(), &[]);
-/// let hydro_cell_index = HydroCellIndex::build(system.hydros());
-/// let result = build_stage_templates(&system, method, &par_lp, &normal_lp,
-///                                    &hydro_models.production, &hydro_models.evaporation,
-///                                    &resolved_parameters, &state_layout, &[],
-///                                    &std::collections::HashMap::new(),
-///                                    &std::collections::HashMap::new(),
-///                                    &std::collections::HashMap::new(),
-///                                    &hydro_cell_index, SamplingScheme::InSample)
-///     .expect("empty system ok");
-/// assert!(result.templates.is_empty());
-/// ```
-// Rationale (too_many_arguments): each of the three arc-table parameters threads
-// the single setup-owned derivation (`build_transit_bucket_topology`) through, the
-// same coupling `per_stage_mask` already threads; a wrapper struct used at this one
-// signature would rename the coupling, not remove it.
-// implicit_hasher: callers pass a concrete `HashMap`; a `BuildHasher` generic buys
-// nothing.
-#[allow(clippy::too_many_arguments, clippy::implicit_hasher)]
-pub fn build_stage_templates(
+#[must_use]
+pub(crate) fn build_stage_templates(
     system: &System,
-    inflow_method: InflowNonNegativityMethod,
     par_lp: &PrecomputedPar,
-    normal_lp: &PrecomputedNormal,
     production_models: &ProductionModelSet,
     evaporation_models: &EvaporationModelSet,
-    resolved_parameters: &ResolvedParameters,
     state_layout: &StateSpace,
-    per_stage_mask: &[Vec<usize>],
-    arc_stage_weights: &HashMap<usize, Vec<Vec<f64>>>,
-    arc_spread_chrono: &HashMap<usize, Vec<Option<SpreadResolution>>>,
-    arc_arrival_density: &HashMap<usize, Vec<Option<Vec<f64>>>>,
-    hydro_cell_index: &HydroCellIndex,
-    load_scheme: SamplingScheme,
-) -> Result<StageTemplates, SddpError> {
+    topology: &TransitBucketTopology,
+    inputs: LpBuildInputs<'_>,
+) -> StageTemplates {
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
     let n_hydros = system.hydros().len();
 
-    if study_stages.is_empty() {
-        return Ok(StageTemplates::empty(
-            n_hydros,
-            resolved_parameters.cost_scale_factor,
-        ));
-    }
-
-    let load_models = load_models_from_normal(system, normal_lp, load_scheme, &study_stages);
-    let (ctx, load_bus_indices, diversion_upstream_output) = build_template_build_ctx(
-        system,
-        inflow_method,
-        par_lp,
-        &load_models,
-        production_models,
-        evaporation_models,
-        resolved_parameters,
-        state_layout.anticipated_resolution.clone(),
-        state_layout.anticipated_lead_stages.clone(),
-        per_stage_mask.to_vec(),
-        arc_stage_weights.clone(),
-        arc_spread_chrono.clone(),
-        arc_arrival_density.clone(),
-        state_layout.max_par_order,
-        hydro_cell_index,
-        load_scheme,
-    );
-    let n_load_buses = load_bus_indices.len();
     debug_assert!(
-        normal_lp.n_entities() == 0 || normal_lp.n_entities() == n_load_buses,
-        "PrecomputedNormal has {} entities but system has {} stochastic load buses",
-        normal_lp.n_entities(),
-        n_load_buses
-    );
-    debug_assert_eq!(
-        ctx.anticipated_resolution, state_layout.anticipated_resolution,
-        "ctx's threaded anticipated_resolution must match the state_layout it was built from"
-    );
-    debug_assert_eq!(
-        ctx.anticipated_lead_stages, state_layout.anticipated_lead_stages,
-        "ctx's threaded anticipated_lead_stages must match the state_layout it was built from"
-    );
-    debug_assert_eq!(
-        ctx.max_par_order, state_layout.max_par_order,
-        "ctx's threaded max_par_order must match the state_layout it was built from"
+        par_lp.n_stages() == 0
+            || (par_lp.n_stages() == study_stages.len() && par_lp.n_hydros() == n_hydros),
+        "PrecomputedPar has {} stages x {} hydros but system has {} stages x {} hydros",
+        par_lp.n_stages(),
+        par_lp.n_hydros(),
+        study_stages.len(),
+        n_hydros
     );
 
-    let n_study = study_stages.len();
-    let mut stage_outputs = Vec::with_capacity(n_study);
-    for (stage_idx, stage) in study_stages.iter().enumerate() {
-        stage_outputs.push(build_single_stage_template(
-            &ctx,
-            state_layout,
-            stage,
-            stage_idx,
-        ));
+    if study_stages.is_empty() {
+        return StageTemplates::empty(inputs.resolved_parameters.cost_scale_factor);
     }
 
-    let output = assemble_stage_templates_output(
-        stage_outputs,
-        load_bus_indices,
-        diversion_upstream_output,
-        &study_stages,
-        &ctx,
-        par_lp,
-        n_hydros,
-        n_load_buses,
-        n_study,
-    );
-    Ok(output)
-}
-
-/// Test/integration-only convenience wrapper over [`build_stage_templates`]:
-/// resolves the state layout and bucket topology from `system`/`par_lp`
-/// through the same setup entry point production uses
-/// (`crate::setup::resolve_state_layout`), then delegates. Production
-/// (`StudySetup`) always threads its own already-resolved
-/// `StateSpace`/`per_stage_mask` directly through [`build_stage_templates`]
-/// instead — this wrapper exists so test call sites that build templates from
-/// a bare system do not each need to resolve the layout themselves.
-///
-/// # Errors
-///
-/// Propagates [`build_stage_templates`]'s errors, plus
-/// `crate::setup::resolve_state_layout`'s `LeadTime` fan-out rejection.
-#[cfg(any(test, feature = "test-support"))]
-pub fn build_stage_templates_resolving_layout(
-    system: &System,
-    inflow_method: InflowNonNegativityMethod,
-    par_lp: &PrecomputedPar,
-    normal_lp: &PrecomputedNormal,
-    production_models: &ProductionModelSet,
-    evaporation_models: &EvaporationModelSet,
-    resolved_parameters: &ResolvedParameters,
-) -> Result<StageTemplates, SddpError> {
-    let topology = build_transit_bucket_topology(system, false);
-    let (state_layout, _, _) = resolve_state_layout(system, par_lp, &topology, None)?;
-    let hydro_cell_index = HydroCellIndex::build(system.hydros());
-    build_stage_templates(
+    let ctx = build_template_build_ctx(
         system,
-        inflow_method,
         par_lp,
-        normal_lp,
         production_models,
         evaporation_models,
-        resolved_parameters,
-        &state_layout,
-        &topology.per_stage_mask,
-        &topology.arc_stage_weights,
-        &topology.arc_spread_chrono,
-        &topology.arc_arrival_density,
-        &hydro_cell_index,
-        SamplingScheme::InSample,
+        state_layout,
+        topology,
+        &inputs,
+    );
+
+    let stage_outputs = study_stages
+        .iter()
+        .enumerate()
+        .map(|(stage_idx, stage)| build_single_stage_template(&ctx, stage, stage_idx))
+        .collect();
+
+    assemble_stage_templates_output(
+        stage_outputs,
+        inputs.load_bus_indices,
+        inputs.diversion_upstream,
+        inputs.hydro_productivities_per_stage,
+        &study_stages,
+        inputs.resolved_parameters.cost_scale_factor,
     )
 }
 
-/// Precompute the per-stage minimum target-storage trajectory `V_target[t]` for
-/// every filling hydro, keyed `(hydro_idx, stage_id) → V_target` \[hm³\].
-///
-/// Computed ONCE here, where the full per-stage ζ·rate schedule is available (a
-/// per-stage row-fill helper sees one stage and cannot reconstruct the fold). With
-/// `L = entry_stage_id − 1` the last Filling stage, anchored on the dead volume and
-/// folded backward:
-///
-/// ```text
-/// V_target[L] = min_storage_hm3                          (at L's stage_idx)
-/// V_target[t] = min( V_target[t+1] − ζ_{t+1}·rate[t+1], min_storage_hm3 )
-/// ```
-///
-/// `ζ_t = total_hours_per_stage[stage_idx]·M3S_TO_HM3`; `rate`/`min_storage` are
-/// the RESOLVED per-stage bounds. The clip at `min_storage` enforces that no floor
-/// exceeds the dead volume — dropping it would let an over-provisioned schedule
-/// demand a floor ABOVE the dead volume — the forbidden alternative.
-/// The fold runs on the UNCLIPPED running value, clipping each stored `V_target[t]`
-/// independently to mirror the closed form.
-///
-/// Hydros are iterated in canonical slot order into a `BTreeMap`, so the result is
-/// declaration-order-invariant; a non-filling system yields an empty map.
-///
-/// `pub(super)` so the sibling builder test modules can exercise it against
-/// single-stage fixtures; production reaches it via `build_template_build_ctx`.
-pub(super) fn build_filling_v_target(
-    hydros: &[Hydro],
-    bounds: &ResolvedBounds,
-    total_hours_per_stage: &[f64],
-    stage_id_to_idx: &HashMap<i32, usize>,
-) -> BTreeMap<(usize, i32), f64> {
-    let mut v_target: BTreeMap<(usize, i32), f64> = BTreeMap::new();
-    for (h_idx, hydro) in hydros.iter().enumerate() {
-        let (Some(filling), Some(entry)) = (hydro.filling.as_ref(), hydro.entry_stage_id) else {
-            continue;
-        };
-        let start = filling.start_stage_id;
-        let last = entry - 1;
-        // Guard a hypothetical inverted config (`start < entry` is validated
-        // upstream) into an empty trajectory rather than a malformed loop.
-        if last < start {
-            continue;
-        }
-        let Some(&last_idx) = stage_id_to_idx.get(&last) else {
-            continue;
-        };
-        let min_storage_at_last = bounds.hydro_bounds(h_idx, last_idx).min_storage_hm3;
-        v_target.insert((h_idx, last), min_storage_at_last);
-        let mut running = min_storage_at_last;
-        let mut t = last;
-        while t > start {
-            if let Some(&t_idx) = stage_id_to_idx.get(&t) {
-                let zeta_t = total_hours_per_stage[t_idx] * M3S_TO_HM3;
-                let rate_t = bounds.hydro_bounds(h_idx, t_idx).filling_min_rate_m3s;
-                running -= zeta_t * rate_t;
-            }
-            let prev = t - 1;
-            if let Some(&prev_idx) = stage_id_to_idx.get(&prev) {
-                let min_storage_prev = bounds.hydro_bounds(h_idx, prev_idx).min_storage_hm3;
-                v_target.insert((h_idx, prev), running.min(min_storage_prev));
-            }
-            t = prev;
-        }
-    }
-    v_target
-}
-
-/// Build the [`TemplateBuildCtx`] and ancillary data needed by the stage loop.
-///
-/// Constructs position maps (hydro/thermal/line/bus), the diversion-upstream
-/// map, and the `TemplateBuildCtx` that is shared across all per-stage builds.
-/// Also returns `load_bus_indices` (the bus-slice positions of stochastic load
-/// buses) and `diversion_upstream_output` (the clone of the diversion map
-/// preserved for the final `StageTemplates` output field).
-///
-/// Called once per `build_stage_templates` invocation, after the early-return
-/// guard for empty systems.
-// Rationale: too_many_lines — one linear pass of per-entity prep blocks (position
-// maps, anticipated metadata, contracts, discount factors) feeding a single
-// `TemplateBuildCtx` literal; splitting it would scatter the construction the
-// literal reads back, without removing any branching.
-// Rationale: too_many_arguments — each parameter threads a single-owner value
-// from `StateSpace` into the shared `TemplateBuildCtx` (mirroring the existing
-// `anticipated_resolution`/`anticipated_lead_stages` threads); a wrapper struct
-// used nowhere else would rename the coupling, not remove it.
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+/// Build the [`TemplateBuildCtx`] shared across all per-stage builds from
+/// `system`'s slices and the fields it borrows from `inputs`.
 fn build_template_build_ctx<'a>(
     system: &'a System,
-    inflow_method: InflowNonNegativityMethod,
     par_lp: &'a PrecomputedPar,
-    load_models: &'a [LoadModel],
     production_models: &'a ProductionModelSet,
     evaporation_models: &'a EvaporationModelSet,
-    resolved_parameters: &'a ResolvedParameters,
-    anticipated_resolution: AnticipatedResolution,
-    anticipated_lead_stages: Vec<usize>,
-    per_stage_mask: Vec<Vec<usize>>,
-    arc_stage_weights: HashMap<usize, Vec<Vec<f64>>>,
-    arc_spread_chrono: HashMap<usize, Vec<Option<SpreadResolution>>>,
-    arc_arrival_density: HashMap<usize, Vec<Option<Vec<f64>>>>,
-    max_par_order: usize,
-    hydro_cell_index: &'a HydroCellIndex,
-    load_scheme: SamplingScheme,
-) -> (
-    TemplateBuildCtx<'a>,
-    Vec<usize>,
-    HashMap<EntityId, Vec<usize>>,
-) {
-    let hydros = system.hydros();
-    let buses = system.buses();
-    let n_hydros = hydros.len();
-
-    let hydro_pos: BTreeMap<EntityId, usize> =
-        hydros.iter().enumerate().map(|(i, h)| (h.id, i)).collect();
-    let thermal_pos: BTreeMap<EntityId, usize> = system
-        .thermals()
-        .iter()
-        .enumerate()
-        .map(|(i, t)| (t.id, i))
-        .collect();
-    let line_pos: BTreeMap<EntityId, usize> = system
-        .lines()
-        .iter()
-        .enumerate()
-        .map(|(i, l)| (l.id, i))
-        .collect();
-    let bus_pos: BTreeMap<EntityId, usize> =
-        buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
-
-    // Iterate the (ID-sorted) station slice in slot order, NOT declaration order,
-    // to uphold the declaration-order bit-determinism rule.
-    let pumping_stations = system.pumping_stations();
-    let pumping_pos: BTreeMap<EntityId, usize> = pumping_stations
-        .iter()
-        .enumerate()
-        .map(|(i, p)| (p.id, i))
-        .collect();
-    let n_pumping = pumping_stations.len();
-    // Fail fast on a station-count divergence rather than silently reserving the
-    // wrong number of pumping-flow columns.
-    debug_assert_eq!(
-        n_pumping,
-        system.bounds().n_pumping(),
-        "pumping_stations.len() ({}) != bounds.n_pumping() ({}): resolved-bounds \
-         station count disagrees with the entity slice",
-        n_pumping,
-        system.bounds().n_pumping()
-    );
-
-    // One id-sorted slice for both directions; the import/export split is derived
-    // here as counts (the dense per-direction column strides) by `contract_type`.
-    let contracts = system.contracts();
-    let contract_pos: BTreeMap<EntityId, usize> = contracts
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.id, i))
-        .collect();
-    let n_contract_import = contracts
-        .iter()
-        .filter(|c| c.contract_type == ContractType::Import)
-        .count();
-    let n_contract_export = contracts
-        .iter()
-        .filter(|c| c.contract_type == ContractType::Export)
-        .count();
-    // Fail fast on a contract-count divergence rather than silently reserving the
-    // wrong number of contract columns.
-    debug_assert_eq!(
-        contracts.len(),
-        system.bounds().n_contracts(),
-        "contracts.len() ({}) != bounds.n_contracts() ({}): resolved-bounds \
-         contract count disagrees with the entity slice",
-        contracts.len(),
-        system.bounds().n_contracts()
-    );
-
-    let load_bus_indices = collect_load_bus_indices(system, &bus_pos, load_scheme);
-
-    // Per anticipated thermal: global index and commissioning window. The window
-    // keys the decision gate's operation-window clause on the delivery stage;
-    // `(None, None)` means active every delivery stage in horizon.
-    let mut anticipated_thermal_indices: Vec<ThermalSys> = Vec::new();
-    let mut anticipated_windows: Vec<(Option<i32>, Option<i32>)> = Vec::new();
-    for (t_idx, thermal) in system.thermals().iter().enumerate() {
-        if thermal.anticipated_config.is_some() {
-            anticipated_thermal_indices.push(ThermalSys::new(t_idx));
-            anticipated_windows.push((thermal.entry_stage_id, thermal.exit_stage_id));
-        }
-    }
-    let n_anticipated = anticipated_thermal_indices.len();
-
-    debug_assert_eq!(anticipated_lead_stages.len(), n_anticipated);
-    let k_max: usize = anticipated_resolution
-        .k_max
-        .max(anticipated_lead_stages.iter().copied().max().unwrap_or(0));
-
-    // Cloned so the map serves both LP construction (ctx) and the simulation
-    // extraction output.
-    let mut diversion_upstream: HashMap<EntityId, Vec<usize>> = HashMap::new();
-    for (h_idx, hydro) in hydros.iter().enumerate() {
-        if let Some(ref div) = hydro.diversion {
-            diversion_upstream
-                .entry(div.downstream_id)
-                .or_default()
-                .push(h_idx);
-        }
-    }
-    let diversion_upstream_output = diversion_upstream.clone();
-
-    // Computed before the per-stage loop so `fill_anticipated_columns` can read the
-    // discount factors and stage hours from the ctx at LP build time (before
-    // postprocess runs).
-    let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
-    let per_stage_discount =
-        compute_per_stage_discount_factors(&study_stages, system.policy_graph());
-    let cumulative_discount_factors = compute_cumulative_discount_factors(&per_stage_discount);
-    let total_hours_per_stage: Vec<f64> = study_stages
-        .iter()
-        .map(|s| s.blocks.iter().map(|b| b.duration_hours).sum())
-        .collect();
-
-    debug_assert_eq!(
-        cumulative_discount_factors.len(),
-        study_stages.len(),
-        "cumulative_discount_factors length must equal n_study_stages"
-    );
-    debug_assert_eq!(
-        total_hours_per_stage.len(),
-        study_stages.len(),
-        "total_hours_per_stage length must equal n_study_stages"
-    );
-
-    // Same canonical anticipated-local order `resolve_state_layout` derives
-    // (`system.thermals()` filtered on `anticipated_config.is_some()`) —
-    // `anticipated_thermal_indices` above is that exact order, so this reads
-    // back through it rather than re-filtering `system.thermals()` a second time.
-    let anticipated_thermal_ids: Vec<EntityId> = anticipated_thermal_indices
-        .iter()
-        .map(|&idx| system.thermals()[idx.get()].id)
-        .collect();
-
-    let post_study_resolved = resolve_post_study_artifacts(
-        system.post_study_stages(),
-        &anticipated_thermal_ids,
-        system.policy_graph(),
-        cumulative_discount_factors.last().copied().unwrap_or(1.0),
-        per_stage_discount.last().copied().unwrap_or(1.0),
-    );
-
-    // Study-stage ids by study stage index: the decision gate keys its
-    // operation-window clause on the DELIVERY stage's `stage.id`, mapping the
-    // delivery index `t + K_i` to its id through this slice.
-    let study_stage_ids: Vec<i32> = study_stages.iter().map(|s| s.id).collect();
-
-    // Concatenate rather than recompute: `resolve_post_study_artifacts` already
-    // establishes that the post-study half continues the study recurrence, so a
-    // second derivation would risk diverging from it.
-    let delivery_total_hours: Vec<f64> = total_hours_per_stage
-        .iter()
-        .copied()
-        .chain(post_study_resolved.total_hours.iter().copied())
-        .collect();
-    let delivery_cumulative_discount_factors: Vec<f64> = cumulative_discount_factors
-        .iter()
-        .copied()
-        .chain(
-            post_study_resolved
-                .cumulative_discount_factors
-                .iter()
-                .copied(),
-        )
-        .collect();
-    // Synthetic continuation from `study_stage_ids.last()` (never
-    // `study_stages.len()` — the `s.id >= 0` filter breaks that relation), never
-    // `post_study_calendar_stages`'s own `Stage::id`: those restart at `0` and
-    // would make a post-study delivery compare as an early study stage.
-    let n_post = post_study_resolved.total_hours.len();
-    let next_delivery_id = study_stage_ids.last().map_or(0, |&last| last + 1);
-    let end_delivery_id =
-        next_delivery_id.saturating_add(i32::try_from(n_post).unwrap_or(i32::MAX));
-    let delivery_stage_ids: Vec<i32> = study_stage_ids
-        .iter()
-        .copied()
-        .chain(next_delivery_id..end_delivery_id)
-        .collect();
-
-    let n_delivery = study_stage_ids.len() + n_post;
-    debug_assert_eq!(
-        delivery_total_hours.len(),
-        n_delivery,
-        "delivery_total_hours length must equal n_study_stages + n_post"
-    );
-    debug_assert_eq!(
-        delivery_cumulative_discount_factors.len(),
-        n_delivery,
-        "delivery_cumulative_discount_factors length must equal n_study_stages + n_post"
-    );
-    debug_assert_eq!(
-        delivery_stage_ids.len(),
-        n_delivery,
-        "delivery_stage_ids length must equal n_study_stages + n_post"
-    );
-    debug_assert!(
-        delivery_stage_ids.windows(2).all(|w| w[0] < w[1]),
-        "delivery_stage_ids must be strictly increasing — commissioning_active's \
-         monotonicity depends on it"
-    );
-
-    let stage_resolver = StageIdResolver::from_study_stage_ids(&study_stage_ids);
-
-    let filling_v_target = build_filling_v_target(
-        hydros,
-        system.bounds(),
-        &total_hours_per_stage,
-        stage_resolver.index_map(),
-    );
-
-    let ctx = TemplateBuildCtx {
-        hydros,
+    state: &'a StateSpace,
+    topology: &'a TransitBucketTopology,
+    inputs: &'a LpBuildInputs<'a>,
+) -> TemplateBuildCtx<'a> {
+    TemplateBuildCtx {
+        hydros: system.hydros(),
         thermals: system.thermals(),
         lines: system.lines(),
-        buses,
-        load_models,
+        buses: system.buses(),
+        load_models: &inputs.deterministic_load_models,
         cascade: system.cascade(),
-        hydro_cell_index,
+        hydro_cell_index: inputs.hydro_cell_index,
         resolved: ResolvedTables {
             bounds: system.bounds(),
             penalties: system.penalties(),
@@ -1190,143 +398,58 @@ fn build_template_build_ctx<'a>(
             resolved_load_factors: system.resolved_load_factors(),
             resolved_ncs_bounds: system.resolved_ncs_bounds(),
             resolved_ncs_factors: system.resolved_ncs_factors(),
-            resolved_parameters,
+            resolved_parameters: inputs.resolved_parameters,
         },
-        hydro_pos,
-        thermal_pos,
-        line_pos,
-        bus_pos,
+        positions: &inputs.positions,
         par_lp,
         production_models,
         evaporation_models,
         generic_constraints: system.generic_constraints(),
         non_controllable_sources: system.non_controllable_sources(),
-        pumping_stations,
-        pumping_pos,
-        n_pumping,
-        contracts,
-        contract_pos,
-        n_contract_import,
-        n_contract_export,
-        diversion_upstream,
-        n_hydros,
-        n_thermals: system.thermals().len(),
-        n_lines: system.lines().len(),
-        n_buses: buses.len(),
-        max_par_order,
-        n_anticipated,
-        k_max,
-        anticipated_lead_stages,
-        anticipated_thermal_indices,
-        anticipated_windows,
-        anticipated_resolution,
-        study_stage_ids,
-        delivery_stage_ids,
-        has_penalty: n_hydros > 0 && inflow_method.has_slack_columns(),
-        delivery_cumulative_discount_factors,
-        delivery_total_hours,
-        filling_v_target,
-        arc_stage_weights,
-        arc_spread_chrono,
-        arc_arrival_density,
-        per_stage_mask,
-        post_study_resolved,
-    };
-
-    (ctx, load_bus_indices, diversion_upstream_output)
+        pumping_stations: system.pumping_stations(),
+        contracts: system.contracts(),
+        diversion_upstream: &inputs.diversion_upstream,
+        state,
+        study_dims: inputs.study_dims,
+        time_value: inputs.time_value,
+        filling_v_target: &inputs.filling_v_target,
+        topology,
+    }
 }
 
 /// Transpose the per-stage `Vec<StageBuildOutput>` into the parallel per-stage
-/// `Vec`s of [`StageTemplates`], computing the noise-scale, zeta, block-hour,
-/// hydro-productivity, and discount arrays.
-// Rationale: the args have distinct lifetimes and ownership (some borrowed, some
-// owned), so bundling them into one struct would buy nothing on this single-call
-// cold path while obscuring the transpose inputs.
-#[allow(clippy::too_many_arguments)]
+/// `Vec`s of [`StageTemplates`], moving in the resolved load-bus indices,
+/// diversion map, and hydro productivities.
 fn assemble_stage_templates_output(
     stage_outputs: Vec<StageBuildOutput>,
     load_bus_indices: Vec<usize>,
-    diversion_upstream_output: HashMap<EntityId, Vec<usize>>,
+    diversion_upstream: HashMap<EntityId, Vec<usize>>,
+    hydro_productivities_per_stage: Vec<Vec<f64>>,
     study_stages: &[&Stage],
-    ctx: &TemplateBuildCtx<'_>,
-    par_lp: &PrecomputedPar,
-    n_hydros: usize,
-    n_load_buses: usize,
-    n_study: usize,
+    cost_scale_factor: f64,
 ) -> StageTemplates {
-    // Index `s` of every parallel Vec must refer to the same stage, so preserve the
-    // per-stage push order.
+    let n_study = stage_outputs.len();
     let mut templates = Vec::with_capacity(n_study);
-    let mut base_rows = Vec::with_capacity(n_study);
-    let mut load_balance_row_starts = Vec::with_capacity(n_study);
     let mut generic_constraint_row_entries = Vec::with_capacity(n_study);
-    let mut ncs_col_starts = Vec::with_capacity(n_study);
-    let mut pumping_col_starts = Vec::with_capacity(n_study);
     let mut geometry_per_stage = Vec::with_capacity(n_study);
-    // The dense NCS/pumping counts are constant across stages, so they collapse to
-    // scalars (column STARTS stay per-stage, riding `n_blks`): the first output
-    // seeds the scalars, later outputs must agree.
-    let mut n_ncs: usize = 0;
-    let mut n_pumping: usize = 0;
-    for (s, out) in stage_outputs.into_iter().enumerate() {
+    for out in stage_outputs {
         templates.push(out.template);
-        base_rows.push(out.stage_base_row);
-        load_balance_row_starts.push(out.load_balance_row_start);
         generic_constraint_row_entries.push(out.gc_entries);
-        ncs_col_starts.push(out.ncs_col_start);
-        pumping_col_starts.push(out.pumping_col_start);
-        if s == 0 {
-            n_ncs = out.ncs_count;
-            n_pumping = out.n_pumping;
-        } else {
-            debug_assert_eq!(
-                out.ncs_count, n_ncs,
-                "dense NCS count must be constant across stages",
-            );
-            debug_assert_eq!(
-                out.n_pumping, n_pumping,
-                "dense pumping count must be constant across stages",
-            );
-        }
         geometry_per_stage.push(out.equipment_geometry);
     }
 
-    let (noise_scale, zeta_per_stage, block_hours_per_stage) =
-        scaling::compute_noise_scale(study_stages, ctx.hydros, n_hydros, par_lp);
-
-    let hydro_productivities_per_stage: Vec<Vec<f64>> = (0..n_study)
-        .map(|s| {
-            (0..n_hydros)
-                .map(|h| match ctx.production_models.model(h, s) {
-                    ResolvedProductionModel::ConstantProductivity { productivity } => *productivity,
-                    ResolvedProductionModel::Fpha { .. } => 0.0,
-                })
-                .collect()
-        })
-        .collect();
+    let block_hours_per_stage = scaling::compute_stage_hours(study_stages);
 
     StageTemplates {
         templates,
         state_boxes: Vec::new(),
-        base_rows,
-        noise_scale,
-        zeta_per_stage,
         block_hours_per_stage,
-        n_hydros,
-        cost_scale_factor: ctx.resolved.resolved_parameters.cost_scale_factor,
-        load_balance_row_starts,
-        n_load_buses,
+        cost_scale_factor,
         load_bus_indices,
         generic_constraint_row_entries,
-        ncs_col_starts,
-        n_ncs,
-        pumping_col_starts,
-        n_pumping,
         geometry_per_stage,
-        diversion_upstream: diversion_upstream_output,
+        diversion_upstream,
         hydro_productivities_per_stage,
-        discount_factors: vec![1.0; n_study],
-        cumulative_discount_factors: vec![1.0; n_study],
     }
 }
 

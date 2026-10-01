@@ -9,11 +9,10 @@ use cobre_solver::SolverInterface;
 use cobre_stochastic::par::lag_kernel::{LagMajor, advance_lag_chain};
 use cobre_stochastic::{StochasticContext, evaluate_par_batch, solve_par_noise_batch};
 
-use crate::indexer::StateSpace;
+use crate::indexer::{BlockIdx, NcsSys, StateSpace};
+use crate::lp::builder::StageGeometry;
 use crate::{
-    InflowNonNegativityMethod,
-    context::{StageContext, TrainingContext},
-    setup::node_graph::StageIdx,
+    InflowNonNegativityMethod, context::TrainingContext, setup::node_graph::StageIdx,
     workspace::ScratchBuffers,
 };
 
@@ -23,21 +22,21 @@ use crate::{
 /// hydro's eta is raised to `eta_floor` (the value producing zero inflow);
 /// other methods pass raw eta through.
 pub(crate) fn compute_effective_eta(
-    raw_noise: &[f64],
-    n_hydros: usize,
+    hydro_noise: &[f64],
     inflow_method: InflowNonNegativityMethod,
     par_inflows: &[f64],
     eta_floor: &[f64],
     effective_eta: &mut Vec<f64>,
 ) {
     effective_eta.clear();
+    let n_hydros = hydro_noise.len();
 
     match inflow_method {
         InflowNonNegativityMethod::Truncation
         | InflowNonNegativityMethod::TruncationWithPenalty => {
             let has_negative = par_inflows.iter().take(n_hydros).any(|&a| a < 0.0);
             for h in 0..n_hydros {
-                let eta = raw_noise[h];
+                let eta = hydro_noise[h];
                 let clamped = if has_negative && par_inflows[h] < 0.0 {
                     eta.max(eta_floor[h])
                 } else {
@@ -47,84 +46,62 @@ pub(crate) fn compute_effective_eta(
             }
         }
         InflowNonNegativityMethod::None | InflowNonNegativityMethod::Penalty => {
-            effective_eta.extend_from_slice(&raw_noise[..n_hydros]);
+            effective_eta.extend_from_slice(hydro_noise);
         }
     }
 }
 
-/// Returns `true` when `stochastic`'s PAR model is configured and matches
-/// `n_hydros` — the shared guard for the water-balance patch.
+/// Returns `true` when `stochastic` carries a PAR model — the shared guard
+/// for the water-balance patch. Its shape is validated once at setup
+/// (`validate_par_shape`); every reader here checks presence only.
 #[inline]
-pub(crate) fn has_par_model(stochastic: &StochasticContext, n_hydros: usize) -> bool {
-    let par_lp = stochastic.par();
-    par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros
+pub(crate) fn has_par_model(stochastic: &StochasticContext) -> bool {
+    stochastic.par().n_stages() > 0
 }
 
-/// Transform raw inflow noise `η` into patched water-balance RHS values,
-/// applying [`compute_effective_eta`] clamping under truncation.
-pub(crate) fn transform_inflow_noise(
-    raw_noise: &[f64],
-    stage: StageIdx,
-    current_state: &[f64],
-    ctx: &StageContext<'_>,
-    training_ctx: &TrainingContext<'_>,
-    scratch: &mut ScratchBuffers,
-) {
-    compute_water_balance_rhs(raw_noise, stage, current_state, ctx, training_ctx, scratch);
-}
-
-/// Compute the water-balance RHS (`noise_buf`) and the pure z-inflow anchor
-/// rate (`z_inflow_rhs_buf`) for one stage.
+/// Transform raw inflow noise `η` into the pure z-inflow anchor rate
+/// (`z_inflow_rhs_buf`), applying [`compute_effective_eta`] clamping under
+/// truncation.
 // Rationale: clippy::similar_names flags the role-(a) `state` handle (bound from
 // `training_ctx.state`) next to the `stage` index; both are established names, so
 // renaming either to satisfy the heuristic would obscure intent.
 #[allow(clippy::similar_names)]
-pub(crate) fn compute_water_balance_rhs(
+pub(crate) fn transform_inflow_noise(
     raw_noise: &[f64],
     stage: StageIdx,
     current_state: &[f64],
-    ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
     scratch: &mut ScratchBuffers,
 ) {
-    let n_hydros = ctx.n_hydros;
-    let stage_offset = stage.0 * n_hydros;
-    let base_row = ctx.base_row(stage);
-    let template_row_lower = &ctx.template(stage).row_lower;
-    let noise_scale = ctx.noise_scale;
     let inflow_method = training_ctx.inflow_method;
     let stochastic = training_ctx.stochastic;
+    let dims = stochastic.class_dimensions();
+    let n_hydros = dims.n_hydros;
+    let hydro_noise = &raw_noise[dims.hydro_range()];
     let state = training_ctx.state;
 
-    scratch.noise_buf.clear();
     scratch.z_inflow_rhs_buf.clear();
 
     let par_lp = stochastic.par();
-    let has_par = has_par_model(stochastic, n_hydros);
+    let has_par = has_par_model(stochastic);
 
     match inflow_method {
         InflowNonNegativityMethod::Truncation
         | InflowNonNegativityMethod::TruncationWithPenalty => {
             let max_order = state.max_par_order;
-            let lag_len = max_order * n_hydros;
             scratch.lag_matrix_buf.clear();
-            scratch.lag_matrix_buf.resize(lag_len, 0.0);
-            for h in 0..n_hydros {
-                for l in 0..max_order {
-                    scratch.lag_matrix_buf[l * n_hydros + h] =
-                        current_state[state.inflow_lags.start + l * n_hydros + h];
-                }
-            }
+            scratch
+                .lag_matrix_buf
+                .extend_from_slice(&current_state[state.inflow_lags.clone()]);
+            debug_assert_eq!(scratch.lag_matrix_buf.len(), max_order * n_hydros);
 
             scratch.par_inflow_buf.clear();
             scratch.par_inflow_buf.resize(n_hydros, 0.0);
-            // raw_noise is [hydros | load | NCS]; slice the hydro prefix —
-            // evaluate_par_batch expects the n_hydros PAR series only.
             evaluate_par_batch(
                 par_lp,
                 stage.0,
                 &scratch.lag_matrix_buf,
-                &raw_noise[..n_hydros],
+                hydro_noise,
                 &mut scratch.par_inflow_buf,
             );
 
@@ -146,8 +123,7 @@ pub(crate) fn compute_water_balance_rhs(
     }
 
     compute_effective_eta(
-        raw_noise,
-        n_hydros,
+        hydro_noise,
         *inflow_method,
         &scratch.par_inflow_buf,
         &scratch.eta_floor_buf,
@@ -155,12 +131,7 @@ pub(crate) fn compute_water_balance_rhs(
     );
 
     for (h, &eta_eff) in scratch.effective_eta_buf.iter().enumerate() {
-        let base_rhs = template_row_lower[base_row + h];
-        scratch
-            .noise_buf
-            .push(base_rhs + noise_scale[stage_offset + h] * eta_eff);
-
-        // Z-inflow RHS in m3/s: no zeta, no withdrawal (unlike the water-balance RHS above).
+        // Z-inflow RHS in m3/s: no zeta, no withdrawal.
         if has_par {
             let base = par_lp.deterministic_base(stage.0, h);
             let sigma = par_lp.sigma(stage.0, h);
@@ -208,7 +179,7 @@ pub(crate) use cobre_stochastic::par::lag_kernel::PrimaryLagAccum as LagAccumSta
 ///
 /// For the monthly identity case (`accumulate_weight=1.0, spillover_weight=0.0,
 /// finalize_period=true`) this produces bit-for-bit identical results to
-/// [`shift_lag_state`].
+/// the test-only `shift_lag_state`.
 ///
 /// Thin adapter: resolves the LP-`StateSpace` offsets into plain slices, then
 /// delegates the accumulate/finalize/shift/downstream-ring algorithm to
@@ -241,7 +212,6 @@ pub(crate) fn accumulate_and_shift_lag_state(
     let lag_start = layout.inflow_lags.start;
     let n_h = layout.hydro_count;
     let l_max = layout.max_par_order;
-    let z_start = layout.z_inflow.start;
 
     // LagMajor::index treats offset 0 as this call's lag block, not the state
     // vector's absolute start — slicing from `lag_start` keeps every kernel
@@ -254,7 +224,7 @@ pub(crate) fn accumulate_and_shift_lag_state(
         },
         &mut state[lag_start..],
         incoming_lags,
-        &unscaled_primal[z_start..z_start + n_h],
+        &unscaled_primal[layout.z_inflow.clone()],
         stage_lag,
         lag,
         ds,
@@ -332,20 +302,18 @@ impl AccumSnapshot {
 /// load bus and block, clamped at zero so load demand is never negative.
 pub(crate) fn transform_load_noise(
     raw_noise: &[f64],
-    n_hydros: usize,
-    n_load_buses: usize,
     stochastic: &StochasticContext,
     stage: StageIdx,
     block_count: usize,
     load_rhs_buf: &mut Vec<f64>,
 ) {
+    let dims = stochastic.class_dimensions();
     load_rhs_buf.clear();
-    if n_load_buses == 0 {
+    if dims.n_load_buses == 0 {
         return;
     }
     let load_lp = stochastic.normal();
-    for lb_idx in 0..n_load_buses {
-        let eta = raw_noise[n_hydros + lb_idx];
+    for (lb_idx, &eta) in raw_noise[dims.load_bus_range()].iter().enumerate() {
         let mean = load_lp.mean(stage.0, lb_idx);
         let std = load_lp.std(stage.0, lb_idx);
         let realization = (mean + std * eta).max(0.0);
@@ -354,15 +322,6 @@ pub(crate) fn transform_load_noise(
             load_rhs_buf.push(realization * factor);
         }
     }
-}
-
-/// Offsets locating the NCS slice in the raw noise vector, laid out as
-/// `[hydro noise | load noise | NCS noise]`.
-pub(crate) struct NcsNoiseOffsets {
-    /// Number of hydro entries that precede the load slice.
-    pub n_hydros: usize,
-    /// Number of load-bus entries that precede the NCS slice.
-    pub n_load_buses: usize,
 }
 
 /// Transform raw NCS noise into per-block column lower/upper bounds.
@@ -375,8 +334,7 @@ pub(crate) struct NcsNoiseOffsets {
 /// With `allow_curtailment == false` the lower bound equals the upper bound, so
 /// the source must run at exactly the realized availability (aggregate
 /// generation pre-netted from load); with `true` the lower bound is zero and the
-/// LP may curtail. The NCS slice within the raw-noise vector is located via
-/// [`NcsNoiseOffsets`].
+/// LP may curtail.
 ///
 /// # Panics
 ///
@@ -385,7 +343,6 @@ pub(crate) struct NcsNoiseOffsets {
 /// `stochastic.n_stochastic_ncs()`.
 pub(crate) fn transform_ncs_noise(
     raw_noise: &[f64],
-    offsets: &NcsNoiseOffsets,
     stochastic: &StochasticContext,
     stage: StageIdx,
     block_count: usize,
@@ -394,10 +351,10 @@ pub(crate) fn transform_ncs_noise(
     ncs_col_lower_buf: &mut Vec<f64>,
     ncs_col_upper_buf: &mut Vec<f64>,
 ) {
-    let n_stochastic_ncs = stochastic.n_stochastic_ncs();
+    let dims = stochastic.class_dimensions();
     ncs_col_upper_buf.clear();
     ncs_col_lower_buf.clear();
-    if n_stochastic_ncs == 0 {
+    if dims.n_ncs == 0 {
         return;
     }
     debug_assert_eq!(
@@ -406,9 +363,7 @@ pub(crate) fn transform_ncs_noise(
         "ncs_allow_curtailment and ncs_max_gen must have matching length",
     );
     let ncs_lp = stochastic.ncs_normal();
-    let ncs_noise_start = offsets.n_hydros + offsets.n_load_buses;
-    for ncs_idx in 0..n_stochastic_ncs {
-        let eta = raw_noise[ncs_noise_start + ncs_idx];
+    for (ncs_idx, &eta) in raw_noise[dims.ncs_range()].iter().enumerate() {
         let mean = ncs_lp.mean(stage.0, ncs_idx);
         let std = ncs_lp.std(stage.0, ncs_idx);
         let max_gen = ncs_max_gen[ncs_idx];
@@ -431,18 +386,17 @@ pub(crate) fn transform_ncs_noise(
 /// block is system-indexed, so striding by slot misaddresses the column whenever
 /// only a subset of NCS are stochastic or their orders diverge.
 ///
-/// Callers rebuild lazily on a stage transition, when the per-stage NCS column
-/// start changes.
+/// Callers rebuild lazily on a stage transition, when the stage's own
+/// `geometry.ncs_generation` range changes.
 pub(crate) fn build_dense_ncs_col_indices(
     dense_col: &[usize],
-    ncs_col_start: usize,
-    block_count: usize,
+    geometry: &StageGeometry,
     indices_out: &mut Vec<usize>,
 ) {
     indices_out.clear();
     for &col in dense_col {
-        for blk in 0..block_count {
-            indices_out.push(ncs_col_start + col * block_count + blk);
+        for blk in 0..geometry.n_blks {
+            indices_out.push(geometry.ncs_generation_col(NcsSys::new(col), BlockIdx::new(blk)));
         }
     }
 }
@@ -501,39 +455,33 @@ pub(crate) fn gather_dense_ncs_bounds(
 ///
 /// `scratch.ncs_col_lower_buf`/`ncs_col_upper_buf` must already hold this
 /// solve's bounds (full stochastic-slot order) via a preceding
-/// [`transform_ncs_noise`] call. `ncs_col_start` is this stage's own NCS base
-/// column, never a single global stage-0 base — per-stage block counts make
-/// stage bases diverge. [`gather_dense_ncs_bounds`] forces `[0, 0]` for a slot
-/// dormant at this stage — the "patch NCS identically" contract shared by
-/// every solve site (D15: a divergence understates the bound).
+/// [`transform_ncs_noise`] call. `geometry` is this stage's own equipment
+/// geometry, never a single global stage-0 geometry — per-stage block counts
+/// make stage NCS bases diverge. [`gather_dense_ncs_bounds`] forces `[0, 0]`
+/// for a slot dormant at this stage — the "patch NCS identically" contract
+/// shared by every solve site (D15: a divergence understates the bound).
 pub(crate) fn apply_ncs_col_bounds<S: SolverInterface>(
     solver: &mut S,
     scratch: &mut ScratchBuffers,
-    ncs_col_start: usize,
+    geometry: &StageGeometry,
     dense_col: &[usize],
     windows: &[(Option<i32>, Option<i32>)],
     stage_id: i32,
-    n_blks: usize,
 ) {
-    let expected_len = dense_col.len() * n_blks;
-    // Rebuild on `ncs_col_start` change, not length alone: two stages can share a
-    // length yet address different columns, so keying on length would set bounds
-    // on the previous stage's columns.
-    if scratch.last_ncs_col_start != ncs_col_start
+    let expected_len = dense_col.len() * geometry.n_blks;
+    // Rebuild on the geometry's NCS start changing, not length alone: two stages
+    // can share a length yet address different columns, so keying on length
+    // would set bounds on the previous stage's columns.
+    if scratch.last_ncs_col_start != geometry.ncs_generation.start
         || scratch.ncs_col_indices_buf.len() != expected_len
     {
-        build_dense_ncs_col_indices(
-            dense_col,
-            ncs_col_start,
-            n_blks,
-            &mut scratch.ncs_col_indices_buf,
-        );
-        scratch.last_ncs_col_start = ncs_col_start;
+        build_dense_ncs_col_indices(dense_col, geometry, &mut scratch.ncs_col_indices_buf);
+        scratch.last_ncs_col_start = geometry.ncs_generation.start;
     }
     gather_dense_ncs_bounds(
         windows,
         stage_id,
-        n_blks,
+        geometry.n_blks,
         &scratch.ncs_col_lower_buf,
         &scratch.ncs_col_upper_buf,
         &mut scratch.ncs_col_lower_active_buf,
@@ -580,14 +528,15 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::{
-        context::{StageContext, TrainingContext},
+        context::TrainingContext,
         horizon_mode::HorizonMode,
         indexer::StateSpace,
         inflow_method::InflowNonNegativityMethod,
+        lp::builder::StageGeometry,
         noise::{
-            NcsNoiseOffsets, apply_ncs_col_bounds, build_dense_ncs_col_indices,
-            compute_effective_eta, gather_dense_ncs_bounds, shift_lag_state,
-            transform_inflow_noise, transform_load_noise, transform_ncs_noise,
+            apply_ncs_col_bounds, build_dense_ncs_col_indices, compute_effective_eta,
+            gather_dense_ncs_bounds, shift_lag_state, transform_inflow_noise, transform_load_noise,
+            transform_ncs_noise,
         },
         setup::node_graph::StageIdx,
         test_support,
@@ -644,38 +593,9 @@ mod tests {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    /// Build a minimal `StageTemplate` with just `row_lower` populated.
-    ///
-    /// Only `row_lower` is accessed by `transform_inflow_noise`.  All other
-    /// fields are set to their zero/empty defaults.
-    fn make_minimal_template(row_lower: Vec<f64>) -> StageTemplate {
-        let n = row_lower.len();
-        StageTemplate {
-            num_cols: 0,
-            num_rows: n,
-            num_nz: 0,
-            col_starts: vec![0_i32],
-            row_indices: vec![],
-            values: vec![],
-            col_lower: vec![],
-            col_upper: vec![],
-            objective: vec![],
-            row_lower,
-            row_upper: vec![0.0; n],
-            n_transfer: 0,
-            n_dual_relevant: 0,
-            n_hydro: 0,
-            max_par_order: 0,
-            col_scale: Vec::new(),
-            row_scale: Vec::new(),
-            n_state: 0,
-        }
-    }
-
     /// Build a `ScratchBuffers` with the given pre-filled `zero_targets_buf`.
     fn make_scratch(n_hydros: usize) -> ScratchBuffers {
         ScratchBuffers {
-            noise_buf: Vec::with_capacity(n_hydros),
             inflow_m3s_buf: Vec::new(),
             lag_matrix_buf: Vec::new(),
             par_inflow_buf: Vec::new(),
@@ -1019,42 +939,11 @@ mod tests {
         let state = test_support::state_layout(1, 0);
         let current_state = vec![0.0; layout.n_state];
 
-        // noise_scale[0] = 1.0, base_rhs = 5.0, eta = -3.0
-        // expected: 5.0 + 1.0 * (-3.0) = 2.0
+        // sigma = 1.0, base = 0.0 (the fixture's AR(0) white-noise model), eta = -3.0
+        // expected z_inflow_rhs: 0.0 + 1.0 * (-3.0) = -3.0
         let raw_noise = vec![-3.0_f64];
-        let noise_scale = vec![1.0_f64];
-        // Template with row_lower = [0.0, 5.0]; base_row = 1.
-        let template = make_minimal_template(vec![0.0, 5.0]);
-        let templates = vec![template];
-        let base_rows = vec![1_usize];
         let inflow_method = InflowNonNegativityMethod::None;
         let horizon = HorizonMode::Finite { num_stages: 1 };
-        let ctx = StageContext {
-            state_boxes: &[],
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1083,13 +972,12 @@ mod tests {
             &raw_noise,
             StageIdx(0),
             &current_state,
-            &ctx,
             &training_ctx,
             &mut scratch,
         );
 
-        assert_eq!(scratch.noise_buf.len(), 1);
-        assert!((scratch.noise_buf[0] - 2.0).abs() < 1e-12);
+        assert_eq!(scratch.z_inflow_rhs_buf.len(), 1);
+        assert!((scratch.z_inflow_rhs_buf[0] - (-3.0)).abs() < 1e-12);
     }
 
     // ── transform_inflow_noise: Truncation ───────────────────────────────────
@@ -1108,39 +996,8 @@ mod tests {
 
         // Very negative eta guarantees negative inflow (AR(0) with sigma=1).
         let raw_noise = vec![-5.0_f64];
-        let noise_scale = vec![1.0_f64];
-        // Template with row_lower = [0.0]; base_row = 0.
-        let template = make_minimal_template(vec![0.0]);
-        let templates = vec![template];
-        let base_rows = vec![0_usize];
         let inflow_method = InflowNonNegativityMethod::Truncation;
         let horizon = HorizonMode::Finite { num_stages: 1 };
-        let ctx = StageContext {
-            state_boxes: &[],
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1169,18 +1026,17 @@ mod tests {
             &raw_noise,
             StageIdx(0),
             &current_state,
-            &ctx,
             &training_ctx,
             &mut scratch,
         );
 
-        assert_eq!(scratch.noise_buf.len(), 1);
-        // The patched RHS = base_rhs + noise_scale * clamped_eta.
-        // After clamping, the inflow contribution must be >= 0: RHS >= base_rhs = 0.
+        assert_eq!(scratch.z_inflow_rhs_buf.len(), 1);
+        // z_inflow_rhs = base + sigma * clamped_eta = the realized inflow (m3/s).
+        // After clamping, the realized inflow must be >= 0.
         assert!(
-            scratch.noise_buf[0] >= -1e-10,
-            "truncation must yield non-negative RHS, got {}",
-            scratch.noise_buf[0]
+            scratch.z_inflow_rhs_buf[0] >= -1e-10,
+            "truncation must yield non-negative realized inflow, got {}",
+            scratch.z_inflow_rhs_buf[0]
         );
     }
 
@@ -1194,39 +1050,8 @@ mod tests {
 
         // eta = 3.0 → inflow = 1.0 * 3.0 = 3.0 > 0 → no clamping.
         let raw_noise = vec![3.0_f64];
-        let noise_scale = vec![2.0_f64];
-        // Template with row_lower = [5.0]; base_row = 0.
-        let template = make_minimal_template(vec![5.0]);
-        let templates = vec![template];
-        let base_rows = vec![0_usize];
         let inflow_method = InflowNonNegativityMethod::Truncation;
         let horizon = HorizonMode::Finite { num_stages: 1 };
-        let ctx = StageContext {
-            state_boxes: &[],
-            geometry_per_stage: &[],
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
-            n_hydros: 1,
-            cost_scale_factor: 1_000_000.0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1],
-            ncs_col_starts: &[],
-            n_ncs: 0,
-            ncs_stochastic_dense_col: &[],
-            ncs_stochastic_windows: &[],
-            anticipated_windows: &[],
-            study_stage_ids: &[],
-            ncs_max_gen: &[],
-            ncs_allow_curtailment: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
         let study_dims = test_support::study_dims();
         let training_ctx = TrainingContext {
             node_graph: &crate::test_support::chain_node_graph(&stochastic),
@@ -1255,17 +1080,16 @@ mod tests {
             &raw_noise,
             StageIdx(0),
             &current_state,
-            &ctx,
             &training_ctx,
             &mut scratch,
         );
 
-        assert_eq!(scratch.noise_buf.len(), 1);
-        // Expected: 5.0 + 2.0 * 3.0 = 11.0 (no clamping).
+        assert_eq!(scratch.z_inflow_rhs_buf.len(), 1);
+        // Expected z_inflow_rhs: 0.0 + 1.0 * 3.0 = 3.0 (no clamping).
         assert!(
-            (scratch.noise_buf[0] - 11.0).abs() < 1e-12,
-            "expected 11.0, got {}",
-            scratch.noise_buf[0]
+            (scratch.z_inflow_rhs_buf[0] - 3.0).abs() < 1e-12,
+            "expected 3.0, got {}",
+            scratch.z_inflow_rhs_buf[0]
         );
     }
 
@@ -1286,15 +1110,7 @@ mod tests {
         let raw_noise = vec![0.0_f64, 0.0_f64]; // [hydro_eta, load_eta]
         let mut load_rhs_buf = Vec::new();
 
-        transform_load_noise(
-            &raw_noise,
-            1,
-            1,
-            &stochastic,
-            StageIdx(0),
-            1,
-            &mut load_rhs_buf,
-        );
+        transform_load_noise(&raw_noise, &stochastic, StageIdx(0), 1, &mut load_rhs_buf);
 
         assert_eq!(load_rhs_buf.len(), 1);
         // The block_factor for a single Parallel block is the block duration
@@ -1320,15 +1136,7 @@ mod tests {
         let raw_noise = vec![0.0_f64, -10.0_f64];
         let mut load_rhs_buf = Vec::new();
 
-        transform_load_noise(
-            &raw_noise,
-            1,
-            1,
-            &stochastic,
-            StageIdx(0),
-            1,
-            &mut load_rhs_buf,
-        );
+        transform_load_noise(&raw_noise, &stochastic, StageIdx(0), 1, &mut load_rhs_buf);
 
         assert_eq!(load_rhs_buf.len(), 1);
         assert!(
@@ -1342,7 +1150,7 @@ mod tests {
 
     #[test]
     fn shift_lag_state_par0_is_noop() {
-        let _indexer = test_support::geom(2, 0);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(2, 0);
         let mut state = vec![100.0, 200.0]; // storage only, no lags
         let incoming_lags: Vec<f64> = vec![];
@@ -1358,7 +1166,7 @@ mod tests {
     #[test]
     fn shift_lag_state_par1_single_hydro() {
         // N=1, L=1: state = [v_out, lag0], inflow_lags.start = 1
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let mut state = vec![500.0, 99.0]; // v_out, stale lag
         let incoming_lags = vec![42.0]; // lag0 (lag-major: lag * n_h + h = 0*1+0 = 0)
@@ -1372,7 +1180,7 @@ mod tests {
     #[test]
     fn shift_lag_state_par3_single_hydro() {
         // N=1, L=3: state = [v_out, lag0, lag1, lag2]
-        let _indexer = test_support::geom(1, 3);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 3);
         let mut state = vec![500.0, 0.0, 0.0, 0.0];
         // incoming_lags in lag-major: [lag0, lag1, lag2] = [10.0, 20.0, 30.0]
@@ -1390,7 +1198,7 @@ mod tests {
     fn shift_lag_state_par1_two_hydros() {
         // N=2, L=1: state = [v0, v1, lag0_h0, lag0_h1]
         // inflow_lags.start = 2, lag-major: lag0 * 2 + 0 = 0, lag0 * 2 + 1 = 1
-        let _indexer = test_support::geom(2, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(2, 1);
         let mut state = vec![100.0, 200.0, 0.0, 0.0];
         let incoming_lags = vec![10.0, 20.0]; // lag0_h0=10, lag0_h1=20
@@ -1405,7 +1213,7 @@ mod tests {
     #[test]
     fn shift_lag_state_preserves_storage() {
         // Verify storage portion [0..N] is unchanged after shift.
-        let _indexer = test_support::geom(2, 2);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(2, 2);
         let mut state = vec![100.0, 200.0, 0.0, 0.0, 0.0, 0.0];
         let incoming_lags = vec![1.0, 2.0, 3.0, 4.0];
@@ -1427,7 +1235,6 @@ mod tests {
         let mut effective = Vec::new();
         compute_effective_eta(
             &raw_noise,
-            2,
             InflowNonNegativityMethod::None,
             &par_inflows,
             &eta_floor,
@@ -1444,7 +1251,6 @@ mod tests {
         let mut effective = Vec::new();
         compute_effective_eta(
             &raw_noise,
-            2,
             InflowNonNegativityMethod::Penalty,
             &par_inflows,
             &eta_floor,
@@ -1462,7 +1268,6 @@ mod tests {
         let mut effective = Vec::new();
         compute_effective_eta(
             &raw_noise,
-            2,
             InflowNonNegativityMethod::Truncation,
             &par_inflows,
             &eta_floor,
@@ -1482,7 +1287,6 @@ mod tests {
         let mut effective = Vec::new();
         compute_effective_eta(
             &raw_noise,
-            2,
             InflowNonNegativityMethod::Truncation,
             &par_inflows,
             &eta_floor,
@@ -1500,7 +1304,6 @@ mod tests {
         let mut effective = Vec::new();
         compute_effective_eta(
             &raw_noise,
-            2,
             InflowNonNegativityMethod::TruncationWithPenalty,
             &par_inflows,
             &eta_floor,
@@ -1564,7 +1367,7 @@ mod tests {
     #[test]
     fn test_accumulate_monthly_identity() {
         // N=1 hydro, L=1 lag order.
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
 
         // Reference: shift_lag_state result.
@@ -1616,7 +1419,7 @@ mod tests {
     /// average: (500 + 480 + 520 + 510) / 4 = 502.5.
     #[test]
     fn test_accumulate_four_weeks_then_finalize() {
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let mut state = vec![500.0, 0.0]; // storage, lag0
         let incoming_lags = vec![0.0]; // lag-major: lag0 for hydro 0
@@ -1677,7 +1480,7 @@ mod tests {
     /// Spillover seeds the next lag period with raw `z_inflow` * `spillover_weight`.
     #[test]
     fn test_accumulate_spillover_seeds_next_period() {
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let mut state = vec![0.0, 0.0];
         let incoming_lags = vec![0.0];
@@ -1735,7 +1538,7 @@ mod tests {
     /// `max_par_order == 0`: function must return immediately, nothing modified.
     #[test]
     fn test_accumulate_noop_for_par0() {
-        let _indexer = test_support::geom(2, 0); // no lag order
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0); // no lag order
         let layout = test_support::state_layout(2, 0);
         let mut state = vec![100.0, 200.0];
         let incoming_lags: Vec<f64> = vec![];
@@ -1780,7 +1583,7 @@ mod tests {
     #[test]
     fn test_accumulate_preserves_storage() {
         // N=2 hydros, L=2 lag order: state = [v0, v1, lag0_h0, lag0_h1, lag1_h0, lag1_h1]
-        let _indexer = test_support::geom(2, 2);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(2, 2);
         let mut state = vec![100.0, 200.0, 0.0, 0.0, 0.0, 0.0];
         let incoming_lags = vec![1.0, 2.0, 3.0, 4.0]; // lag-major: lag0 h0,h1; lag1 h0,h1
@@ -1882,7 +1685,7 @@ mod tests {
     #[test]
     fn test_downstream_par1_accumulation_and_rebuild() {
         // N=1 hydro, L=1 lag (primary monthly PAR(1) order).
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let lag_start = layout.inflow_lags.start;
 
@@ -1978,7 +1781,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn test_downstream_par2_two_quarters() {
-        let _indexer = test_support::geom(1, 2); // L=2 lag order
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0); // L=2 lag order
         let layout = test_support::state_layout(1, 2);
         let lag_start = layout.inflow_lags.start;
 
@@ -2095,7 +1898,7 @@ mod tests {
     /// with no downstream fields accessed.
     #[test]
     fn test_no_downstream_for_uniform_monthly() {
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let mut state_ds = vec![500.0, 0.0]; // with empty downstream
         let mut state_ref = vec![500.0, 0.0]; // with noop downstream
@@ -2180,7 +1983,7 @@ mod tests {
     /// `downstream_weight_accum == 0.0`.
     #[test]
     fn test_rebuild_resets_downstream_state() {
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let mut state = vec![0.0, 0.0];
         let incoming_lags = vec![0.0];
@@ -2234,7 +2037,7 @@ mod tests {
     /// (b) seed the next quarter's accumulator with `z_inflow * 0.1`.
     #[test]
     fn test_downstream_spillover_seeds_next_quarter() {
-        let _indexer = test_support::geom(1, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(1, 1);
         let mut state = vec![0.0, 0.0];
         let incoming_lags = vec![0.0];
@@ -2304,7 +2107,7 @@ mod tests {
     #[test]
     fn test_downstream_multi_hydro() {
         // N=2 hydros, L=1 lag order.
-        let _indexer = test_support::geom(2, 1);
+        let _indexer = test_support::equipment_free_geometry(&[0]).remove(0);
         let layout = test_support::state_layout(2, 1);
         let lag_start = layout.inflow_lags.start;
 
@@ -2403,14 +2206,20 @@ mod tests {
     #[test]
     fn dense_ncs_dormant_slot_is_zeroed() {
         let n_blks = 2_usize;
-        let ncs_col_start = 100_usize;
+        let ncs_start = 100_usize;
+        let n_ncs = 3_usize;
         let dense_col = vec![0_usize, 1, 2];
         let stage_id = 0_i32;
         // slot 0 enters at stage 1 (dormant at stage 0); slots 1,2 windowless.
         let windows = vec![(Some(1_i32), None), (None, None), (None, None)];
+        let geometry = StageGeometry {
+            ncs_generation: ncs_start..ncs_start + n_ncs * n_blks,
+            n_blks,
+            ..test_support::equipment_free_geometry(&[n_blks]).remove(0)
+        };
 
         let mut indices = Vec::new();
-        build_dense_ncs_col_indices(&dense_col, ncs_col_start, n_blks, &mut indices);
+        build_dense_ncs_col_indices(&dense_col, &geometry, &mut indices);
         // Every slot contributes a block: 100,101 | 102,103 | 104,105.
         assert_eq!(indices, vec![100, 101, 102, 103, 104, 105]);
         assert_eq!(indices.len(), dense_col.len() * n_blks);
@@ -2441,12 +2250,18 @@ mod tests {
     #[test]
     fn dense_ncs_no_dormancy_is_slot_order_identical() {
         let n_blks = 2_usize;
-        let ncs_col_start = 0_usize;
+        let ncs_start = 0_usize;
+        let n_ncs = 3_usize;
         let dense_col = vec![0_usize, 1, 2];
         let windows = vec![(None, None), (None, None), (None, None)];
+        let geometry = StageGeometry {
+            ncs_generation: ncs_start..ncs_start + n_ncs * n_blks,
+            n_blks,
+            ..test_support::equipment_free_geometry(&[n_blks]).remove(0)
+        };
 
         let mut indices = Vec::new();
-        build_dense_ncs_col_indices(&dense_col, ncs_col_start, n_blks, &mut indices);
+        build_dense_ncs_col_indices(&dense_col, &geometry, &mut indices);
         assert_eq!(indices, vec![0, 1, 2, 3, 4, 5]);
 
         let lower_src = vec![0.0, 0.0, 1.0, 1.0, 2.0, 2.0];
@@ -2482,14 +2297,20 @@ mod tests {
         let expected_len = dense_col.len() * n_blks;
         assert_eq!(expected_len, 4);
 
+        let geometry_at = |ncs_start: usize| StageGeometry {
+            ncs_generation: ncs_start..ncs_start + dense_col.len() * n_blks,
+            n_blks,
+            ..test_support::equipment_free_geometry(&[n_blks]).remove(0)
+        };
+
         // Reproduce the patch-site guard verbatim: rebuild iff the stored start
         // differs OR the buffer length differs.
         let mut indices_buf: Vec<usize> = Vec::new();
         let mut last_ncs_col_start = usize::MAX;
-        let rebuild = |start: usize, buf: &mut Vec<usize>, last: &mut usize| {
-            if *last != start || buf.len() != expected_len {
-                build_dense_ncs_col_indices(&dense_col, start, n_blks, buf);
-                *last = start;
+        let rebuild = |geometry: &StageGeometry, buf: &mut Vec<usize>, last: &mut usize| {
+            if *last != geometry.ncs_generation.start || buf.len() != expected_len {
+                build_dense_ncs_col_indices(&dense_col, geometry, buf);
+                *last = geometry.ncs_generation.start;
                 true
             } else {
                 false
@@ -2497,19 +2318,31 @@ mod tests {
         };
 
         // Stage A at start 100: first call always rebuilds (last == usize::MAX).
-        assert!(rebuild(100, &mut indices_buf, &mut last_ncs_col_start));
+        assert!(rebuild(
+            &geometry_at(100),
+            &mut indices_buf,
+            &mut last_ncs_col_start
+        ));
         assert_eq!(indices_buf, vec![100, 101, 102, 103]);
         assert_eq!(last_ncs_col_start, 100);
 
         // Stage B at start 200, SAME length (4): the start-tracking guard fires and
         // the buffer tracks the new base. A length-only guard would have skipped
         // this rebuild and left [100,101,102,103] — the latent bug.
-        assert!(rebuild(200, &mut indices_buf, &mut last_ncs_col_start));
+        assert!(rebuild(
+            &geometry_at(200),
+            &mut indices_buf,
+            &mut last_ncs_col_start
+        ));
         assert_eq!(indices_buf, vec![200, 201, 202, 203]);
         assert_eq!(last_ncs_col_start, 200);
 
         // Re-entering stage B (same start, same length): no rebuild.
-        assert!(!rebuild(200, &mut indices_buf, &mut last_ncs_col_start));
+        assert!(!rebuild(
+            &geometry_at(200),
+            &mut indices_buf,
+            &mut last_ncs_col_start
+        ));
         assert_eq!(indices_buf, vec![200, 201, 202, 203]);
     }
 
@@ -2623,12 +2456,13 @@ mod tests {
         let ncs_allow_curtailment = vec![true];
         let dense_col = vec![0_usize];
         let windows: Vec<(Option<i32>, Option<i32>)> = vec![(None, None)];
-        let ncs_col_start = 5_usize;
+        let ncs_start = 5_usize;
         let stage_id = 0_i32;
         let n_blks = 1_usize;
-        let offsets = NcsNoiseOffsets {
-            n_hydros: 0,
-            n_load_buses: 0,
+        let geometry = StageGeometry {
+            ncs_generation: ncs_start..ncs_start + n_blks,
+            n_blks,
+            ..test_support::equipment_free_geometry(&[n_blks]).remove(0)
         };
 
         // ---- reference: transform, then the pre-collapse gather+set called
@@ -2636,7 +2470,6 @@ mod tests {
         let mut reference_scratch = make_scratch(0);
         transform_ncs_noise(
             &raw_noise,
-            &offsets,
             &stoch,
             StageIdx(0),
             n_blks,
@@ -2647,8 +2480,7 @@ mod tests {
         );
         build_dense_ncs_col_indices(
             &dense_col,
-            ncs_col_start,
-            n_blks,
+            &geometry,
             &mut reference_scratch.ncs_col_indices_buf,
         );
         gather_dense_ncs_bounds(
@@ -2672,7 +2504,6 @@ mod tests {
         let mut owner_scratch = make_scratch(0);
         transform_ncs_noise(
             &raw_noise,
-            &offsets,
             &stoch,
             StageIdx(0),
             n_blks,
@@ -2685,11 +2516,10 @@ mod tests {
         apply_ncs_col_bounds(
             &mut owner_solver,
             &mut owner_scratch,
-            ncs_col_start,
+            &geometry,
             &dense_col,
             &windows,
             stage_id,
-            n_blks,
         );
 
         assert_eq!(
@@ -2698,7 +2528,7 @@ mod tests {
         );
         assert_eq!(owner_solver.col_bounds_calls.len(), 1);
         let (indices, lower, upper) = &owner_solver.col_bounds_calls[0];
-        assert_eq!(indices, &[ncs_col_start]);
+        assert_eq!(indices, &[ncs_start]);
         // A_r = max_gen * clamp(mean + std * eta, 0, 1); allow_curtailment == true
         // pins the lower bound to 0 (dispatch is free to curtail down to it).
         let expected_upper = 100.0_f64 * (0.5 + 0.1 * 0.37_f64).clamp(0.0, 1.0);

@@ -985,10 +985,6 @@ pub(crate) fn enumerated_pool_cut_stride(graph: &NodeGraph) -> Vec<u64> {
 /// # Errors
 ///
 /// Returns [`SddpError::Validation`] when a path-product-sum exceeds `u64`.
-// Backs the enumerated engine's debug-assert + test solve-count validation;
-// legitimately unused only in a release non-test build (removing it deletes the
-// gate and breaks the tests), so the dead-code lint is allowed just there.
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
 pub(crate) fn enumerated_node_visit_counts(
     graph: &NodeGraph,
 ) -> Result<TypedVec<NodePos, u64>, SddpError> {
@@ -1039,9 +1035,6 @@ impl NodeGraph {
     /// # Errors
     ///
     /// Returns [`SddpError::Validation`] when a path-product-sum exceeds `u64`.
-    // Consumed by the single-rank solve-count debug-assert and the node-graph
-    // tests; legitimately unused only in a release non-test build.
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub(crate) fn forward_solve_counts(&self) -> Result<Vec<u64>, SddpError> {
         let prefix_count = enumerated_node_visit_counts(self)?;
         let mut pool_sum = vec![0_u64; self.n_pools];

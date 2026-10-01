@@ -137,4 +137,10 @@ fn fixed_column_reduced_cost_matches_equality_row_dual() {
         x_r[2],
         x_c[2]
     );
+    assert!(
+        (dual_r[1] - rc_c[0]).abs() <= 1e-9 * dual_r[1].abs().max(rc_c[0].abs()),
+        "the fixed column's reduced cost must equal the equality row's dual: {} vs {}",
+        rc_c[0],
+        dual_r[1]
+    );
 }

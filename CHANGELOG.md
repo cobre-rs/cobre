@@ -16,15 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checkpoint whose recorded Cobre version differs from the running one; the
   error names both versions and asks you to retrain the policy, or re-export
   the boundary policy, with the running version. The CLI reports it as a
-  validation error and Python raises `cobre.errors.PolicyIncompatibleError`.
-  `cobre.write_policy_checkpoint` now always records the running version (a
-  `cobre_version` given in `metadata` is ignored).
+  validation error.
 
 - **BREAKING — a policy checkpoint whose stored basis does not match the
   study's LP dimensions is refused at load.** The error names the node and
   the expected and found columns and rows; earlier versions truncated such a
-  basis silently or started cold. The CLI reports it as a validation error
-  and Python raises `cobre.errors.PolicyIncompatibleError`.
+  basis silently or started cold. The CLI reports it as a validation error.
 
 - **BREAKING — a generic constraint naming an evaporation block other than 0
   on a parallel stage with two or more blocks is rejected at validation.**
@@ -65,15 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delivery date, and gave a date to some empty positions. Studies whose
   anticipated thermals all share one lead are unaffected.
 
-- **BREAKING — Python: a study-setup validation failure now raises
-  `cobre.errors.ValidationError`, matching the CLI.** Configuration problems
-  detected while building a study (for example a gap stopping rule under
-  sampled forward selection, or an FPHA hyperplane or inflow-model estimate
-  that setup rejects) previously raised `cobre.errors.SolverError`, a
-  `RuntimeError`; they now raise `ValidationError`, a `ValueError`, so code
-  that caught `RuntimeError` for them must catch `ValueError` or
-  `CobreError`. Solver and training failures keep their class.
-
 - **`water_value_per_hm3` now reports each chronological block's own
   water-balance dual.** On a chronological stage the water balance carries one
   row per hydro per block; the column previously read a single row and
@@ -84,14 +72,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Inflow noise on a chronological stage with two or more blocks now reaches
   its own hydro**, split across the blocks in proportion to their durations.
   In 0.16.0 it was applied to another hydro's block row.
-
-- **Resuming or warm-starting from a checkpoint no longer misreads the first
-  stage's stored basis.** The loader derived a basis's template-row count from
-  its recorded cut-row count, a count the root node's basis record can
-  legitimately exceed since it is captured before that iteration's backward
-  pass appends cuts to its pool. The loader now reads the template-row count
-  from the study's own LP instead, so a valid checkpoint no longer risks a
-  spurious basis-shape rejection on the first resumed solve.
 
 - **On a parallel stage with two or more blocks, an evaporating hydro now
   evaporates as one stage-level quantity, its violation priced for the whole
@@ -113,6 +93,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of its own realized draw. The root LP is now patched identically to the
   forward pass; on a sampled scenario tree the lower and upper bounds are
   not guaranteed to move in any particular direction relative to each other.
+
+- **Historical inflow sampling finds each window's lag years by walking the
+  study's season calendar.** It used to derive them by modular arithmetic on
+  season ids. A study that stops before its season cycle's last season now
+  takes its true calendar predecessor as the lag. An inflow model whose order
+  exceeds the declared seasons is covered. A custom season map with gaps in
+  its ids follows its real predecessors. A single-season study no longer
+  shifts every window by one year. Studies that do not use historical inflow
+  sampling are unaffected.
+
+- **Under historical inflow sampling, the backward pass's opening tree draws
+  from the same years, and inverts the noise with the same inflow model, as
+  the forward pass.** When the boundary lag depth was above the inflow model's
+  order, the tree searched for windows at the wider depth, so it drew from
+  fewer years than the forward pass and could read the wrong lag value. With
+  an AR(0) hydro under an external training scheme, it inverted the noise
+  with the fitted model instead of the one the LP applies. Studies that do not
+  use historical inflow sampling are unaffected.
 
 ## [0.16.0] - 2026-09-22
 

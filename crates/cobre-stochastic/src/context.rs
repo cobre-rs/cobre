@@ -592,6 +592,7 @@ pub fn build_inflow_par(
     system: &System,
     inflow_scheme: Option<SamplingScheme>,
 ) -> Result<PrecomputedPar, StochasticError> {
+    validate_par_parameters(system.inflow_models())?;
     let study_stages: Vec<_> = system
         .stages()
         .iter()
@@ -664,7 +665,6 @@ pub fn build_stochastic_context(
         external_scenario_counts,
         noise_group_ids,
     } = opening_tree_inputs;
-    validate_par_parameters(system.inflow_models())?;
 
     let study_stages: Vec<_> = system
         .stages()

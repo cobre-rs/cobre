@@ -16,7 +16,7 @@
 //! | 3 | For each `CorrelationGroup`, `matrix.len() == entities.len()`. | `scenarios/correlation.json` |
 //! | 4 | For each `CorrelationGroup`, every row `matrix[i].len() == entities.len()`. | `scenarios/correlation.json` |
 //! | 5 | Every `profile_name` in the correlation schedule exists in `profiles`. | `scenarios/correlation.json` |
-//! | 6 | Every FPHA-configured hydro must have at least 1 row in `fpha_hyperplanes`. | `system/fpha_hyperplanes.parquet` |
+//! | 6 | Every FPHA-configured hydro must have at least 1 row in `fpha_hyperplanes`, except a hydro with no turbine capacity (`Hydro::has_turbine_capacity`). | `system/fpha_hyperplanes.parquet` |
 //! | 7 | Every FPHA- or `LinearizedHead`-configured hydro must have rows in `hydro_geometry`: ≥ 1 if FPHA is configured, ≥ 2 otherwise. | `system/hydro_geometry.parquet` |
 
 use std::collections::{HashMap, HashSet};
@@ -165,8 +165,17 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
             .collect();
 
         let fpha_hydro_ids = collect_fpha_hydro_ids(&data.hydros, &data.production_models);
+        let capacity_less: HashSet<i32> = data
+            .hydros
+            .iter()
+            .filter(|h| !h.has_turbine_capacity())
+            .map(|h| h.id.0)
+            .collect();
 
         for &hydro_id in &fpha_hydro_ids {
+            if capacity_less.contains(&hydro_id) {
+                continue;
+            }
             if !hydros_with_hyperplanes.contains(&hydro_id) {
                 ctx.add_error(
                     ErrorKind::DimensionMismatch,
@@ -720,6 +729,39 @@ mod tests {
                 .to_lowercase()
                 .contains("fpha hyperplanes"),
             "error should mention 'FPHA hyperplanes', got: {}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn zero_capacity_fpha_hydro_needs_no_hyperplane_rows() {
+        let mut data = crate::test_support::base_parsed_data(stages(), vec![]);
+
+        let mut capacity_less = make_hydro(1, HydroGenerationModel::Fpha, None, None);
+        capacity_less.max_turbined_m3s = 0.0;
+        let with_capacity = make_hydro(2, HydroGenerationModel::Fpha, None, None);
+        assert!(with_capacity.has_turbine_capacity());
+        data.hydros = vec![
+            capacity_less,
+            with_capacity,
+            make_hydro(3, HydroGenerationModel::Fpha, None, None),
+        ];
+
+        data.fpha_hyperplanes = vec![fpha_row(3)];
+
+        let mut ctx = ValidationContext::new();
+        validate_dimensional_consistency(&data, &mut ctx);
+
+        let errors = ctx.errors();
+        assert_eq!(
+            errors.len(),
+            1,
+            "only the plant with turbine capacity needs rows, got: {errors:?}"
+        );
+        assert_eq!(errors[0].kind, ErrorKind::DimensionMismatch);
+        assert!(
+            errors[0].message.contains("Hydro 2"),
+            "error should name hydro 2, got: {}",
             errors[0].message
         );
     }

@@ -186,7 +186,7 @@ pub fn resolve_production_models_from_artifacts(
     for (hydro, fit) in system.hydros().iter().zip(fits) {
         if fit.provenance.1 == ProductionModelSource::NoTurbineCapacity {
             tracing::warn!(
-                "hydro {} (id={}) requests computed FPHA but has no turbine capacity \
+                "hydro {} (id={}) requests FPHA but has no turbine capacity \
                  (max_turbined_m3s = {}); modeling it with zero productivity",
                 hydro.name,
                 hydro.id.0,
@@ -254,12 +254,25 @@ struct PerHydroFit {
     deviation_point_rows: Vec<FphaDeviationPointRow>,
 }
 
-/// At or below this turbine capacity the fitting grid's flow axis collapses onto
-/// `q = 0` and no plane survives, so a computed-FPHA plant resolves to zero
-/// productivity instead. A zero MW capacity alone is NOT degenerate: fitting
-/// drops a non-positive ceiling and the generation column's own bound holds
-/// output at zero.
-const MIN_FITTABLE_MAX_TURBINED_M3S: f64 = 1e-9;
+fn no_turbine_capacity_fit(hydro_id: EntityId, n_stages: usize) -> PerHydroFit {
+    PerHydroFit {
+        stage_models: vec![
+            ResolvedProductionModel::ConstantProductivity { productivity: 0.0 };
+            n_stages
+        ],
+        provenance: (hydro_id, ProductionModelSource::NoTurbineCapacity),
+        export_rows: Vec::new(),
+        fpha_deviations: Vec::new(),
+        deviation_point_rows: Vec::new(),
+    }
+}
+
+fn has_hyperplane_rows(
+    hyperplane_map: &HashMap<(EntityId, Option<i32>), Vec<&FphaHyperplaneRow>>,
+    hydro_id: EntityId,
+) -> bool {
+    hyperplane_map.keys().any(|(id, _)| *id == hydro_id)
+}
 
 /// Resolve every study-stage production model for ONE hydro, returning the
 /// per-hydro result by value with no shared `&mut` capture.
@@ -290,20 +303,19 @@ fn fit_one_hydro(
 
     let source = determine_source(hydro, config_entry)?;
 
-    if source == ProductionModelSource::ComputedFromGeometry
-        && hydro.max_turbined_m3s <= MIN_FITTABLE_MAX_TURBINED_M3S
-    {
-        validate_computed_prerequisites(hydro, geometry_map)?;
-        return Ok(PerHydroFit {
-            stage_models: vec![
-                ResolvedProductionModel::ConstantProductivity { productivity: 0.0 };
-                n_stages
-            ],
-            provenance: (hydro.id, ProductionModelSource::NoTurbineCapacity),
-            export_rows: Vec::new(),
-            fpha_deviations: Vec::new(),
-            deviation_point_rows: Vec::new(),
-        });
+    if !hydro.has_turbine_capacity() {
+        match source {
+            ProductionModelSource::ComputedFromGeometry => {
+                validate_computed_prerequisites(hydro, geometry_map)?;
+                return Ok(no_turbine_capacity_fit(hydro.id, n_stages));
+            }
+            ProductionModelSource::PrecomputedHyperplanes
+                if !has_hyperplane_rows(hyperplane_map, hydro.id) =>
+            {
+                return Ok(no_turbine_capacity_fit(hydro.id, n_stages));
+            }
+            _ => {}
+        }
     }
 
     let mut export_rows: Vec<FphaHyperplaneRow> = Vec::new();

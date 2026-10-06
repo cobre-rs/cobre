@@ -5803,6 +5803,62 @@ fn d57_computed_fpha_without_turbine_capacity_trains_at_zero_generation() {
     assert_cost(result.final_lb, closed_form_total_cost(), 1e-2, "D57");
 }
 
+/// D57 switched to `source: "precomputed"` with the hyperplanes its computed run
+/// exports — none, so no `fpha_hyperplanes.parquet` — trains at the computed cost.
+#[test]
+fn d57_precomputed_round_trip_trains_at_the_computed_cost() {
+    let computed_dir = Path::new("../../examples/deterministic/d57-fpha-zero-turbine-capacity");
+    let computed_system = cobre_io::load_case(computed_dir).expect("load_case must succeed");
+    let computed_models = prepare_hydro_models(&computed_system, computed_dir, false)
+        .expect("prepare_hydro_models must succeed");
+    assert!(
+        computed_models.fpha_export_rows.is_empty(),
+        "D57: a plant with no turbine capacity exports no hyperplanes"
+    );
+    let computed = run_deterministic(computed_dir);
+
+    let tmp = copy_case_dir(computed_dir);
+    let models_path = tmp.path().join("system/hydro_production_models.json");
+    let mut models: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&models_path).expect("read hydro_production_models.json"),
+    )
+    .expect("hydro_production_models.json is JSON");
+    models["production_models"][0]["stage_ranges"][0]["fpha_config"]["source"] =
+        serde_json::Value::from("precomputed");
+    std::fs::write(
+        &models_path,
+        serde_json::to_string_pretty(&models).expect("serialize production models"),
+    )
+    .expect("write hydro_production_models.json");
+    assert!(!tmp.path().join("system/fpha_hyperplanes.parquet").exists());
+
+    let system =
+        cobre_io::load_case(tmp.path()).expect("load_case must accept the precomputed copy");
+    let hydro_models = prepare_hydro_models(&system, tmp.path(), false)
+        .expect("a precomputed plant with no turbine capacity needs no hyperplanes");
+    let summary = cobre_sddp::build_hydro_model_summary(&hydro_models, &system);
+    assert_eq!(
+        (summary.n_constant, summary.n_fpha),
+        (1, 0),
+        "D57 precomputed: the plant must be reported as constant, not FPHA"
+    );
+    assert_eq!(
+        hydro_models.provenance.production_sources,
+        vec![(
+            EntityId::from(0),
+            cobre_sddp::ProductionModelSource::NoTurbineCapacity
+        )]
+    );
+
+    let result = run_deterministic(tmp.path());
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D57 precomputed: gap={:.2e}",
+        result.final_gap
+    );
+    assert_cost(result.final_lb, computed.final_lb, 1e-2, "D57 precomputed");
+}
+
 /// Chronological-blocks telescoping ⇒ parallel bound-agreement anchor.
 ///
 /// Pins the "telescoping ⇒ parallel agreement when interiors are inert" contract

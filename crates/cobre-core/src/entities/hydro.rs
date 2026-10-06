@@ -296,6 +296,18 @@ impl Hydro {
         self.unit_groups.sort_by_key(|g| g.id.0);
     }
 
+    /// Whether the plant can turbine any flow: `max_turbined_m3s` above 1e-9 m³/s.
+    ///
+    /// At or below that threshold an FPHA fit's flow axis collapses onto `q = 0`
+    /// and no plane survives, so the plant is modeled at zero productivity. A zero
+    /// `max_generation_mw` alone does not make a plant capacity-less: fitting
+    /// drops a non-positive ceiling and the generation column's own bound holds
+    /// output at zero.
+    #[must_use]
+    pub fn has_turbine_capacity(&self) -> bool {
+        self.max_turbined_m3s > 1e-9
+    }
+
     /// Test-only fixture helper: mirrors this plant into a single unit group
     /// when none is declared, matching the construction production code no
     /// longer performs — a production caller is a contract violation, not a

@@ -233,8 +233,9 @@ pub enum ProductionModelSource {
     PrecomputedHyperplanes,
     /// FPHA hyperplanes computed from reservoir geometry during preprocessing.
     ComputedFromGeometry,
-    /// Computed FPHA was requested, but the plant has no turbine capacity to fit,
-    /// so it resolves to zero productivity and a `tracing::warn!` names it.
+    /// FPHA was requested, computed or precomputed with no hyperplane rows, but
+    /// the plant has no turbine capacity, so it resolves to zero productivity and
+    /// a `tracing::warn!` names it.
     NoTurbineCapacity,
 }
 

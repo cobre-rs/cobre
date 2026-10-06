@@ -666,6 +666,37 @@ computation, the `run` swap). Pinned by
 `hardest_first_claim_order_is_result_neutral` in `tests/mpi_wire.rs`
 (hardest-first on vs off, bitwise `final_lb`).
 
+## CVaR weights are the probability floor plus the pure-CVaR allocation
+
+`ρ^{λ,α}[Z] = (1−λ)·E[Z] + λ·CVaR_α[Z]` is realized by one weight kernel in
+`convergence/risk_measure.rs`, the only body behind both
+`compute_cvar_weights_into` and `compute_cvar_weights_from_costs_into`:
+`μ_ω = (1−λ)·p_ω + λ·ν_ω`, where `ν` is the pure `CVaR_α` greedy allocation (cap
+`p_ω/α`, total mass 1, openings visited by cost descending then canonical index
+ascending via `sort_unstable_by` on the pre-allocated scratch). Every opening keeps at
+least `(1−λ)·p_ω` and at most `(1−λ)·p_ω + λ·p_ω/α`. The same kernel feeds
+`RiskMeasure::aggregate_cut_into` (every backward scheduler), `evaluate_risk_into`
+(the nested upper bound) and the root lower bound, so LB and UB sit under one measure.
+
+A single greedy whose per-opening cap is `(1−λ)·p_ω + λ·p_ω/α`, with no floor, is
+the wrong-but-compiling alternative: it is a consistent pure `CVaR` at
+`α' = α/(λ + α(1−λ))`, so LB and UB still bracket each other and no bracketing test
+catches it. It agrees with the correct kernel at `λ = 1`, at `λ = 0` and on every
+two-opening fan; only three or more openings with `0 < λ < 1`, where the floor binds,
+discriminate. Switching one consumer without the others opens a spurious LB/UB gap.
+
+Read: `convergence/risk_measure.rs` (the kernel and its two entry points),
+`training/lower_bound.rs` (`lb_aggregate_and_broadcast`),
+`training/forward/stats_aggregation.rs` (`nested_ub_recursion`). Pinned by
+`cvar_weights_match_analytic_table` (equiprobable `10/20/30/40` at `α = λ = 0.5`
+gives `30.0`; the cap-only form gives `31.25`),
+`cvar_weights_match_rockafellar_uryasev_oracle`,
+`cvar_cost_ties_break_by_canonical_index`,
+`cvar_weights_reduce_bitwise_at_lambda_endpoints`,
+`aggregate_cut_into_applies_the_probability_floor`,
+`nested_ub_recursion_applies_the_probability_floor` and
+`lower_bound_aggregation_applies_the_probability_floor`.
+
 ## Joint risk is applied once over the flattened successor×opening vector
 
 A branching node's backward cut applies the stage `RiskMeasure` **once** over the

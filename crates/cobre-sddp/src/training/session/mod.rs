@@ -901,6 +901,7 @@ where
                         cumulative_discounts: self.stage_ctx.cumulative_discount_factors,
                         risk_measure: ub_measure,
                         num_stages,
+                        scratch: &mut self.scratch.nested_ub,
                     },
                 )
             }

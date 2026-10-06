@@ -10,6 +10,7 @@ use cobre_solver::{RowBatch, StageTemplate};
 use crate::{
     context::{StageContext, TrainingContext},
     cut::CutRowMap,
+    forward::NestedUbScratch,
     lower_bound::LbEvalScratch,
     lp::builder::PatchBuffer,
     setup::{NodeId, node_graph::StageIdx},
@@ -56,6 +57,9 @@ pub(crate) struct IterationScratch {
     /// the nested risk-adjusted upper bound. Filled only on an enumerated forward
     /// under an effective `CVaR`; empty otherwise.
     pub(crate) ub_stage_costs: Vec<f64>,
+    /// Nested risk-adjusted upper-bound scratch; used only on an enumerated
+    /// forward under an effective `CVaR`.
+    pub(crate) nested_ub: NestedUbScratch,
     /// Packed per-stage forward solver-stat scalars, the cross-rank allreduce
     /// input in `run_forward_phase` (empty until the first forward phase).
     pub(crate) fwd_stats_pack_local: Vec<f64>,
@@ -140,6 +144,7 @@ impl IterationScratch {
             freeze_scratch,
             ub_path_weights: Vec::with_capacity(max_local_fwd),
             ub_stage_costs: Vec::with_capacity(max_local_fwd * num_stages),
+            nested_ub: NestedUbScratch::default(),
             fwd_stats_pack_local: Vec::new(),
             fwd_stats_pack_global: Vec::new(),
             fwd_stats_unpacked: Vec::new(),

@@ -25,7 +25,7 @@ use crate::{
     lp::indexer::StateSpace,
     noise::{compute_effective_eta, has_par_model},
     rank_reconcile::reconcile_error_flag,
-    risk_measure::RiskMeasure,
+    risk_measure::{RiskMeasure, RiskMeasureScratch},
     setup::{
         NodeGraph, NodeSuccessor, OpeningSource,
         node_graph::{NodePos, StageIdx, assemble_outcome_weights},
@@ -41,6 +41,8 @@ pub struct LbEvalScratch {
     pub objectives_buf: Vec<f64>,
     /// Root outcome-set product weights `P(root→n)·q_{n,ω}`.
     pub weights_buf: Vec<f64>,
+    /// `CVaR` weight scratch for the root aggregation.
+    pub risk_scratch: RiskMeasureScratch,
 }
 
 impl LbEvalScratch {
@@ -369,6 +371,7 @@ fn lb_aggregate_and_broadcast<C: Communicator>(
     objectives: &[f64],
     weights: &[f64],
     risk_measure: &RiskMeasure,
+    risk_scratch: &mut RiskMeasureScratch,
     cost_scale_factor: f64,
     comm: &C,
 ) -> Result<f64, SddpError> {
@@ -385,7 +388,8 @@ fn lb_aggregate_and_broadcast<C: Communicator>(
             weights.len()
         )));
     }
-    let mut lb = risk_measure.evaluate_risk(objectives, weights) * cost_scale_factor;
+    let mut lb =
+        risk_measure.evaluate_risk_into(objectives, weights, risk_scratch) * cost_scale_factor;
     comm.broadcast(std::slice::from_mut(&mut lb), 0)?;
     Ok(lb)
 }
@@ -457,6 +461,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             &scratch.lb_scratch.objectives_buf,
             &scratch.lb_scratch.weights_buf,
             risk_measure,
+            &mut scratch.lb_scratch.risk_scratch,
             ctx.cost_scale_factor,
             comm,
         );
@@ -491,7 +496,7 @@ mod tests {
         inflow_method::InflowNonNegativityMethod,
         lp::builder::{PatchBuffer, StageGeometry, StateBox},
         lp::indexer::{BlockIdx, CutStateProjection, HydroSys, StateSpace, StudyDimensions},
-        risk_measure::RiskMeasure,
+        risk_measure::{RiskMeasure, RiskMeasureScratch},
         setup::node_graph::StageIdx,
         setup::{
             NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor, OpeningSource,
@@ -1233,10 +1238,31 @@ mod tests {
         let rm = RiskMeasure::Expectation;
         let objectives = vec![10.0, 20.0, 30.0];
         let weights = vec![1.0];
-        let result = lb_aggregate_and_broadcast(&objectives, &weights, &rm, 1.0, &comm);
+        let mut risk_scratch = RiskMeasureScratch::new();
+        let result =
+            lb_aggregate_and_broadcast(&objectives, &weights, &rm, &mut risk_scratch, 1.0, &comm);
         assert!(
             matches!(result, Err(SddpError::Validation(_))),
             "a root-Ω/weights length mismatch must be a Validation error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn lower_bound_aggregation_applies_the_probability_floor() {
+        let comm = LocalComm;
+        let rm = RiskMeasure::CVaR {
+            alpha: 0.5,
+            lambda: 0.5,
+        };
+        let objectives = vec![10.0, 20.0, 30.0, 40.0];
+        let weights = vec![0.25; 4];
+        let mut risk_scratch = RiskMeasureScratch::new();
+        let lb =
+            lb_aggregate_and_broadcast(&objectives, &weights, &rm, &mut risk_scratch, 1.0, &comm)
+                .unwrap();
+        assert!(
+            (lb - 30.0).abs() < 1e-12,
+            "the floored root aggregation must be 30.0, got {lb}"
         );
     }
 

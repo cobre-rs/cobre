@@ -1398,7 +1398,8 @@ fn nested_ub_recursion_is_nested_not_end_of_horizon() {
         alpha: 0.5,
         lambda: 1.0,
     };
-    let nested = nested_ub_recursion(&topology, &global, 3, &cum_d, cvar);
+    let mut scratch = super::stats_aggregation::NestedUbRecursionScratch::default();
+    let nested = nested_ub_recursion(&topology, &global, 3, &cum_d, cvar, &mut scratch);
     assert!(
         (nested - 200.0).abs() < 1e-12,
         "nested pure CVaR_0.5 must be 200.0, got {nested}"
@@ -1418,10 +1419,54 @@ fn nested_ub_recursion_is_nested_not_end_of_horizon() {
     );
 
     // Expectation collapses the recursion to the plain probability-weighted total.
-    let expectation = nested_ub_recursion(&topology, &global, 3, &cum_d, RiskMeasure::Expectation);
+    let expectation = nested_ub_recursion(
+        &topology,
+        &global,
+        3,
+        &cum_d,
+        RiskMeasure::Expectation,
+        &mut scratch,
+    );
     assert!(
         (expectation - 75.0).abs() < 1e-12,
         "Expectation must collapse to Σ wᵢ·total = 75.0, got {expectation}"
+    );
+}
+
+#[test]
+fn nested_ub_recursion_applies_the_probability_floor() {
+    use super::stats_aggregation::{NestedUbRecursionScratch, nested_ub_recursion};
+    use crate::setup::node_graph::{NestedUbTopology, NodePos, TypedVec};
+
+    let parent: TypedVec<NodePos, Option<NodePos>> = vec![
+        None,
+        Some(NodePos(0)),
+        Some(NodePos(0)),
+        Some(NodePos(0)),
+        Some(NodePos(0)),
+    ]
+    .into();
+    let leaf = [NodePos(1), NodePos(2), NodePos(3), NodePos(4)];
+    let weight = [0.25_f64; 4];
+    let global = [0.0, 10.0, 0.0, 20.0, 0.0, 30.0, 0.0, 40.0];
+    let cum_d = [1.0_f64, 1.0];
+    let topology = NestedUbTopology::new(&parent, &leaf, &weight);
+
+    let cvar = RiskMeasure::CVaR {
+        alpha: 0.5,
+        lambda: 0.5,
+    };
+    let nested = nested_ub_recursion(
+        &topology,
+        &global,
+        2,
+        &cum_d,
+        cvar,
+        &mut NestedUbRecursionScratch::default(),
+    );
+    assert!(
+        (nested - 30.0).abs() < 1e-12,
+        "the floored nested bound over the 4-leaf fan must be 30.0, got {nested}"
     );
 }
 

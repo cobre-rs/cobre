@@ -46,7 +46,7 @@ mod tests;
 
 pub use delta_cut_batch::build_delta_cut_row_batch_into;
 pub use sampler::build_sampler_from_ctx;
-pub use stats_aggregation::{ForwardBound, sync_forward};
+pub use stats_aggregation::{ForwardBound, NestedUbScratch, sync_forward};
 
 pub(crate) use basis_capture::write_capture_metadata;
 pub use enumerated::EnumeratedForwardScratch;

@@ -25,7 +25,7 @@ use super::run_forward_pass;
 
 /// Which upper-bound estimator [`sync_forward`] assembles from the gathered
 /// forward-pass costs.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub enum ForwardBound<'a> {
     /// Sampled forward: Welford sample mean, standard deviation, and 95% CI
     /// half-width.
@@ -53,7 +53,48 @@ pub enum ForwardBound<'a> {
         risk_measure: RiskMeasure,
         /// Stages per path (the `path_stage_costs` stride).
         num_stages: usize,
+        /// Persistent gather and recursion scratch, reused across iterations.
+        scratch: &'a mut NestedUbScratch,
     },
+}
+
+/// Gather layout, gathered costs and recursion buffers of
+/// [`ForwardBound::NestedRisk`], grown on first use and reused after.
+#[derive(Debug, Default)]
+pub struct NestedUbScratch {
+    layout_for: Option<(usize, usize, usize)>,
+    stage_counts: Vec<usize>,
+    stage_displs: Vec<usize>,
+    gathered: Vec<f64>,
+    recursion: NestedUbRecursionScratch,
+}
+
+impl NestedUbScratch {
+    /// Size the per-path-per-stage gather, recomputing the rank layout only when
+    /// the `(total_forward_passes, num_ranks, num_stages)` shape changes.
+    fn prepare_gather(&mut self, total_forward_passes: usize, num_ranks: usize, num_stages: usize) {
+        let layout = (total_forward_passes, num_ranks, num_stages);
+        if self.layout_for != Some(layout) {
+            self.stage_counts = per_rank_counts(total_forward_passes, num_ranks);
+            for count in &mut self.stage_counts {
+                *count *= num_stages;
+            }
+            self.stage_displs = prefix_displs(&self.stage_counts);
+            self.layout_for = Some(layout);
+        }
+        self.gathered.clear();
+        self.gathered.resize(self.stage_counts.iter().sum(), 0.0);
+    }
+}
+
+/// Per-node working buffers of [`nested_ub_recursion`].
+#[derive(Debug, Default)]
+pub(crate) struct NestedUbRecursionScratch {
+    node_cost: Vec<f64>,
+    value: Vec<f64>,
+    child_vals: Vec<f64>,
+    child_probs: Vec<f64>,
+    risk: RiskMeasureScratch,
 }
 
 /// Compensated (Neumaier) `Σ wᵢ·cᵢ` over paired cost/weight slices in slice-index
@@ -113,10 +154,6 @@ pub fn sync_forward<C: Communicator>(
     let num_ranks = comm.size();
     let my_rank = comm.rank();
 
-    // Per-rank path counts derived arithmetically from the total, so no
-    // preliminary communication round is needed.
-    let path_counts = per_rank_counts(total_forward_passes, num_ranks);
-
     // NestedRisk gathers per-path-per-stage costs and recurses over the enumerated
     // tree; it needs neither the path-total gather nor the reduction below.
     if let ForwardBound::NestedRisk {
@@ -125,26 +162,30 @@ pub fn sync_forward<C: Communicator>(
         cumulative_discounts,
         risk_measure,
         num_stages,
+        scratch,
     } = bound
     {
-        let stage_counts: Vec<usize> = path_counts.iter().map(|&c| c * num_stages).collect();
-        let stage_displs = prefix_displs(&stage_counts);
-        let global_stage_n = stage_counts.iter().sum::<usize>();
-        let mut global = vec![0.0_f64; global_stage_n];
+        scratch.prepare_gather(total_forward_passes, num_ranks, num_stages);
         debug_assert_eq!(
             path_stage_costs.len(),
-            stage_counts[my_rank],
+            scratch.stage_counts[my_rank],
             "rank {my_rank}: path_stage_costs length {} != expected count {}",
             path_stage_costs.len(),
-            stage_counts[my_rank],
+            scratch.stage_counts[my_rank],
         );
-        comm.allgatherv(path_stage_costs, &mut global, &stage_counts, &stage_displs)?;
+        comm.allgatherv(
+            path_stage_costs,
+            &mut scratch.gathered,
+            &scratch.stage_counts,
+            &scratch.stage_displs,
+        )?;
         let ub = nested_ub_recursion(
             topology,
-            &global,
+            &scratch.gathered,
             num_stages,
             cumulative_discounts,
             risk_measure,
+            &mut scratch.recursion,
         );
         #[allow(clippy::cast_possible_truncation)]
         let sync_time_ms = start.elapsed().as_millis() as u64;
@@ -156,6 +197,9 @@ pub fn sync_forward<C: Communicator>(
         });
     }
 
+    // Per-rank path counts derived arithmetically from the total, so no
+    // preliminary communication round is needed.
+    let path_counts = per_rank_counts(total_forward_passes, num_ranks);
     let displs = prefix_displs(&path_counts);
     let global_n = path_counts.iter().sum::<usize>();
     debug_assert_eq!(
@@ -240,12 +284,21 @@ pub(crate) fn nested_ub_recursion(
     num_stages: usize,
     cumulative_discounts: &[f64],
     risk_measure: RiskMeasure,
+    scratch: &mut NestedUbRecursionScratch,
 ) -> f64 {
+    let NestedUbRecursionScratch {
+        node_cost,
+        value,
+        child_vals,
+        child_probs,
+        risk,
+    } = scratch;
     let n_nodes = topology.node_stage.len();
     // Per-node cumulative-discounted immediate cost from this iteration's gathered
     // costs, read through each node's representative path (idempotent across paths
     // sharing the node). The tree structure itself is precomputed on the plan.
-    let mut node_cost = vec![0.0_f64; n_nodes];
+    node_cost.clear();
+    node_cost.resize(n_nodes, 0.0);
     for node in 0..n_nodes {
         let t = topology.node_stage[node];
         let cum_d = cumulative_discounts.get(t).copied().unwrap_or(1.0);
@@ -253,11 +306,8 @@ pub(crate) fn nested_ub_recursion(
             cum_d * global_path_stage_costs[topology.node_path[node] * num_stages + t];
     }
 
-    let mut value = vec![0.0_f64; n_nodes];
-    let mut child_vals: Vec<f64> = Vec::new();
-    let mut child_probs: Vec<f64> = Vec::new();
-    // One CVaR-weight scratch reused across every interior node's risk evaluation.
-    let mut risk_scratch = RiskMeasureScratch::new();
+    value.clear();
+    value.resize(n_nodes, 0.0);
     for &node in &topology.valuation_order {
         let kids = &topology.children[node.0];
         let v_future = if kids.is_empty() {
@@ -270,7 +320,7 @@ pub(crate) fn nested_ub_recursion(
                 child_vals.push(value[c.0]);
                 child_probs.push(topology.node_prob[c.0] / p_node);
             }
-            risk_measure.evaluate_risk_into(&child_vals, &child_probs, &mut risk_scratch)
+            risk_measure.evaluate_risk_into(child_vals, child_probs, risk)
         };
         value[node.0] = node_cost[node.0] + v_future;
     }
@@ -280,12 +330,139 @@ pub(crate) fn nested_ub_recursion(
     if let [only] = topology.roots.as_slice() {
         value[only.0]
     } else {
-        let root_vals: Vec<f64> = topology.roots.iter().map(|r| value[r.0]).collect();
-        let root_probs: Vec<f64> = topology
-            .roots
-            .iter()
-            .map(|r| topology.node_prob[r.0])
-            .collect();
-        risk_measure.evaluate_risk_into(&root_vals, &root_probs, &mut risk_scratch)
+        child_vals.clear();
+        child_probs.clear();
+        for r in &topology.roots {
+            child_vals.push(value[r.0]);
+            child_probs.push(topology.node_prob[r.0]);
+        }
+        risk_measure.evaluate_risk_into(child_vals, child_probs, risk)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cobre_comm::LocalBackend;
+
+    use super::{ForwardBound, NestedUbScratch, sync_forward};
+    use crate::risk_measure::RiskMeasure;
+    use crate::setup::node_graph::{NestedUbTopology, NodePos, TypedVec};
+    use crate::training::forward::ForwardResult;
+
+    fn four_leaf_fan() -> NestedUbTopology {
+        let parent: TypedVec<NodePos, Option<NodePos>> = vec![
+            None,
+            Some(NodePos(0)),
+            Some(NodePos(0)),
+            Some(NodePos(0)),
+            Some(NodePos(0)),
+        ]
+        .into();
+        let leaf = [NodePos(1), NodePos(2), NodePos(3), NodePos(4)];
+        NestedUbTopology::new(&parent, &leaf, &[0.25; 4])
+    }
+
+    fn nested_sync(topology: &NestedUbTopology, scratch: &mut NestedUbScratch) -> f64 {
+        let local = ForwardResult {
+            scenario_costs: vec![10.0, 20.0, 30.0, 40.0],
+            elapsed_ms: 0,
+            lp_solves: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
+        };
+        let path_stage_costs = [0.0, 10.0, 0.0, 20.0, 0.0, 30.0, 0.0, 40.0];
+        sync_forward(
+            &local,
+            &LocalBackend,
+            4,
+            ForwardBound::NestedRisk {
+                path_stage_costs: &path_stage_costs,
+                topology,
+                cumulative_discounts: &[1.0, 1.0],
+                risk_measure: RiskMeasure::CVaR {
+                    alpha: 0.5,
+                    lambda: 0.5,
+                },
+                num_stages: 2,
+                scratch,
+            },
+        )
+        .unwrap()
+        .global_ub_mean
+    }
+
+    fn buffer_identities(scratch: &NestedUbScratch) -> Vec<(usize, usize)> {
+        fn id<T>(v: &Vec<T>) -> (usize, usize) {
+            (v.as_ptr() as usize, v.capacity())
+        }
+        let r = &scratch.recursion;
+        vec![
+            id(&scratch.stage_counts),
+            id(&scratch.stage_displs),
+            id(&scratch.gathered),
+            id(&r.node_cost),
+            id(&r.value),
+            id(&r.child_vals),
+            id(&r.child_probs),
+            id(&r.risk.upper_bounds),
+            id(&r.risk.order),
+            id(&r.risk.mu),
+        ]
+    }
+
+    #[test]
+    fn nested_risk_sync_reuses_its_scratch_without_reallocating() {
+        let topology = four_leaf_fan();
+        let mut scratch = NestedUbScratch::default();
+
+        let first = nested_sync(&topology, &mut scratch);
+        let after_first = buffer_identities(&scratch);
+        let second = nested_sync(&topology, &mut scratch);
+        let after_second = buffer_identities(&scratch);
+        let fresh = nested_sync(&topology, &mut NestedUbScratch::default());
+
+        assert!(
+            (first - 30.0).abs() < 1e-12,
+            "the nested bound must be 30.0, got {first}"
+        );
+        assert_eq!(
+            second.to_bits(),
+            first.to_bits(),
+            "a reused scratch must reproduce the bound bit for bit"
+        );
+        assert_eq!(
+            fresh.to_bits(),
+            first.to_bits(),
+            "a fresh scratch must reproduce the bound bit for bit"
+        );
+        assert_eq!(
+            after_second, after_first,
+            "the second call must reuse every scratch buffer as (pointer, capacity)"
+        );
+    }
+
+    #[test]
+    fn nested_risk_gather_layout_recomputes_only_on_a_new_shape() {
+        let mut scratch = NestedUbScratch::default();
+
+        scratch.prepare_gather(5, 3, 2);
+        assert_eq!(scratch.stage_counts, [4, 4, 2]);
+        assert_eq!(scratch.stage_displs, [0, 4, 8]);
+        assert_eq!(scratch.gathered.len(), 10);
+
+        scratch.prepare_gather(5, 2, 2);
+        assert_eq!(scratch.stage_counts, [6, 4]);
+        assert_eq!(scratch.stage_displs, [0, 6]);
+        assert_eq!(scratch.gathered.len(), 10);
+
+        let counts_ptr = scratch.stage_counts.as_ptr();
+        scratch.prepare_gather(5, 2, 2);
+        assert_eq!(
+            scratch.stage_counts.as_ptr(),
+            counts_ptr,
+            "an unchanged shape must keep the layout without recomputing it"
+        );
     }
 }

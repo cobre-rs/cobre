@@ -2,8 +2,9 @@
 //!
 //! [`RiskMeasure`] aggregation replaces opening probabilities `p(ω)` with
 //! risk-adjusted weights `μ*_ω`. For `Expectation`, `μ*_ω = p(ω)`; for `CVaR`,
-//! a greedy allocation places maximum mass on the highest-cost scenarios
-//! (Risk Measures SS7), realizing `ρ^{λ,α}[Z] = (1 - λ)·E[Z] + λ·CVaR_α[Z]`.
+//! `μ*_ω = (1 - λ)·p(ω) + λ·ν_ω`, where the pure `CVaR_α` allocation `ν` places
+//! maximum mass (cap `p(ω)/α`) on the highest-cost scenarios (Risk Measures SS7),
+//! realizing `ρ^{λ,α}[Z] = (1 - λ)·E[Z] + λ·CVaR_α[Z]`.
 //!
 //! ## Examples
 //!
@@ -24,12 +25,12 @@
 use cobre_core::StageRiskConfig;
 use cobre_core::StageRiskConfig::CVaR;
 use cobre_core::StageRiskConfig::Expectation;
-/// Per-worker scratch buffers for `CVaR` weight computation, reused across
-/// backward-pass stages so the allocation is paid once. Owned exclusively per
-/// rayon worker (a field of `BackwardAccumulators`), so no synchronisation.
+/// Reusable `CVaR` weight-computation buffers, so the allocation is paid once.
+/// Every consumer (each backward worker, the lower bound, the nested upper
+/// bound) owns its own, so no synchronisation.
 #[derive(Debug, Default, Clone)]
 pub struct RiskMeasureScratch {
-    /// Per-scenario upper bounds `μ̄_ω`.
+    /// Per-scenario pure-`CVaR` caps `p_ω/α`.
     pub upper_bounds: Vec<f64>,
     /// Scenario indices sorted descending by objective/cost value.
     pub order: Vec<usize>,
@@ -254,9 +255,9 @@ impl RiskMeasure {
 ///
 /// Compared on the [`effective`](RiskMeasure::effective) form, so a mix of
 /// `Expectation` and `CVaR { lambda: 0 }` counts as uniform. This is the measure
-/// the enumerated risk-adjusted upper bound applies once to the path costs, and
-/// the uniformity a `gap` stopping rule requires under `CVaR` (a per-stage
-/// varying measure has no single static bound).
+/// the enumerated risk-adjusted upper bound applies at every node of its nested
+/// recursion, and the uniformity a `gap` stopping rule requires under `CVaR` (a
+/// per-stage varying measure has no single static bound).
 #[must_use]
 pub(crate) fn uniform_effective_measure(measures: &[RiskMeasure]) -> Option<RiskMeasure> {
     let first = measures.first()?.effective();
@@ -266,9 +267,8 @@ pub(crate) fn uniform_effective_measure(measures: &[RiskMeasure]) -> Option<Risk
         .then_some(first)
 }
 
-/// Compute `CVaR` weights via continuous-knapsack greedy allocation on objective
-/// values, reusing `scratch`. After this call, `scratch.mu[i]` is scenario `i`'s
-/// risk weight.
+/// Write the `CVaR` weights of `outcomes`, ranked by objective value, into
+/// `scratch.mu`: `μ = (1−λ)·p + λ·ν`, with `ν` the pure `CVaR_α` allocation.
 pub fn compute_cvar_weights_into(
     outcomes: &[BackwardOutcome],
     probabilities: &[f64],
@@ -276,22 +276,57 @@ pub fn compute_cvar_weights_into(
     lambda: f64,
     scratch: &mut RiskMeasureScratch,
 ) {
-    let n = outcomes.len();
-
-    scratch.upper_bounds.clear();
-    scratch.upper_bounds.extend(
-        probabilities
-            .iter()
-            .map(|&p| (1.0 - lambda) * p + lambda * p / alpha),
+    cvar_weights_kernel(
+        outcomes.len(),
+        |i| outcomes[i].objective_value,
+        probabilities,
+        alpha,
+        lambda,
+        scratch,
     );
+}
 
+/// The `μ = (1−λ)·p + λ·ν` of [`compute_cvar_weights_into`] over raw `costs`
+/// rather than `&[BackwardOutcome]`, used by [`RiskMeasure::evaluate_risk`].
+pub fn compute_cvar_weights_from_costs_into(
+    costs: &[f64],
+    probabilities: &[f64],
+    alpha: f64,
+    lambda: f64,
+    scratch: &mut RiskMeasureScratch,
+) {
+    cvar_weights_kernel(
+        costs.len(),
+        |i| costs[i],
+        probabilities,
+        alpha,
+        lambda,
+        scratch,
+    );
+}
+
+/// `μ_ω = (1−λ)·p_ω + λ·ν_ω`, where `ν` greedily fills mass 1 at cap `p_ω/α`
+/// from the costliest opening down; a single greedy at cap `(1−λ)·p_ω + λ·p_ω/α`
+/// with no floor is the wrong-but-compiling alternative. The index tie-break
+/// keeps the unstable sort declaration-order deterministic.
+fn cvar_weights_kernel(
+    n: usize,
+    value: impl Fn(usize) -> f64,
+    probabilities: &[f64],
+    alpha: f64,
+    lambda: f64,
+    scratch: &mut RiskMeasureScratch,
+) {
     scratch.order.clear();
     scratch.order.extend(0..n);
-    scratch.order.sort_by(|&i, &j| {
-        outcomes[j]
-            .objective_value
-            .total_cmp(&outcomes[i].objective_value)
-    });
+    scratch
+        .order
+        .sort_unstable_by(|&i, &j| value(j).total_cmp(&value(i)).then(i.cmp(&j)));
+
+    scratch.upper_bounds.clear();
+    scratch
+        .upper_bounds
+        .extend(probabilities.iter().map(|&p| p / alpha));
 
     scratch.mu.clear();
     scratch.mu.resize(n, 0.0);
@@ -304,42 +339,9 @@ pub fn compute_cvar_weights_into(
         scratch.mu[idx] = alloc;
         remaining -= alloc;
     }
-}
 
-/// [`compute_cvar_weights_into`] over raw `costs: &[f64]` rather than
-/// `&[BackwardOutcome]`, used by [`RiskMeasure::evaluate_risk`].
-pub fn compute_cvar_weights_from_costs_into(
-    costs: &[f64],
-    probabilities: &[f64],
-    alpha: f64,
-    lambda: f64,
-    scratch: &mut RiskMeasureScratch,
-) {
-    let n = costs.len();
-
-    scratch.upper_bounds.clear();
-    scratch.upper_bounds.extend(
-        probabilities
-            .iter()
-            .map(|&p| (1.0 - lambda) * p + lambda * p / alpha),
-    );
-
-    scratch.order.clear();
-    scratch.order.extend(0..n);
-    scratch
-        .order
-        .sort_by(|&i, &j| costs[j].total_cmp(&costs[i]));
-
-    scratch.mu.clear();
-    scratch.mu.resize(n, 0.0);
-    let mut remaining = 1.0_f64;
-    for &idx in &scratch.order {
-        if remaining <= 0.0 {
-            break;
-        }
-        let alloc = scratch.upper_bounds[idx].min(remaining);
-        scratch.mu[idx] = alloc;
-        remaining -= alloc;
+    for (mu, &p) in scratch.mu.iter_mut().zip(probabilities) {
+        *mu = (1.0 - lambda) * p + lambda * *mu;
     }
 }
 
@@ -596,7 +598,6 @@ mod tests {
 
     #[test]
     fn cvar_aggregate_cut_lambda_zero_equals_expectation() {
-        // lambda=0: upper bounds equal p, weights = p, same as Expectation
         let outcomes = vec![
             outcome(10.0, 10.0),
             outcome(20.0, 20.0),
@@ -940,5 +941,337 @@ mod tests {
             cap_after_second >= cap_after_first,
             "scratch capacity must not shrink: first={cap_after_first}, second={cap_after_second}"
         );
+    }
+
+    #[test]
+    fn cvar_weights_match_analytic_table() {
+        use super::{
+            RiskMeasureScratch, compute_cvar_weights_from_costs_into, compute_cvar_weights_into,
+        };
+
+        struct Row {
+            probs: &'static [f64],
+            costs: &'static [f64],
+            alpha: f64,
+            lambda: f64,
+            weights: &'static [f64],
+            risk: f64,
+        }
+        let rows = [
+            Row {
+                probs: &[0.25; 4],
+                costs: &[10.0, 20.0, 30.0, 40.0],
+                alpha: 0.5,
+                lambda: 0.5,
+                weights: &[0.125, 0.125, 0.375, 0.375],
+                risk: 30.0,
+            },
+            Row {
+                probs: &[0.1, 0.2, 0.3, 0.4],
+                costs: &[40.0, 30.0, 20.0, 10.0],
+                alpha: 0.25,
+                lambda: 0.5,
+                weights: &[0.25, 0.40, 0.15, 0.20],
+                risk: 27.0,
+            },
+            Row {
+                probs: &[1.0],
+                costs: &[42.0],
+                alpha: 0.3,
+                lambda: 0.6,
+                weights: &[1.0],
+                risk: 42.0,
+            },
+        ];
+
+        for Row {
+            probs,
+            costs,
+            alpha,
+            lambda,
+            weights,
+            risk,
+        } in rows
+        {
+            let outcomes: Vec<BackwardOutcome> = costs.iter().map(|&c| outcome(c, c)).collect();
+            let mut from_outcomes = RiskMeasureScratch::new();
+            compute_cvar_weights_into(&outcomes, probs, alpha, lambda, &mut from_outcomes);
+            let mut from_costs = RiskMeasureScratch::new();
+            compute_cvar_weights_from_costs_into(costs, probs, alpha, lambda, &mut from_costs);
+
+            let rho = RiskMeasure::CVaR { alpha, lambda }.evaluate_risk(costs, probs);
+            assert!(
+                (rho - risk).abs() < 1e-12,
+                "costs {costs:?} at alpha={alpha}, lambda={lambda}: risk must be {risk}, got {rho}"
+            );
+            assert_eq!(
+                from_outcomes.mu, from_costs.mu,
+                "both entry points must give identical weights for costs {costs:?}"
+            );
+            assert_eq!(from_costs.mu.len(), weights.len());
+            for (i, (&got, &want)) in from_costs.mu.iter().zip(weights).enumerate() {
+                assert!(
+                    (got - want).abs() < 1e-12,
+                    "costs {costs:?} at alpha={alpha}, lambda={lambda}: weight {i} must be \
+                     {want}, got {got} (all weights {:?})",
+                    from_costs.mu
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cvar_cost_ties_break_by_canonical_index() {
+        use super::RiskMeasureScratch;
+
+        let outcomes = vec![
+            outcome_with_coeffs(10.0, 10.0, vec![0.0, 0.0, 0.0]),
+            outcome_with_coeffs(30.0, 30.0, vec![1.0, 0.0, 0.0]),
+            outcome_with_coeffs(30.0, 30.0, vec![0.0, 1.0, 0.0]),
+            outcome_with_coeffs(30.0, 30.0, vec![0.0, 0.0, 1.0]),
+        ];
+        let probs = vec![0.25; 4];
+        let rm = RiskMeasure::CVaR {
+            alpha: 0.5,
+            lambda: 0.5,
+        };
+
+        let mut fresh = RiskMeasureScratch::new();
+        let mut intercept = 0.0_f64;
+        let mut coefficients = vec![0.0_f64; 3];
+        rm.aggregate_cut_into(
+            &outcomes,
+            &probs,
+            &mut intercept,
+            &mut coefficients,
+            &mut fresh,
+        );
+
+        let expected_weights = [0.125, 0.375, 0.375, 0.125];
+        for (i, (&got, &want)) in fresh.mu.iter().zip(&expected_weights).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "tied weight {i} must be {want}, got {got} (all weights {:?})",
+                fresh.mu
+            );
+        }
+        assert!(
+            (intercept - 27.5).abs() < 1e-12,
+            "tied intercept must be 27.5, got {intercept}"
+        );
+        for (i, (&got, &want)) in coefficients.iter().zip(&[0.375, 0.375, 0.125]).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "tied coefficient {i} must be {want}, got {got} (all {coefficients:?})"
+            );
+        }
+
+        let mut reused = RiskMeasureScratch::new();
+        let wider: Vec<BackwardOutcome> = [5.0, 60.0, 15.0, 60.0, 25.0, 35.0]
+            .iter()
+            .map(|&c| outcome_with_coeffs(c, c, vec![c, -c, 1.0]))
+            .collect();
+        let mut wider_intercept = 0.0_f64;
+        let mut wider_coefficients = vec![0.0_f64; 3];
+        rm.aggregate_cut_into(
+            &wider,
+            &uniform(6),
+            &mut wider_intercept,
+            &mut wider_coefficients,
+            &mut reused,
+        );
+        let mut reused_intercept = 0.0_f64;
+        let mut reused_coefficients = vec![0.0_f64; 3];
+        rm.aggregate_cut_into(
+            &outcomes,
+            &probs,
+            &mut reused_intercept,
+            &mut reused_coefficients,
+            &mut reused,
+        );
+        assert_eq!(
+            reused_intercept, intercept,
+            "a scratch reused from a wider input must give the fresh-scratch intercept"
+        );
+        assert_eq!(
+            reused_coefficients, coefficients,
+            "a scratch reused from a wider input must give the fresh-scratch coefficients"
+        );
+    }
+
+    #[test]
+    fn aggregate_cut_into_applies_the_probability_floor() {
+        use super::RiskMeasureScratch;
+
+        let outcomes = vec![
+            outcome_with_coeffs(10.0, 10.0, vec![1.0, 0.0]),
+            outcome_with_coeffs(20.0, 20.0, vec![0.0, 1.0]),
+            outcome_with_coeffs(30.0, 30.0, vec![1.0, 1.0]),
+            outcome_with_coeffs(40.0, 40.0, vec![2.0, 0.0]),
+        ];
+        let probs = vec![0.25; 4];
+        let rm = RiskMeasure::CVaR {
+            alpha: 0.5,
+            lambda: 0.5,
+        };
+
+        let mut scratch = RiskMeasureScratch::new();
+        let mut intercept = 0.0_f64;
+        let mut coefficients = vec![0.0_f64; 2];
+        rm.aggregate_cut_into(
+            &outcomes,
+            &probs,
+            &mut intercept,
+            &mut coefficients,
+            &mut scratch,
+        );
+
+        assert!(
+            (intercept - 30.0).abs() < 1e-12,
+            "the floored cut intercept must be 30.0, got {intercept}"
+        );
+        for (i, (&got, &want)) in coefficients.iter().zip(&[1.25, 0.5]).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "floored cut coefficient {i} must be {want}, got {got} (all {coefficients:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn cvar_weights_reduce_bitwise_at_lambda_endpoints() {
+        use super::{
+            RiskMeasureScratch, compute_cvar_weights_from_costs_into, compute_cvar_weights_into,
+        };
+
+        let costs = [12.0, 40.0, 7.5, 40.0, 23.0, -3.0];
+        let probs = [0.05_f64, 0.3, 0.1, 0.15, 0.25, 0.15];
+        let alpha = 0.35;
+        let outcomes: Vec<BackwardOutcome> = costs.iter().map(|&c| outcome(c, c)).collect();
+
+        let mut order: Vec<usize> = (0..costs.len()).collect();
+        order.sort_by(|&i, &j| costs[j].total_cmp(&costs[i]));
+        let mut pure_greedy = vec![0.0_f64; costs.len()];
+        let mut remaining = 1.0_f64;
+        for &i in &order {
+            if remaining <= 0.0 {
+                break;
+            }
+            let alloc = (probs[i] / alpha).min(remaining);
+            pure_greedy[i] = alloc;
+            remaining -= alloc;
+        }
+
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<u64>>();
+        let mut scratch = RiskMeasureScratch::new();
+        for (lambda, expected, what) in [
+            (
+                1.0,
+                &pure_greedy[..],
+                "the pure CVaR greedy over caps p/alpha",
+            ),
+            (0.0, &probs[..], "the probabilities"),
+        ] {
+            compute_cvar_weights_from_costs_into(&costs, &probs, alpha, lambda, &mut scratch);
+            assert_eq!(
+                bits(&scratch.mu),
+                bits(expected),
+                "lambda = {lambda} weights over costs must be {what}, bit for bit"
+            );
+            compute_cvar_weights_into(&outcomes, &probs, alpha, lambda, &mut scratch);
+            assert_eq!(
+                bits(&scratch.mu),
+                bits(expected),
+                "lambda = {lambda} weights over outcomes must be {what}, bit for bit"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use proptest::prelude::*;
+    use proptest::test_runner::RngSeed;
+
+    use super::{RiskMeasureScratch, compute_cvar_weights_from_costs_into};
+
+    /// Fixed cases/seed so a failing shrink is reproducible run-to-run.
+    fn fixed_config() -> ProptestConfig {
+        ProptestConfig {
+            cases: 256,
+            rng_seed: RngSeed::Fixed(42),
+            ..ProptestConfig::default()
+        }
+    }
+
+    /// `3..=8` openings: tie-prone costs, and positive raw weights normalised by
+    /// their sum into probabilities.
+    fn openings() -> impl Strategy<Value = (Vec<f64>, Vec<f64>)> {
+        (3..=8usize)
+            .prop_flat_map(|n| {
+                (
+                    prop::collection::vec(
+                        prop_oneof![-1e3..1e3, (-3i32..=3).prop_map(f64::from)],
+                        n,
+                    ),
+                    prop::collection::vec(1e-3..1.0_f64, n),
+                )
+            })
+            .prop_map(|(costs, raw)| {
+                let total: f64 = raw.iter().sum();
+                (costs, raw.iter().map(|w| w / total).collect())
+            })
+    }
+
+    /// `CVaR_α[z] = min_η {η + E[(z − η)⁺]/α}`, the minimum attained at some `η = z_i`.
+    fn rockafellar_uryasev_cvar(costs: &[f64], probs: &[f64], alpha: f64) -> f64 {
+        costs
+            .iter()
+            .map(|&eta| {
+                let excess: f64 = costs
+                    .iter()
+                    .zip(probs)
+                    .map(|(&z, &p)| p * (z - eta).max(0.0))
+                    .sum();
+                eta + excess / alpha
+            })
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    proptest! {
+        #![proptest_config(fixed_config())]
+
+        #[test]
+        fn cvar_weights_match_rockafellar_uryasev_oracle(
+            (costs, probs) in openings(),
+            alpha in prop_oneof![Just(1.0_f64), 1e-4..1.0_f64],
+            lambda in 1e-6..1.0_f64,
+        ) {
+            let mut scratch = RiskMeasureScratch::new();
+            compute_cvar_weights_from_costs_into(&costs, &probs, alpha, lambda, &mut scratch);
+            let mu = &scratch.mu;
+
+            let cost_scale = costs.iter().fold(1.0_f64, |m, z| m.max(z.abs()));
+            let expectation: f64 = costs.iter().zip(&probs).map(|(z, p)| z * p).sum();
+            let oracle = (1.0 - lambda) * expectation
+                + lambda * rockafellar_uryasev_cvar(&costs, &probs, alpha);
+            let weighted: f64 = costs.iter().zip(mu).map(|(z, m)| z * m).sum();
+            prop_assert!(
+                (weighted - oracle).abs() <= 1e-12 * cost_scale,
+                "weighted cost {weighted} must equal the oracle {oracle} (mu {mu:?})"
+            );
+
+            for (i, (&m, &p)) in mu.iter().zip(&probs).enumerate() {
+                let floor = (1.0 - lambda) * p;
+                let cap = floor + lambda * p / alpha;
+                prop_assert!(
+                    m >= floor - 1e-12 && m <= cap + 1e-12 * cap.max(1.0),
+                    "weight {i} = {m} must lie in [{floor}, {cap}]"
+                );
+            }
+
+            let mass: f64 = mu.iter().sum();
+            prop_assert!((mass - 1.0).abs() <= 1e-12, "weights must sum to 1, got {mass}");
+        }
     }
 }

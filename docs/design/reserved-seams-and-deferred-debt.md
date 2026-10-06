@@ -948,49 +948,59 @@ debt is the missing per-family slot-body wiring, not the shared mechanism.
 (the anticipated post-study-commitment import is the concrete queued case), or
 with the setup-layer redesign — whichever lands first.
 
-#### Nested risk-adjusted upper bound is an override, not an estimator arm
+#### Nested risk-adjusted upper bound is an override, not an estimator arm — RESOLVED
 
-**What it is.** `ForwardBound` is the named dispatch for the training upper
-bound, yet the nested CVaR estimator lives outside it: `sync_forward` computes
-the risk-neutral bound (one full `allgatherv` plus compensated reduction), then
-`apply_nested_cvar_ub` discards that result and re-gathers with a second
-`allgatherv` (`crates/cobre-sddp/src/training/forward/stats_aggregation.rs`).
-`ForwardBound::Exact`'s rustdoc documents the external override — the enum
-documents behavior it does not own — and `SimulationWeighting`, documented as
-mirroring `ForwardBound`, no longer covers the estimator space. Three
-duplicate-owner smells sit in the same code path: the recursion re-implements
-`EnumeratedPlan::walk_path` (the documented single owner of the root→leaf
-walk) without its length assertion; the rank-partition counts/displs
-arithmetic gains another implementation beside `RankDistribution::actual_per_rank`
-(the declared owner) and the copy in `cut_sync.rs`; and the per-path stage
-stride is derived from a solver-statistics vector's length instead of the
-declared `num_stages` owner. The recursion also allocates its full working
-state fresh every iteration — topology vectors that are pure functions of the
-`EnumeratedPlan`, plus a fresh `RiskMeasureScratch` per interior node while
-the `_into` scratch form exists unused — against the hot-path pre-allocation
-rule.
+**What it was.** The nested CVaR upper bound was a session-side override that
+discarded `sync_forward`'s risk-neutral result and gathered the forward costs a
+second time. Around it sat duplicate owners: a second root→leaf walk without the
+walk's length assertion, another copy of the rank-partition arithmetic, and a
+path stride read from a solver-statistics vector. The recursion also rebuilt its
+working state on every iteration, the tree topology and a CVaR-weight scratch per
+interior node included.
 
-**Owner.** The training owner.
-
-**Trigger.** The next stopping-rule, risk-measure, or upper-bound-estimator
-change — promote to a `ForwardBound` arm consuming `EnumeratedPlan` +
-`RankDistribution` with precomputed topology before a new variant lands on top.
-
-#### Admission predicate duplicated between setup gate and session override
-
-**What it is.** The setup rejecter (`reject_gap_under_nonuniform_risk`) and
-the session override condition answer "uniform effective CVaR under enumerated
-forwards" with independent code: the rejecter open-codes the uniformity scan
-that `uniform_effective_measure` (`convergence/risk_measure.rs`) implements,
-and effective-risk-aversion is implemented separately in the setup predicate,
-the session's inline match, and `RiskMeasure::effective`. A divergence admits
-a gap rule whose override does not fire — silently reverting to the
-risk-neutral end-of-horizon bound and manifesting as a spurious bound
-crossover, not an error.
+**Fix.** The bound is the `ForwardBound::NestedRisk` arm of `sync_forward`
+(`crates/cobre-sddp/src/training/forward/stats_aggregation.rs`): one gather and
+one estimator dispatch. The recursion reads the tree from the precomputed
+`NestedUbTopology`, whose walk shares `walk_leaf_to_root` with
+`EnumeratedPlan::walk_path`; the partition from `cobre_comm::per_rank_counts`; and
+the stride from the declared stage count. Its gather layout, gathered costs,
+per-node buffers and CVaR-weight scratch live in a `NestedUbScratch` held by the
+training session's iteration scratch, so the arm allocates only on its first
+iteration. `SimulationWeighting` mirrors the risk-neutral `Statistical` and
+`Exact` arms; the nested arm bounds training and has no simulation weighting
+counterpart.
 
 **Owner.** The training owner.
 
-**Trigger.** Same as the estimator-arm promotion above (one consolidation).
+#### Sampled and exact forward upper bounds allocate their gather buffers every iteration
+
+**What it is.** The `Statistical` and `Exact` arms of `sync_forward`
+(`crates/cobre-sddp/src/training/forward/stats_aggregation.rs`) build the rank
+partition (`per_rank_counts`), its displacements (`prefix_displs`) and the
+gathered-cost buffer afresh on every training iteration, against the hot-path
+pre-allocation rule. The `NestedRisk` arm keeps the same three buffers on a
+persistent `NestedUbScratch`.
+
+**Owner.** The training owner.
+
+**Trigger.** The next change to the `Statistical` or `Exact` arm, or a forward-path
+allocation pass: move the three buffers onto persistent scratch of the
+`NestedRisk` arm's shape.
+
+#### Admission predicate duplicated between setup gate and session override — RESOLVED
+
+**What it was.** The setup rejecter (`reject_gap_under_nonuniform_risk`) and the
+session's nested-bound selection answered "uniform effective CVaR under
+enumerated forwards" with independent code. A divergence could admit a gap rule
+whose nested bound never applied, silently reverting to the risk-neutral
+end-of-horizon bound.
+
+**Fix.** Both decide through `uniform_effective_measure`
+(`crates/cobre-sddp/src/convergence/risk_measure.rs`), the owner of the
+uniformity scan, and every effective-measure test routes through
+`RiskMeasure::effective`, the owner of the `lambda > 0` rule.
+
+**Owner.** The training owner.
 
 #### Outflow row-pair entries are hand-mirrored
 

@@ -587,29 +587,6 @@ pub(crate) fn retry_histogram_schema() -> Schema {
     ])
 }
 
-/// Schema for `system/hydro_energy_productivity.parquet` — per-hydro productivity overrides.
-///
-/// One row per (hydro, stage) override; a null `stage_id` is a per-hydro default
-/// across all stages.
-pub(crate) fn hydro_energy_productivity_schema() -> Schema {
-    Schema::new(vec![
-        Field::new("hydro_id", DataType::Int32, false),
-        Field::new("stage_id", DataType::Int32, true),
-        Field::new(
-            "equivalent_productivity_mw_per_m3s",
-            DataType::Float64,
-            true,
-        ),
-        Field::new("reference_volume_hm3", DataType::Float64, true),
-        Field::new("reference_outflow_m3s", DataType::Float64, true),
-        Field::new(
-            "specific_productivity_mw_per_m3s_per_m",
-            DataType::Float64,
-            true,
-        ),
-    ])
-}
-
 /// Schema for `training/cut_selection/iterations.parquet` — per-stage
 /// row-selection statistics.
 ///
@@ -869,10 +846,6 @@ pub(crate) const OUTPUT_SCHEMAS: &[SchemaRegistryEntry] = &[
     SchemaRegistryEntry {
         csv_label: Some("retry_histogram"),
         schema_fn: retry_histogram_schema,
-    },
-    SchemaRegistryEntry {
-        csv_label: Some("hydro_energy_productivity"),
-        schema_fn: hydro_energy_productivity_schema,
     },
     SchemaRegistryEntry {
         csv_label: None,
@@ -1742,7 +1715,7 @@ mod tests {
     /// the same change.
     #[test]
     fn output_schema_registry_has_no_duplicate_or_missing_rows() {
-        const EXPECTED_SCHEMA_COUNT: usize = 33;
+        const EXPECTED_SCHEMA_COUNT: usize = 32;
         assert_eq!(
             OUTPUT_SCHEMAS.len(),
             EXPECTED_SCHEMA_COUNT,
@@ -1758,49 +1731,6 @@ mod tests {
             );
             seen_fns.push(fn_ptr);
         }
-    }
-
-    #[test]
-    fn hydro_energy_productivity_schema_field_count_and_names() {
-        let schema = hydro_energy_productivity_schema();
-        assert_eq!(
-            schema.fields().len(),
-            6,
-            "hydro_energy_productivity schema must have 6 fields"
-        );
-        let names = field_names(&schema);
-        assert_eq!(
-            names,
-            vec![
-                "hydro_id",
-                "stage_id",
-                "equivalent_productivity_mw_per_m3s",
-                "reference_volume_hm3",
-                "reference_outflow_m3s",
-                "specific_productivity_mw_per_m3s_per_m",
-            ]
-        );
-        // hydro_id is non-null; all others are nullable
-        assert!(!is_nullable(&schema, "hydro_id"));
-        assert!(is_nullable(&schema, "stage_id"));
-        assert!(is_nullable(&schema, "equivalent_productivity_mw_per_m3s"));
-        assert!(is_nullable(&schema, "reference_volume_hm3"));
-        assert!(is_nullable(&schema, "reference_outflow_m3s"));
-        assert!(is_nullable(
-            &schema,
-            "specific_productivity_mw_per_m3s_per_m"
-        ));
-        // types
-        assert_eq!(field_type(&schema, "hydro_id"), DataType::Int32);
-        assert_eq!(field_type(&schema, "stage_id"), DataType::Int32);
-        assert_eq!(
-            field_type(&schema, "equivalent_productivity_mw_per_m3s"),
-            DataType::Float64
-        );
-        assert_eq!(
-            field_type(&schema, "specific_productivity_mw_per_m3s_per_m"),
-            DataType::Float64
-        );
     }
 
     #[test]

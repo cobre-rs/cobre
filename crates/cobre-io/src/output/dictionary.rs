@@ -733,22 +733,6 @@ fn description_for(file: &str, column: &str) -> &'static str {
             "Owning plant id for a hydro-unit-group row (entity_type_code 8). \
              NULL for the five plant-level entity families."
         }
-        ("hydro_energy_productivity", "hydro_id") => "Hydro plant identifier",
-        ("hydro_energy_productivity", "stage_id") => {
-            "Stage index; null for a per-hydro default across all stages"
-        }
-        ("hydro_energy_productivity", "equivalent_productivity_mw_per_m3s") => {
-            "Equivalent productivity override"
-        }
-        ("hydro_energy_productivity", "reference_volume_hm3") => {
-            "Reference storage volume for the productivity override"
-        }
-        ("hydro_energy_productivity", "reference_outflow_m3s") => {
-            "Reference outflow for the productivity override"
-        }
-        ("hydro_energy_productivity", "specific_productivity_mw_per_m3s_per_m") => {
-            "Specific productivity (per metre of head) override"
-        }
         _ => "",
     }
 }
@@ -2270,8 +2254,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 254,
-            "variables.csv must have exactly 254 data rows (one per column across all schemas)"
+            row_count, 248,
+            "variables.csv must have exactly 248 data rows (one per column across all schemas)"
         );
     }
 
@@ -2291,6 +2275,50 @@ mod tests {
             per_rank_rows, 0,
             "variables.csv must not describe a per-rank timing file no run writes; \
              found {per_rank_rows} per-rank timing rows"
+        );
+    }
+
+    #[test]
+    fn variables_csv_documents_only_files_a_run_writes() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_variables_csv(tmp.path()).expect("write_variables_csv must succeed");
+
+        let content = std::fs::read_to_string(tmp.path().join("variables.csv")).unwrap();
+        let mut rdr = csv::Reader::from_reader(content.as_bytes());
+
+        let mut labels: Vec<String> = Vec::new();
+        for rec in rdr.records() {
+            let file = rec.unwrap().get(0).unwrap().to_string();
+            if !labels.contains(&file) {
+                labels.push(file);
+            }
+        }
+        assert_eq!(
+            labels,
+            [
+                "costs",
+                "hydros",
+                "hydro_bus_generation",
+                "thermals",
+                "exchanges",
+                "buses",
+                "pumping_stations",
+                "contracts",
+                "non_controllables",
+                "inflow_lags",
+                "in_transit",
+                "transit_seed",
+                "generic_violations",
+                "paths",
+                "scenario_summary",
+                "convergence",
+                "iteration_timing",
+                "cut_selection",
+                "solver_iterations",
+                "retry_histogram",
+            ],
+            "every variables.csv file label must name an output a run writes, never a case \
+             input under system/, scenarios/ or constraints/"
         );
     }
 

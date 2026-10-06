@@ -13,8 +13,8 @@ pub use stitched::StitchedSeasonMap;
 use chrono::{Datelike, NaiveDate, TimeDelta, Weekday};
 use cobre_core::PostStudyStage;
 use cobre_core::temporal::{
-    Block, BlockMode, NoiseMethod, ScenarioSourceConfig, SeasonCycleType, SeasonDefinition,
-    SeasonMap, Stage, StageRiskConfig, StageStateConfig, window_period_overlaps,
+    Block, BlockMode, NoiseMethod, ScenarioSourceConfig, SeasonCycleType, SeasonCycles,
+    SeasonDefinition, SeasonMap, Stage, StageRiskConfig, StageStateConfig, window_period_overlaps,
 };
 
 pub(crate) fn month_exclusive_end(year: i32, month: u32) -> NaiveDate {
@@ -111,6 +111,24 @@ pub(crate) fn custom_period_bounds(
         .unwrap_or_else(|| unreachable!("clamped custom end date is always valid"));
 
     (start, end_inclusive + TimeDelta::days(1))
+}
+
+fn latest_custom_occurrence_ending_by(
+    season_def: &SeasonDefinition,
+    bound: NaiveDate,
+) -> Option<SeasonPeriodWindow> {
+    let year = bound.year();
+    let (start, end) = [year, year - 1, year - 2]
+        .into_iter()
+        .map(|candidate| custom_period_bounds(candidate, season_def))
+        .filter(|&(_, end)| end <= bound)
+        .max_by_key(|&(_, end)| end)?;
+    let days = u32::try_from((end - start).num_days()).ok()?;
+    Some(SeasonPeriodWindow {
+        start,
+        end,
+        hours: f64::from(days) * 24.0,
+    })
 }
 
 /// Determine the calendar year whose occurrence of a `Custom` `season_def`
@@ -236,12 +254,18 @@ pub fn next_season_period_window(
     }
 }
 
-/// Resolve the period window immediately preceding `current`, the exact
-/// inverse of [`next_season_period_window`], with the season id the backward
-/// walk records for it. This is the walk's single step.
+/// Resolve the period window immediately preceding `current`, with the season
+/// id the backward walk records for it. This is the walk's single step.
+///
+/// On `Monthly` and `Weekly` maps the step is the exact inverse of
+/// [`next_season_period_window`]. On a `Custom` map it steps to the previous
+/// season of the current season's resolution-level cycle in `cycles` and takes
+/// the year from the dates: the window is that season's latest occurrence
+/// ending at or before `current.start`.
 #[must_use]
 pub(crate) fn previous_occurrence(
     season_map: &SeasonMap,
+    cycles: &SeasonCycles,
     current_id: usize,
     current: &SeasonPeriodWindow,
 ) -> Option<(usize, SeasonPeriodWindow)> {
@@ -259,40 +283,24 @@ pub(crate) fn previous_occurrence(
                 .unwrap_or_else(|| unreachable!("previous month is always valid"));
             let end = current.start;
             let hours = month_total_hours(prev_year, prev_month);
-            Some(SeasonPeriodWindow { start, end, hours })
+            SeasonPeriodWindow { start, end, hours }
         }
         SeasonCycleType::Weekly => {
             let end = current.start;
             let start = end - TimeDelta::days(7);
-            Some(SeasonPeriodWindow {
+            SeasonPeriodWindow {
                 start,
                 end,
                 hours: 7.0 * 24.0,
-            })
+            }
         }
         SeasonCycleType::Custom => {
-            let pos = season_map
-                .seasons
-                .iter()
-                .position(|s| s.id == season_def.id)?;
-            let len = season_map.seasons.len();
-            let prev_def = &season_map.seasons[(pos + len - 1) % len];
-            let current_year = find_season_year_custom(current.start, current.end, season_def);
-            let target_year = if pos == 0 {
-                current_year - 1
-            } else {
-                current_year
-            };
-            let (start, end) = custom_period_bounds(target_year, prev_def);
-            let days = u32::try_from((end - start).num_days())
-                .unwrap_or_else(|_| unreachable!("custom period day count always fits in u32"));
-            Some(SeasonPeriodWindow {
-                start,
-                end,
-                hours: f64::from(days) * 24.0,
-            })
+            let predecessor = cycles.predecessor(current_id)?;
+            let predecessor_def = season_map.seasons.iter().find(|s| s.id == predecessor)?;
+            let window = latest_custom_occurrence_ending_by(predecessor_def, current.start)?;
+            return Some((predecessor, window));
         }
-    }?;
+    };
     Some((season_map.season_for_date(previous.start)?, previous))
 }
 
@@ -304,10 +312,11 @@ pub fn nth_previous_occurrence(
     anchor: &SeasonPeriodWindow,
     k: usize,
 ) -> Option<SeasonPeriodWindow> {
+    let cycles = SeasonCycles::new(season_map);
     let mut window = anchor.clone();
     let mut current_id = season_def.id;
     for _ in 0..k {
-        (current_id, window) = previous_occurrence(season_map, current_id, &window)?;
+        (current_id, window) = previous_occurrence(season_map, &cycles, current_id, &window)?;
     }
     Some(window)
 }
@@ -634,13 +643,15 @@ impl<'a> StageCalendar<'a> {
         max_k: usize,
     ) -> Option<Vec<SeasonPeriodWindow>> {
         let anchor_stage = self.stages.first()?;
+        let cycles = SeasonCycles::new(season_map);
         let mut window = season_period_window(season_map, season_def, anchor_stage);
         let mut current_id = season_def.id;
         let mut occurrences = Vec::with_capacity(max_k + 1);
         occurrences.push(window.clone());
 
         for _ in 0..max_k {
-            let Some((next_id, previous)) = previous_occurrence(season_map, current_id, &window)
+            let Some((next_id, previous)) =
+                previous_occurrence(season_map, &cycles, current_id, &window)
             else {
                 break;
             };
@@ -858,6 +869,41 @@ mod tests {
             .expect("k=2 must resolve to Q3 2023, not Q3 2024");
         assert_eq!(q3_2023.start, NaiveDate::from_ymd_opt(2023, 7, 1).unwrap());
         assert_eq!(q3_2023.end, NaiveDate::from_ymd_opt(2023, 10, 1).unwrap());
+    }
+
+    #[test]
+    fn previous_occurrence_steps_a_year_spanning_season_back_in_time() {
+        let season = |id: usize, month_start: u32, month_end: u32| SeasonDefinition {
+            id,
+            label: format!("S{id}"),
+            month_start,
+            day_start: None,
+            month_end: Some(month_end),
+            day_end: None,
+        };
+        let season_map = SeasonMap {
+            cycle_type: SeasonCycleType::Custom,
+            seasons: vec![season(0, 11, 2), season(1, 3, 10)],
+        };
+        let season_def = &season_map.seasons[1];
+
+        let anchor = SeasonPeriodWindow {
+            start: NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+            end: NaiveDate::from_ymd_opt(2024, 11, 1).unwrap(),
+            hours: 245.0 * 24.0,
+        };
+
+        let nov_feb = nth_previous_occurrence(&season_map, season_def, &anchor, 1)
+            .expect("k=1 must resolve to Nov 2023-Feb 2024");
+        assert_eq!(nov_feb.start, NaiveDate::from_ymd_opt(2023, 11, 1).unwrap());
+        assert_eq!(nov_feb.end, NaiveDate::from_ymd_opt(2024, 3, 1).unwrap());
+        assert_eq!(nov_feb.hours, 121.0 * 24.0);
+
+        let mar_oct = nth_previous_occurrence(&season_map, season_def, &anchor, 2)
+            .expect("k=2 must resolve to Mar-Oct 2023");
+        assert_eq!(mar_oct.start, NaiveDate::from_ymd_opt(2023, 3, 1).unwrap());
+        assert_eq!(mar_oct.end, NaiveDate::from_ymd_opt(2023, 11, 1).unwrap());
+        assert_eq!(mar_oct.hours, 245.0 * 24.0);
     }
 
     #[test]

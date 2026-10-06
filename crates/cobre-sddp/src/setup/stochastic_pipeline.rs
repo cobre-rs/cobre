@@ -1266,9 +1266,7 @@ mod tests {
     /// Season definitions for the non-calendar-aligned ring fixture below:
     /// monthly Nov-Apr (seasons 10, 11, 0-3), then quarterly May-Jul and
     /// Aug-Oct (seasons 12, 13) — a quarterly regime that starts mid-calendar-
-    /// quarter (May, not a calendar-quarter boundary). Declared in
-    /// chronological order so the `Custom` cycle's position-based backward walk
-    /// resolves each season's immediate calendar predecessor.
+    /// quarter (May, not a calendar-quarter boundary).
     fn nonaligned_ring_season_map() -> SeasonMap {
         let month = |id: usize, month_start: u32| SeasonDefinition {
             id,
@@ -1398,13 +1396,13 @@ mod tests {
             .collect();
         // `discover_historical_windows`'s season-map walk needs one pre-study
         // row at its lag-2 predecessor of Dec 2025 (season 11): the walk steps
-        // to Nov 2025 (season 10), then to Aug-Oct 2024 (season 13) — see
+        // to Nov 2025 (season 10), then to Aug-Oct 2025 (season 13) — see
         // `nonaligned_ring_season_map`'s `Custom` cycle. This value is never
         // read by `standardize_historical_windows`.
         inflow_history.push(InflowHistoryRow {
             hydro_id: RING_HYDRO_ID,
-            start_date: NaiveDate::from_ymd_opt(2024, 8, 15).unwrap(),
-            end_date: NaiveDate::from_ymd_opt(2024, 8, 16).unwrap(),
+            start_date: NaiveDate::from_ymd_opt(2025, 8, 15).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2025, 8, 16).unwrap(),
             value_m3s: 999.0,
         });
         inflow_history.push(InflowHistoryRow {

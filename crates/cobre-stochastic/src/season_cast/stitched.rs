@@ -1,7 +1,7 @@
 //! Stage-id to season-id lookup that stitches the study stages to the
 //! pre-study lags recorded by the backward season walk.
 
-use cobre_core::temporal::{SeasonMap, Stage};
+use cobre_core::temporal::{SeasonCycles, SeasonMap, Stage};
 
 use super::{previous_occurrence, season_period_window};
 
@@ -46,6 +46,7 @@ impl StitchedSeasonMap {
             && let Some(sid) = anchor.season_id
             && let Some(def) = season_map.seasons.iter().find(|d| d.id == sid)
         {
+            let cycles = SeasonCycles::new(season_map);
             let mut window = season_period_window(season_map, def, anchor);
             let mut current = sid;
             for k in 1..=max_lag {
@@ -56,7 +57,9 @@ impl StitchedSeasonMap {
                 {
                     break;
                 }
-                let Some((id, previous)) = previous_occurrence(season_map, current, &window) else {
+                let Some((id, previous)) =
+                    previous_occurrence(season_map, &cycles, current, &window)
+                else {
                     break;
                 };
                 lags.push(id);
@@ -99,7 +102,8 @@ mod tests {
     use super::StitchedSeasonMap;
     use crate::season_cast::{nth_previous_occurrence, season_period_window};
     use crate::test_support::{
-        MonthlyLabels, monthly_season_map, sparse_ring_season_map, weekly_season_map,
+        MonthlyLabels, monthly_quarterly_season_map, monthly_season_map, sparse_ring_season_map,
+        weekly_season_map,
     };
 
     fn date(y: i32, m: u32, d: u32) -> NaiveDate {
@@ -148,6 +152,17 @@ mod tests {
         let in_progress = season_period_window(season_map, def, anchor);
         let occurrence = nth_previous_occurrence(season_map, def, &in_progress, k)?;
         season_map.season_for_date(occurrence.start)
+    }
+
+    fn lag_window(season_map: &SeasonMap, anchor: &Stage, k: usize) -> (NaiveDate, NaiveDate) {
+        let def = season_map
+            .seasons
+            .iter()
+            .find(|d| Some(d.id) == anchor.season_id)
+            .unwrap();
+        let in_progress = season_period_window(season_map, def, anchor);
+        let occurrence = nth_previous_occurrence(season_map, def, &in_progress, k).unwrap();
+        (occurrence.start, occurrence.end)
     }
 
     #[test]
@@ -214,6 +229,49 @@ mod tests {
         let modulo =
             [1_i32, 2, 3, 4, 5, 6].map(|k| Some(usize::try_from((-k).rem_euclid(5)).unwrap()));
         assert_ne!(lags, modulo);
+    }
+
+    #[test]
+    fn stitched_map_steps_a_monthly_anchor_back_through_months_on_a_layered_map() {
+        let season_map = monthly_quarterly_season_map();
+        let stages = [month_stage(0, 2024, 1, Some(0))];
+
+        let stitched = StitchedSeasonMap::build(&stages, &season_map, 4);
+
+        assert_eq!(
+            [-1, -2, -3, -4].map(|id| stitched.season_of(id)),
+            [Some(11), Some(10), Some(9), Some(8)]
+        );
+        assert_eq!(
+            lag_window(&season_map, &stages[0], 1),
+            (date(2023, 12, 1), date(2024, 1, 1))
+        );
+    }
+
+    #[test]
+    fn stitched_map_steps_a_quarterly_anchor_along_the_quarterly_cycle() {
+        let season_map = monthly_quarterly_season_map();
+        let stages = [study_stage(
+            0,
+            date(2024, 7, 1),
+            date(2024, 10, 1),
+            Some(12),
+        )];
+
+        let stitched = StitchedSeasonMap::build(&stages, &season_map, 4);
+
+        assert_eq!(
+            [-1, -2, -3, -4].map(|id| stitched.season_of(id)),
+            [Some(15), Some(14), Some(13), Some(12)]
+        );
+        assert_eq!(
+            lag_window(&season_map, &stages[0], 1),
+            (date(2024, 4, 1), date(2024, 7, 1))
+        );
+        assert_eq!(
+            lag_window(&season_map, &stages[0], 4),
+            (date(2023, 7, 1), date(2023, 10, 1))
+        );
     }
 
     #[test]

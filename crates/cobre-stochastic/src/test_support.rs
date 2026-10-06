@@ -133,6 +133,49 @@ pub fn sparse_ring_season_map() -> SeasonMap {
     }
 }
 
+/// D30's layered `Custom` [`SeasonMap`]: months 0–11, then Q3 = 12, Q4 = 13, Q1 = 14, Q2 = 15.
+#[must_use]
+pub fn monthly_quarterly_season_map() -> SeasonMap {
+    const MONTHS: [(&str, u32); 12] = [
+        ("January", 31),
+        ("February", 28),
+        ("March", 31),
+        ("April", 30),
+        ("May", 31),
+        ("June", 30),
+        ("July", 31),
+        ("August", 31),
+        ("September", 30),
+        ("October", 31),
+        ("November", 30),
+        ("December", 31),
+    ];
+    let def =
+        |id: usize, label: &str, month_start: u32, month_end: u32, day_end: u32| SeasonDefinition {
+            id,
+            label: label.to_string(),
+            month_start,
+            day_start: Some(1),
+            month_end: Some(month_end),
+            day_end: Some(day_end),
+        };
+    let months = MONTHS
+        .into_iter()
+        .zip(1_u32..)
+        .enumerate()
+        .map(|(id, ((label, day_end), month))| def(id, label, month, month, day_end));
+    let quarters = [
+        def(12, "Q3", 7, 9, 30),
+        def(13, "Q4", 10, 12, 31),
+        def(14, "Q1", 1, 3, 31),
+        def(15, "Q2", 4, 6, 30),
+    ];
+    SeasonMap {
+        cycle_type: SeasonCycleType::Custom,
+        seasons: months.chain(quarters).collect(),
+    }
+}
+
 /// A weekly [`SeasonMap`] (52 seasons, `Week1`..`Week52`,
 /// [`SeasonCycleType::Weekly`]).
 #[must_use]

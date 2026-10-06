@@ -1,5 +1,7 @@
 //! Training phase for `cobre run`.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc;
 
 use cobre_comm::{Communicator, ReduceOp};
@@ -60,6 +62,7 @@ struct GlobalTrainingStats {
 pub(super) fn run_training_phase(
     ctx: &RunContext<impl Communicator>,
     setup: &mut StudySetup,
+    shutdown_flag: &Arc<AtomicUsize>,
 ) -> Result<TrainingPhaseResult, CliError> {
     let solver_factory = ActiveSolver::new;
 
@@ -92,7 +95,7 @@ pub(super) fn run_training_phase(
         ctx.n_threads,
         solver_factory,
         Some(event_tx),
-        None,
+        Some(shutdown_flag),
     ) {
         Ok(outcome) => outcome,
         Err(e) => {

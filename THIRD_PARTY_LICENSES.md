@@ -9,7 +9,7 @@ propagated Apache-2.0 `NOTICE` text lives in `NOTICE`.
 
 ## Overview
 
-- Apache License 2.0: 169 crate(s)
+- Apache License 2.0: 171 crate(s)
 - MIT License: 30 crate(s)
 - BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License: 3 crate(s)
 - Creative Commons Zero v1.0 Universal: 1 crate(s)
@@ -1999,6 +1999,8 @@ Used by:
 - rustc-hash 1.1.0
 - rustix 1.1.5
 - scopeguard 1.2.0
+- signal-hook-registry 1.4.8
+- signal-hook 0.3.18
 - smallvec 1.16.2
 - stable_deref_trait 1.2.1
 - tempfile 3.27.0

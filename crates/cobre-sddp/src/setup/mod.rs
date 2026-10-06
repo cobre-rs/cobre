@@ -552,10 +552,9 @@ impl PostTrainingSimulation {
     /// entry point sampled once after writing the training outputs (`0` is no
     /// request, otherwise a [`ShutdownSource::level`]).
     ///
-    /// A requested simulation is skipped when either input names a signal: the
-    /// decision carries [`StopMask::SIGNAL`], or `post_write_level` reads as a
-    /// signal. That holds whatever rule, budget or cooperative request ended
-    /// training; a cooperative request alone keeps the simulation.
+    /// A requested simulation is skipped when [`signal_stop_requested`] holds,
+    /// whatever rule, budget or cooperative request ended training; a
+    /// cooperative request alone keeps the simulation.
     #[must_use]
     pub fn resolve(
         simulate_requested: bool,
@@ -565,9 +564,7 @@ impl PostTrainingSimulation {
         if !simulate_requested {
             return Self::NotRequested;
         }
-        if decision.mask().contains(StopMask::SIGNAL)
-            || ShutdownSource::from_level(post_write_level) == Some(ShutdownSource::Signal)
-        {
+        if signal_stop_requested(decision, post_write_level) {
             Self::SkipAfterSignalStop
         } else {
             Self::Run
@@ -575,9 +572,17 @@ impl PostTrainingSimulation {
     }
 }
 
+/// Whether a signal stopped the run, through the stop decision or the post-write level.
+#[must_use]
+pub fn signal_stop_requested(decision: &StopDecision, post_write_level: usize) -> bool {
+    decision.mask().contains(StopMask::SIGNAL)
+        || ShutdownSource::from_level(post_write_level) == Some(ShutdownSource::Signal)
+}
+
 #[cfg(test)]
 mod post_training_simulation_tests {
     use super::PostTrainingSimulation::{self, NotRequested, Run, SkipAfterSignalStop};
+    use super::signal_stop_requested;
     use crate::config::ShutdownSource;
     use crate::{
         ConvergenceMonitor, StopDecision, StopMask, StoppingMode, StoppingRule, StoppingRuleSet,
@@ -678,6 +683,56 @@ mod post_training_simulation_tests {
                     PostTrainingSimulation::resolve(true, &decision, level),
                     expected,
                     "{name}, post-write level {level}, requested"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn signal_stop_requested_truth_table() {
+        let levels = [
+            0,
+            ShutdownSource::Cooperative.level(),
+            ShutdownSource::Signal.level(),
+        ];
+        let cases = [
+            (
+                "no stop",
+                first_iteration_decision(100, 100, None),
+                [false, false, true],
+            ),
+            (
+                "configured stop",
+                first_iteration_decision(1, 100, None),
+                [false, false, true],
+            ),
+            (
+                "budget stop",
+                first_iteration_decision(100, 1, None),
+                [false, false, true],
+            ),
+            (
+                "cooperative shutdown",
+                first_iteration_decision(100, 100, Some(ShutdownSource::Cooperative)),
+                [false, false, true],
+            ),
+            (
+                "signal shutdown",
+                first_iteration_decision(100, 100, Some(ShutdownSource::Signal)),
+                [true, true, true],
+            ),
+            (
+                "signal at a configured stop",
+                first_iteration_decision(1, 100, Some(ShutdownSource::Signal)),
+                [true, true, true],
+            ),
+        ];
+        for (name, decision, expected_per_level) in cases {
+            for (level, expected) in levels.into_iter().zip(expected_per_level) {
+                assert_eq!(
+                    signal_stop_requested(&decision, level),
+                    expected,
+                    "{name}, post-write level {level}"
                 );
             }
         }

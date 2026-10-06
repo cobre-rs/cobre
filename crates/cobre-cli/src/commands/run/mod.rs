@@ -9,9 +9,11 @@ use cobre_sddp::SolverStatsDelta;
 use cobre_sddp::build_deviation_summary;
 use cobre_sddp::setup::PostTrainingSimulation;
 use cobre_sddp::setup::RunPhasePlan;
+use cobre_sddp::setup::signal_stop_requested;
 use cobre_solver::active_solver_metadata_id;
 
 use crate::progress::RenderMode;
+mod graceful_stop;
 mod outputs;
 mod policy;
 mod setup;
@@ -50,6 +52,7 @@ impl From<CommBackendArg> for BackendKind {
     }
 }
 
+use graceful_stop::SignalWindow;
 use outputs::{WriteTrainingArgs, write_training_outputs};
 use policy::{apply_training_policy, load_policy_for_simulation};
 use setup::{LoadBroadcastResult, broadcast_and_build_setup, run_pre_training, setup_communicator};
@@ -108,7 +111,8 @@ pub(super) struct RunContext<C: Communicator> {
 /// Returns [`CliError`] when loading, training, simulation, or I/O fails.
 pub fn execute(args: &RunArgs) -> Result<(), CliError> {
     let ctx = setup_communicator(args)?;
-    let result = execute_inner(&ctx, args);
+    let result = graceful_stop::install(ctx.comm.size() == 1)
+        .and_then(|signals| execute_inner(&ctx, args, signals));
     if let Err(ref e) = result
         && ctx.comm.size() > 1
     {
@@ -121,7 +125,11 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
     result
 }
 
-fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result<(), CliError> {
+fn execute_inner<C: Communicator>(
+    ctx: &RunContext<C>,
+    args: &RunArgs,
+    signals: &SignalWindow,
+) -> Result<(), CliError> {
     let LoadBroadcastResult {
         system,
         mut setup,
@@ -151,7 +159,8 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
             apply_training_policy(ctx, &system, &mut setup, root_config.as_ref(), policy_mode)?;
             setup.enable_periodic_checkpoints(&system, &ctx.output_dir);
             let training_started_at = now_iso8601();
-            let training = run_training_phase(ctx, &mut setup)?;
+            signals.open();
+            let training = run_training_phase(ctx, &mut setup, signals.shutdown_flag())?;
             let training_completed_at = now_iso8601();
 
             if ctx.is_root {
@@ -203,6 +212,10 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
                     }
                 }
                 return Err(CliError::from(training_error));
+            }
+
+            if !signal_stop_requested(&training.result.stop_decision, 0) {
+                signals.close()?;
             }
 
             let n_scenarios = setup.simulation_config.n_scenarios;

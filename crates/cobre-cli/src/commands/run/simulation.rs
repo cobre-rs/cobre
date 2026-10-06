@@ -445,6 +445,7 @@ fn aggregate_simulation_solver_stats<C: Communicator>(
 mod tests {
     use std::any::Any;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use console::Term;
@@ -586,8 +587,9 @@ mod tests {
         let local = test_run_context(LocalBackend, 1, &case_dir, &output_dir);
         let mut loaded = broadcast_and_build_setup(&local, &args)
             .expect("1dtoy must load and build its study setup");
-        let training = run_training_phase(&local, &mut loaded.setup)
-            .expect("1dtoy must train under the local backend");
+        let training =
+            run_training_phase(&local, &mut loaded.setup, &Arc::new(AtomicUsize::new(0)))
+                .expect("1dtoy must train under the local backend");
         assert!(
             training.error.is_none(),
             "1dtoy training must finish without a mid-iteration error: {:?}",

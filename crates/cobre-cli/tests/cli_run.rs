@@ -23,6 +23,7 @@ use tempfile::TempDir;
 mod common;
 use common::{
     case_dir, cobre, copy_dir_recursive, make_valid_case, restamp_policy_version, write_file,
+    write_supplied_opening_tree_case,
 };
 
 #[test]
@@ -2089,4 +2090,23 @@ fn warm_start_rerun_reads_the_policy_the_training_clear_keeps() {
     run_case(case.path(), out.path());
 
     assert_empty_file(&out.path().join("training/_SUCCESS"));
+}
+
+/// A study that supplies its opening tree from a file runs although its
+/// `historical_residuals` stages have no inflow history to build a library from.
+#[test]
+fn run_accepts_a_supplied_opening_tree_with_historical_residuals_stages() {
+    let case = TempDir::new().unwrap();
+    write_supplied_opening_tree_case(case.path());
+    let out = TempDir::new().unwrap();
+
+    cobre()
+        .args(["run", case.path().to_str().unwrap()])
+        .args(["--output", out.path().to_str().unwrap(), "--quiet"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("historical windows").not())
+        .stdout(predicate::str::contains("V2.").not())
+        .stderr(predicate::str::contains("historical windows").not())
+        .stderr(predicate::str::contains("V2.").not());
 }

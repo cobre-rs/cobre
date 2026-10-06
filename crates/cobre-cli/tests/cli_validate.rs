@@ -12,7 +12,7 @@ use predicates::prelude::*;
 use tempfile::TempDir;
 
 mod common;
-use common::{PENALTIES_JSON, copy_dir_recursive};
+use common::{PENALTIES_JSON, copy_dir_recursive, write_supplied_opening_tree_case};
 
 // ── fixture helpers ───────────────────────────────────────────────────────────
 
@@ -1263,4 +1263,21 @@ fn validate_json_reports_the_accepted_policy_load_mode() {
             "{mode}"
         );
     }
+}
+
+/// A study that supplies its opening tree from a file validates although its
+/// `historical_residuals` stages have no inflow history to build a library from.
+#[test]
+fn validate_accepts_a_supplied_opening_tree_with_historical_residuals_stages() {
+    let case = TempDir::new().unwrap();
+    write_supplied_opening_tree_case(case.path());
+
+    cobre()
+        .args(["validate", case.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("historical windows").not())
+        .stdout(predicate::str::contains("V2.").not())
+        .stderr(predicate::str::contains("historical windows").not())
+        .stderr(predicate::str::contains("V2.").not());
 }

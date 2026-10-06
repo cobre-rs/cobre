@@ -298,7 +298,8 @@ fn compute_external_scenario_counts(
 }
 
 /// Run the stochastic preprocessing pipeline: PAR estimation, block factor
-/// loading, opening-tree library construction, and stochastic context build.
+/// loading, opening-tree library construction (only when no opening tree is
+/// supplied), and stochastic context build.
 ///
 /// `inflow_lag_depth` is the boundary-inferred lag depth (from
 /// `BoundaryStateRequirements::inflow_lag_depth`), or `None` for a study with no
@@ -344,9 +345,10 @@ pub fn prepare_stochastic(
 
 /// Build the study's [`StochasticContext`] from a resolved (post-estimation)
 /// `system` and the run's scenario inputs: the load/NCS factor entries (load
-/// factors re-read from `case_dir`), the opening-tree historical library, and the
-/// forward seed. Both rank 0 (via [`prepare_stochastic`], after PAR estimation and
-/// user-tree loading) and the CLI non-root reconstruction call this one builder, so
+/// factors re-read from `case_dir`), the opening-tree historical library (only
+/// when `user_tree` is `None`), and the forward seed. Both rank 0 (via
+/// [`prepare_stochastic`], after PAR estimation and user-tree loading) and the CLI
+/// non-root reconstruction call this one builder, so
 /// the two paths cannot drift. `user_tree` and `external_scenario_counts` are the two inputs that
 /// differ by rank — rank 0 loads / computes them; a non-root rank receives the tree
 /// over the wire and passes `None` counts.
@@ -386,8 +388,11 @@ pub fn build_stochastic_context_for_study(
         .map(|(ncs_id, stage_id, pairs)| (*ncs_id, *stage_id, pairs.as_slice()))
         .collect();
 
-    let opening_tree_library =
-        build_opening_tree_library(system, training_source, inflow_lag_depth)?;
+    let opening_tree_library = if user_tree.is_some() {
+        None
+    } else {
+        build_opening_tree_library(system, training_source, inflow_lag_depth)?
+    };
 
     let forward_seed = training_source.seed.map(i64::unsigned_abs);
     Ok(build_stochastic_context(
@@ -433,7 +438,7 @@ mod tests {
         derive_downstream_par_order, precompute_stage_lag_transitions,
     };
     use cobre_stochastic::{
-        PrecomputedPar, derive_inflow_seeds,
+        ComponentProvenance, PrecomputedPar, StochasticError, derive_inflow_seeds,
         par::lag_kernel::{DownstreamLagAccum, LagMajor, PrimaryLagAccum, advance_lag_chain},
         solve_par_noise,
     };
@@ -2212,9 +2217,12 @@ mod tests {
     /// `branching_factor = 1` study stages declare.
     fn write_ring_noise_openings(case_dir: &Path) {
         let path = case_dir.join("scenarios").join("noise_openings.parquet");
-        let tree = OpeningTree::from_parts(vec![0.1, 0.2, 0.3, 0.4, 0.5], vec![1; 5], 1);
-        cobre_io::output::stochastic::write_noise_openings(&path, &tree)
+        cobre_io::output::stochastic::write_noise_openings(&path, &ring_user_tree())
             .expect("write noise_openings");
+    }
+
+    fn ring_user_tree() -> OpeningTree {
+        OpeningTree::from_parts(vec![0.1, 0.2, 0.3, 0.4, 0.5], vec![1; 5], 1)
     }
 
     /// A `noise_openings.parquet` physically present but with no `openings`
@@ -2346,6 +2354,92 @@ mod tests {
                 ..
             }) => {}
             other => panic!("expected InvalidParParameters, got: {other:?}"),
+        }
+    }
+
+    /// The ring fixture with deterministic order-0 inflow (`std_m3s = 0`), so the
+    /// stage-0 observation 80 against the mean 100 fails the historical library's
+    /// V2.3 check.
+    fn ring_with_failing_historical_library() -> System {
+        let fx = build_ring_fixture();
+        let models = fx
+            .system
+            .inflow_models()
+            .iter()
+            .cloned()
+            .map(|m| InflowModel {
+                std_m3s: 0.0,
+                ar_coefficients: vec![],
+                ..m
+            })
+            .collect();
+        ring_system(
+            &fx.stages,
+            models,
+            fx.system.inflow_history().to_vec(),
+            ring_season_map(),
+            Vec::new(),
+        )
+    }
+
+    fn ring_without_inflow_history() -> System {
+        let fx = build_ring_fixture();
+        ring_system(
+            &fx.stages,
+            fx.system.inflow_models().to_vec(),
+            Vec::new(),
+            ring_season_map(),
+            Vec::new(),
+        )
+    }
+
+    fn assert_supplied_tree_reaches_context(system: &System) {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let ctx = build_stochastic_context_for_study(
+            system,
+            tmp.path(),
+            42,
+            &ScenarioSource::default(),
+            None,
+            Some(ring_user_tree()),
+            None,
+        )
+        .expect("a supplied opening tree must not need the historical library");
+        assert_eq!(
+            ctx.provenance().opening_tree,
+            ComponentProvenance::UserSupplied
+        );
+        assert_eq!(ctx.opening_tree().data(), [0.1, 0.2, 0.3, 0.4, 0.5]);
+    }
+
+    #[test]
+    fn supplied_opening_tree_ignores_a_historical_library_that_fails_validation() {
+        assert_supplied_tree_reaches_context(&ring_with_failing_historical_library());
+    }
+
+    #[test]
+    fn supplied_opening_tree_needs_no_inflow_history() {
+        assert_supplied_tree_reaches_context(&ring_without_inflow_history());
+    }
+
+    #[test]
+    fn generated_opening_tree_still_refuses_a_historical_library_that_fails_validation() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let result = build_stochastic_context_for_study(
+            &ring_with_failing_historical_library(),
+            tmp.path(),
+            42,
+            &ScenarioSource::default(),
+            None,
+            None,
+            None,
+        );
+        match result {
+            Err(SddpError::Stochastic(StochasticError::InsufficientData { context })) => {
+                assert!(context.starts_with("V2.3"), "got: {context}");
+            }
+            Err(other) => panic!("expected a V2.3 refusal, got: {other:?}"),
+            Ok(_) => panic!("a generated tree over a failing library must be refused"),
         }
     }
 }

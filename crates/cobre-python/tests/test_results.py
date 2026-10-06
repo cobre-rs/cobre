@@ -318,6 +318,37 @@ def test_load_policy_missing_dir_raises(tmp_path: pathlib.Path) -> None:
         cobre.results.load_policy(str(tmp_path))
 
 
+def _tree_snapshot(root: pathlib.Path) -> list[tuple[str, bytes | None]]:
+    return sorted(
+        (
+            path.relative_to(root).as_posix(),
+            path.read_bytes() if path.is_file() else None,
+        )
+        for path in root.rglob("*")
+    )
+
+
+def test_load_policy_reads_a_staged_copy_when_the_policy_dir_is_absent(
+    run_output: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """load_policy() reads <policy>.staging when <policy> is absent, changing nothing."""
+    import cobre.results  # noqa: PLC0415
+
+    shutil.copytree(run_output / "policy", tmp_path / "policy.staging")
+    before = _tree_snapshot(tmp_path)
+
+    staged = cobre.results.load_policy(str(tmp_path))
+    committed = cobre.results.load_policy(str(run_output))
+
+    assert (
+        staged["metadata"]["producer"]["completed_iterations"]
+        == committed["metadata"]["producer"]["completed_iterations"]
+    )
+    assert len(staged["stage_cuts"]) == len(committed["stage_cuts"])
+    assert _tree_snapshot(tmp_path) == before
+    assert not (tmp_path / "policy").exists()
+
+
 # ---------------------------------------------------------------------------
 # load_stochastic tests
 # ---------------------------------------------------------------------------

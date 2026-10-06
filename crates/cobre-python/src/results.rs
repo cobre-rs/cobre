@@ -1384,8 +1384,10 @@ pub fn load_simulation_arrow(
 ///
 /// ## Errors
 ///
-/// - `FileNotFoundError` if `output_dir` or `<output_dir>/<policy_subdir>` does
-///   not exist.
+/// - `FileNotFoundError` if `output_dir` does not exist, or if
+///   `<output_dir>/<policy_subdir>` (for a symbolic link, its target) does not
+///   exist and neither `.staging` nor `.previous` beside it holds a
+///   `manifest.bin`.
 /// - `OSError` for corrupt `FlatBuffers` files or other I/O failures.
 ///
 /// ## Examples (Python)
@@ -1412,7 +1414,9 @@ pub fn load_policy(
 
     let policy_dir = output_dir.join(policy_subdir);
 
-    if !policy_dir.exists() {
+    let resolved = cobre_io::resolve_policy_checkpoint(&policy_dir)
+        .map_err(|e| convert_error(ErrorSource::Output(&e)))?;
+    if resolved == cobre_io::ResolvedCheckpoint::NoDirectory {
         return Err(PyFileNotFoundError::new_err(format!(
             "policy directory not found: {}",
             policy_dir.display()

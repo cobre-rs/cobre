@@ -175,3 +175,39 @@ fn simulation_only_check_returns_the_recorded_bounds_without_frozen_templates() 
     assert!(result.frozen_templates.is_none());
     assert_eq!(fcf.state_dimension, setup.fcf.state_dimension);
 }
+
+fn relative_listing(root: &Path) -> Vec<PathBuf> {
+    let mut listing = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path.clone());
+            }
+            listing.push(path.strip_prefix(root).unwrap().to_path_buf());
+        }
+    }
+    listing.sort();
+    listing
+}
+
+#[test]
+fn locate_policy_dir_accepts_a_policy_caught_between_renames() {
+    let trained = train_and_write_checkpoint();
+    let (setup, system) = build_setup();
+    let output_dir = trained.output.path();
+    let policy_dir = output_dir.join(&setup.policy_path);
+    let mut staging = policy_dir.clone().into_os_string();
+    staging.push(".staging");
+    std::fs::rename(&policy_dir, &staging).unwrap();
+    let before = relative_listing(output_dir);
+
+    let kind = FullFcfLoadKind::SimulationOnly;
+    let located = locate_policy_dir(kind, output_dir, &setup).expect("locate");
+    assert_eq!(located, policy_dir);
+    let checked = check_full_fcf_load(kind, &located, &system, &setup, &mut |_| {}).expect("check");
+    let (_fcf, result) = checked.into_simulation_policy();
+    assert_eq!(result.iterations, trained.completed_iterations);
+    assert_eq!(relative_listing(output_dir), before);
+}

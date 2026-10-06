@@ -9,7 +9,9 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use cobre_core::System;
-use cobre_io::output::policy::read_policy_checkpoint;
+use cobre_io::output::policy::{
+    ResolvedCheckpoint, read_policy_checkpoint, resolve_policy_checkpoint,
+};
 use cobre_io::{EntitySlot, OutputError, ProducerBlock};
 
 use crate::cut::fcf::FutureCostFunction;
@@ -98,19 +100,28 @@ impl FullFcfLoadError {
 
 /// Locate the policy directory of `setup` under `output_dir`.
 ///
+/// The directory counts as present when [`resolve_policy_checkpoint`] finds it
+/// or a committed sibling copy, beside a link's target when it is a symbolic
+/// link.
+///
 /// # Errors
 ///
-/// [`FullFcfLoadError::MissingPolicyDirectory`] when the directory does not exist.
+/// - [`FullFcfLoadError::MissingPolicyDirectory`] when the directory is absent
+///   and no sibling copy is committed.
+/// - [`FullFcfLoadError::Read`] when a probe fails for a reason other than
+///   absence.
 pub fn locate_policy_dir(
     kind: FullFcfLoadKind,
     output_dir: &Path,
     setup: &StudySetup,
 ) -> Result<PathBuf, FullFcfLoadError> {
     let path = output_dir.join(&setup.policy_path);
-    if path.exists() {
-        Ok(path)
-    } else {
-        Err(FullFcfLoadError::MissingPolicyDirectory { kind, path })
+    match resolve_policy_checkpoint(&path) {
+        Ok(ResolvedCheckpoint::NoDirectory) => {
+            Err(FullFcfLoadError::MissingPolicyDirectory { kind, path })
+        }
+        Ok(ResolvedCheckpoint::NoManifest | ResolvedCheckpoint::Found(_)) => Ok(path),
+        Err(source) => Err(FullFcfLoadError::Read { source }),
     }
 }
 

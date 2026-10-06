@@ -6,7 +6,7 @@
 //! is parsed.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::super::atomic::write_bytes_atomic;
 use super::super::error::OutputError;
@@ -377,7 +377,94 @@ fn remove_bin_files(dir: &Path) -> Result<(), OutputError> {
     Ok(())
 }
 
-/// Read a complete value-function artifact from `path`.
+fn sibling(path: &Path, suffix: &str) -> Option<PathBuf> {
+    let mut name = path.file_name()?.to_os_string();
+    name.push(suffix);
+    Some(path.with_file_name(name))
+}
+
+/// The directory a checkpoint at `path` lives in: the recorded target of a
+/// symbolic link at `path`, else `path` itself.
+fn checkpoint_target(path: &Path) -> Result<PathBuf, OutputError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            // `read_link`, not `canonicalize`: a link left pointing at nothing by
+            // an interrupted swap still names the target's siblings.
+            let target = std::fs::read_link(path).map_err(|e| OutputError::io(path, e))?;
+            Ok(match path.parent() {
+                Some(parent) => parent.join(target),
+                None => target,
+            })
+        }
+        Ok(_) => Ok(path.to_path_buf()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(e) => Err(OutputError::io(path, e)),
+    }
+}
+
+/// Which copy of a checkpoint a read uses, as [`resolve_policy_checkpoint`]
+/// finds it. The target is the checkpoint path itself, or the recorded target
+/// of a symbolic link there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedCheckpoint {
+    /// The directory a read uses: the target, its `.staging` sibling or its
+    /// `.previous` sibling.
+    Found(PathBuf),
+    /// The target exists, and no candidate holds a `manifest.bin`.
+    NoManifest,
+    /// The target is absent, and no candidate holds a `manifest.bin`.
+    NoDirectory,
+}
+
+/// Resolve which copy of the checkpoint at `path` a read uses.
+///
+/// The candidates, in order, are `path`, its `.staging` sibling and its
+/// `.previous` sibling; the first that holds a `manifest.bin` is the copy. A
+/// present `manifest.bin` is the only completeness signal, because a writer
+/// puts it in place last. A symbolic link at `path` is read once, and its
+/// recorded target and that target's siblings are the candidates.
+///
+/// The call changes nothing on disk, so any number of processes may resolve
+/// the same `path` at once.
+///
+/// # Errors
+///
+/// [`OutputError::IoError`] naming the probed path when a probe fails for any
+/// reason other than absence, or naming `path` when a link there cannot be
+/// inspected or read.
+pub fn resolve_policy_checkpoint(path: &Path) -> Result<ResolvedCheckpoint, OutputError> {
+    let target = checkpoint_target(path)?;
+    let candidates = [
+        Some(target.clone()),
+        sibling(&target, ".staging"),
+        sibling(&target, ".previous"),
+    ];
+    for dir in candidates.into_iter().flatten() {
+        let manifest_path = dir.join("manifest.bin");
+        if manifest_path
+            .try_exists()
+            .map_err(|e| OutputError::io(&manifest_path, e))?
+        {
+            return Ok(ResolvedCheckpoint::Found(dir));
+        }
+    }
+    if target
+        .try_exists()
+        .map_err(|e| OutputError::io(&target, e))?
+    {
+        Ok(ResolvedCheckpoint::NoManifest)
+    } else {
+        Ok(ResolvedCheckpoint::NoDirectory)
+    }
+}
+
+/// Read a complete value-function artifact from the copy of `path` that
+/// [`resolve_policy_checkpoint`] finds.
+///
+/// That copy is `path` (for a symbolic link, its target), else its `.staging`
+/// sibling, else its `.previous` sibling, whichever first holds a
+/// `manifest.bin`; with none, the read fails on `<path>/manifest.bin`. The
+/// read changes nothing on disk.
 ///
 /// `manifest.bin` is read first and its `format_version` is checked
 /// **before any `.bin` payload is parsed**: an absent `manifest.bin`, a missing
@@ -389,8 +476,8 @@ fn remove_bin_files(dir: &Path) -> Result<(), OutputError> {
 ///
 /// # Errors
 ///
-/// - [`OutputError::IoError`] — directory or file read failed (a missing
-///   `manifest.bin`, i.e. a pre-`manifest.bin` artifact, included).
+/// - [`OutputError::IoError`] — a probe, directory or file read failed (a
+///   missing `manifest.bin`, i.e. a pre-`manifest.bin` artifact, included).
 /// - [`OutputError::SerializationError`] — a `FlatBuffers` parse failure, a
 ///   missing `CBVF` identifier or a `format_version` mismatch (both enforced by
 ///   [`deserialize_checkpoint_manifest`]), or a date-consistency violation
@@ -410,6 +497,15 @@ fn remove_bin_files(dir: &Path) -> Result<(), OutputError> {
 /// # }
 /// ```
 pub fn read_policy_checkpoint(path: &Path) -> Result<PolicyCheckpoint, OutputError> {
+    match resolve_policy_checkpoint(path)? {
+        ResolvedCheckpoint::Found(dir) => read_checkpoint_dir(&dir),
+        ResolvedCheckpoint::NoManifest | ResolvedCheckpoint::NoDirectory => {
+            read_checkpoint_dir(path)
+        }
+    }
+}
+
+fn read_checkpoint_dir(path: &Path) -> Result<PolicyCheckpoint, OutputError> {
     let manifest_path = path.join("manifest.bin");
     let manifest_bytes =
         std::fs::read(&manifest_path).map_err(|e| OutputError::io(&manifest_path, e))?;

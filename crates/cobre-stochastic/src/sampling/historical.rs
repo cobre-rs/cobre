@@ -35,7 +35,7 @@
 //!
 //! [`PrecomputedPar`]: crate::par::precompute::PrecomputedPar
 
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 use cobre_core::{
     EntityId,
     scenario::{HistoricalYears, InflowHistoryRow},
@@ -44,13 +44,9 @@ use cobre_core::{
 use siphasher::sip::SipHasher13;
 use std::hash::Hasher as _;
 
-use crate::{
-    StochasticError,
-    par::{fitting::find_season_for_date, precompute::PrecomputedPar},
-    seeds::DerivedSeed,
-};
+use crate::{StochasticError, par::precompute::PrecomputedPar, seeds::DerivedSeed};
 
-use super::eta_inversion::run_eta_inversion;
+use super::{eta_inversion::run_eta_inversion, window::history_row_key};
 
 // ---------------------------------------------------------------------------
 // HistoricalScenarioLibrary
@@ -97,7 +93,7 @@ impl HistoricalScenarioLibrary {
     ///
     /// # Parameters
     ///
-    /// - `max_order` — PAR model order (number of pre-window lag stages)
+    /// - `max_order` — lag-state depth that η inversion seeds from the stage-0 seed
     /// - `window_years` — starting year per window (length must equal `n_windows`)
     ///
     /// # Panics
@@ -154,7 +150,7 @@ impl HistoricalScenarioLibrary {
         self.n_hydros
     }
 
-    /// Returns the PAR model order (number of pre-window lag stages stored).
+    /// Returns the lag-state depth that η inversion seeds from the stage-0 seed.
     #[must_use]
     #[inline]
     pub fn max_order(&self) -> usize {
@@ -399,10 +395,18 @@ pub fn standardize_historical_windows(
         .map(|(i, &id)| (id, i))
         .collect();
 
-    let (Some(min_year), Some(max_year)) = (
-        inflow_history.iter().map(|r| r.start_date.year()).min(),
-        inflow_history.iter().map(|r| r.start_date.year()).max(),
-    ) else {
+    let mut stage_index: Vec<(NaiveDate, NaiveDate, i32, usize)> = stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, s.id, sid)))
+        .collect();
+    stage_index.sort_unstable_by_key(|(start, _, _, _)| *start);
+
+    let row_keys: Vec<Option<(usize, i32)>> = inflow_history
+        .iter()
+        .map(|r| history_row_key(&stage_index, season_map, r.start_date))
+        .collect();
+    let key_years = || row_keys.iter().flatten().map(|&(_, year)| year);
+    let (Some(min_year), Some(max_year)) = (key_years().min(), key_years().max()) else {
         return;
     };
     #[allow(clippy::cast_sign_loss)]
@@ -420,19 +424,10 @@ pub fn standardize_historical_windows(
         Some(h * n_years * n_seasons + y * n_seasons + s)
     };
 
-    let mut stage_index: Vec<(NaiveDate, NaiveDate, i32, usize)> = stages
-        .iter()
-        .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, s.id, sid)))
-        .collect();
-    stage_index.sort_unstable_by_key(|(start, _, _, _)| *start);
-
-    for r in inflow_history {
-        let season_id = find_season_for_date(&stage_index, r.start_date)
-            .or_else(|| season_map.and_then(|sm| sm.season_for_date(r.start_date)))
-            .or_else(|| season_map.is_none().then(|| r.start_date.month0() as usize));
-        if let Some(sid) = season_id
+    for (r, &key) in inflow_history.iter().zip(&row_keys) {
+        if let Some((sid, year)) = key
             && let Some(&h) = hydro_id_to_idx.get(&r.hydro_id)
-            && let Some(idx) = table_idx(h, r.start_date.year(), sid)
+            && let Some(idx) = table_idx(h, year, sid)
         {
             obs_table[idx] = r.value_m3s;
         }
@@ -505,7 +500,7 @@ pub fn standardize_historical_windows(
 /// | V2.6 | Warning| `library.n_windows() < forward_passes` — log a warning.      |
 /// | V2.2 | Assert | Window contiguity — `debug_assert` only (construction invariant). |
 /// | V2.4 | Assert | User pool validity — `debug_assert` only (construction invariant). |
-/// | V2.7 | Assert | Lag warmup sufficiency — `debug_assert` only (construction invariant). |
+/// | V2.7 | Assert | Library lag depth equals the PAR order — `debug_assert` only (construction invariant). |
 ///
 /// # Inputs
 ///
@@ -703,18 +698,20 @@ mod tests {
     // Helpers for standardize_historical_windows tests
     // -----------------------------------------------------------------------
 
-    use chrono::{Datelike, Months, NaiveDate};
+    use chrono::{Datelike, Months, NaiveDate, TimeDelta, Weekday};
     use cobre_core::{
         EntityId, Hydro,
         scenario::{InflowHistoryRow, InflowModel},
         temporal::{
-            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, StageLagTransition,
-            StageRiskConfig, StageStateConfig,
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, SeasonCycleType, SeasonDefinition,
+            StageLagTransition, StageRiskConfig, StageStateConfig,
         },
         test_support::{HydroSpec, MirrorUnitGroup, StageSpec, date, single_block},
     };
 
-    use super::{DerivedSeed, Stage, check_historical_structure, standardize_historical_windows};
+    use super::{
+        DerivedSeed, SeasonMap, Stage, check_historical_structure, standardize_historical_windows,
+    };
     use crate::derive_inflow_seeds;
     use crate::par::{
         DownstreamLagAccum, EntityMajor, PrimaryLagAccum, advance_lag_chain,
@@ -722,7 +719,9 @@ mod tests {
         precompute::PrecomputedPar,
         precompute_stage_lag_transitions,
     };
-    use crate::test_support::{MonthlyLabels, monthly_season_map, quarterly_season_map};
+    use crate::test_support::{
+        MonthlyLabels, monthly_season_map, quarterly_season_map, weekly_season_map,
+    };
 
     /// `season_id` is 0-based (0=Jan .. 11=Dec).
     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
@@ -2394,6 +2393,195 @@ mod tests {
         for (w, &year) in windows.iter().enumerate() {
             let expected = 1000.0 + f64::from(year - 1990);
             assert_eq!(lib.eta_slice(w, 0)[0], expected);
+        }
+    }
+
+    fn ar0_par(stages: &[Stage], moments: impl Fn(i32) -> (f64, f64)) -> PrecomputedPar {
+        let models: Vec<InflowModel> = stages
+            .iter()
+            .map(|stage| {
+                let (mean_m3s, std_m3s) = moments(stage.id);
+                InflowModel {
+                    hydro_id: EntityId(1),
+                    stage_id: stage.id,
+                    mean_m3s,
+                    std_m3s,
+                    ar_coefficients: vec![],
+                    residual_std_ratio: 1.0,
+                    annual: None,
+                }
+            })
+            .collect();
+        PrecomputedPar::build(&models, stages, &[EntityId(1)], None).unwrap()
+    }
+
+    /// Discovers hydro 1's windows and standardizes them, returning the windows
+    /// and each window's per-stage η.
+    fn discover_and_standardize(
+        history: &[InflowHistoryRow],
+        stages: &[Stage],
+        season_map: Option<&SeasonMap>,
+        par: &PrecomputedPar,
+    ) -> (Vec<i32>, Vec<Vec<f64>>) {
+        let hydro_ids = [EntityId(1)];
+        let windows = crate::sampling::discover_historical_windows(
+            history, &hydro_ids, stages, None, season_map, 1,
+        )
+        .unwrap();
+        let mut lib =
+            HistoricalScenarioLibrary::new(windows.len(), stages.len(), 1, 0, windows.clone());
+        let structure = check_historical_structure(&lib, &hydro_ids, stages).unwrap();
+        standardize_historical_windows(
+            &structure,
+            &mut lib,
+            history,
+            par,
+            &windows,
+            season_map,
+            DerivedSeed {
+                lag_values: &[],
+                l_state: 0,
+                accum: &[],
+                weight: &[],
+            },
+            &[],
+            0,
+        );
+        let eta = (0..windows.len())
+            .map(|w| (0..stages.len()).map(|t| lib.eta_slice(w, t)[0]).collect())
+            .collect();
+        (windows, eta)
+    }
+
+    /// ISO 2019-W01 starts on Monday 2018-12-31.
+    #[test]
+    fn weekly_windows_replay_their_own_iso_year() {
+        let sm = weekly_season_map();
+        let study_start = NaiveDate::from_isoywd_opt(2024, 1, Weekday::Mon).unwrap();
+        let stages: Vec<Stage> = (0..52_usize)
+            .map(|week| {
+                let start = study_start + TimeDelta::weeks(i64::try_from(week).unwrap());
+                let id = i32::try_from(week).unwrap();
+                dated_stage(week, id, start, start + TimeDelta::weeks(1), week)
+            })
+            .collect();
+        let last_monday = NaiveDate::from_isoywd_opt(2019, 52, Weekday::Mon).unwrap();
+        let history: Vec<InflowHistoryRow> = std::iter::successors(
+            NaiveDate::from_isoywd_opt(2017, 1, Weekday::Mon),
+            |monday| Some(*monday + TimeDelta::weeks(1)),
+        )
+        .take_while(|monday| *monday <= last_monday)
+        .map(|monday| {
+            let iso = monday.iso_week();
+            InflowHistoryRow {
+                hydro_id: EntityId(1),
+                start_date: monday,
+                end_date: monday + TimeDelta::weeks(1),
+                value_m3s: f64::from(iso.year() * 100) + f64::from(iso.week()),
+            }
+        })
+        .collect();
+
+        let par = ar0_par(&stages, |_| (0.0, 1.0));
+        let (windows, eta) = discover_and_standardize(&history, &stages, Some(&sm), &par);
+
+        assert_eq!(windows, vec![2017, 2018, 2019]);
+        for (replayed, &year) in eta.iter().zip(&windows) {
+            let own_weeks: Vec<f64> = (1..=52).map(|week| f64::from(year * 100 + week)).collect();
+            assert_eq!(replayed, &own_weeks, "window {year}");
+        }
+    }
+
+    /// The wet season runs 15 December to 14 March, so its January–March rows
+    /// belong to the previous year's occurrence and no row is dated 1999.
+    #[test]
+    fn custom_windows_replay_the_occurrence_starting_in_their_december() {
+        let season =
+            |id: usize, label: &str, start: (u32, u32), end: (u32, u32)| SeasonDefinition {
+                id,
+                label: label.to_string(),
+                month_start: start.0,
+                day_start: Some(start.1),
+                month_end: Some(end.0),
+                day_end: Some(end.1),
+            };
+        let sm = SeasonMap {
+            cycle_type: SeasonCycleType::Custom,
+            seasons: vec![
+                season(0, "Wet", (12, 15), (3, 14)),
+                season(1, "Dry", (3, 15), (12, 14)),
+            ],
+        };
+        let stages = vec![
+            dated_stage(0, 0, date(2030, 12, 15), date(2031, 3, 15), 0),
+            dated_stage(1, 1, date(2031, 3, 15), date(2031, 12, 15), 1),
+        ];
+        let history: Vec<InflowHistoryRow> = (2000..=2003)
+            .flat_map(|year| {
+                (0..12_u32).map(move |month0| {
+                    let value = if month0 < 3 {
+                        1000 + year - 1
+                    } else {
+                        2000 + year
+                    };
+                    make_row(EntityId(1), year, month0, f64::from(value))
+                })
+            })
+            .collect();
+
+        let par = ar0_par(&stages, |_| (0.0, 1.0));
+        let (windows, eta) = discover_and_standardize(&history, &stages, Some(&sm), &par);
+
+        assert_eq!(windows, vec![1999, 2000, 2001, 2002]);
+        for (replayed, &year) in eta.iter().zip(&windows) {
+            let own_occurrences = vec![f64::from(1000 + year), f64::from(2000 + year + 1)];
+            assert_eq!(replayed, &own_occurrences, "window {year}");
+        }
+    }
+
+    #[test]
+    fn no_map_windows_and_eta_keep_calendar_year_keying() {
+        let stages: Vec<Stage> = (0..12_u32)
+            .map(|k| {
+                let start = date(2024, 7, 1) + Months::new(k);
+                let index = usize::try_from(k).unwrap();
+                let id = i32::try_from(k).unwrap();
+                dated_stage(
+                    index,
+                    id,
+                    start,
+                    start + Months::new(1),
+                    start.month0() as usize,
+                )
+            })
+            .collect();
+        let observed = |year: i32, month0: u32| {
+            100.0 + 7.0 * f64::from(year - 1990) + 1.25 * f64::from(month0)
+        };
+        let history: Vec<InflowHistoryRow> = (1990..=1993)
+            .flat_map(|year| {
+                (0..12_u32)
+                    .map(move |month0| make_row(EntityId(1), year, month0, observed(year, month0)))
+            })
+            .collect();
+        let par = ar0_par(&stages, |id| {
+            (40.0 + f64::from(id), 3.0 + 0.5 * f64::from(id))
+        });
+
+        let (windows, eta) = discover_and_standardize(&history, &stages, None, &par);
+
+        assert_eq!(windows, vec![1990, 1991, 1992]);
+        for (replayed, &year) in eta.iter().zip(&windows) {
+            let expected: Vec<f64> = stages
+                .iter()
+                .enumerate()
+                .map(|(t, stage)| {
+                    let obs_year = year + stage.start_date.year() - 2024;
+                    let target = observed(obs_year, stage.start_date.month0());
+                    (target - par.deterministic_base(t, 0)) / par.sigma(t, 0)
+                })
+                .collect();
+            assert_eq!(replayed, &expected, "window {year}");
         }
     }
 }

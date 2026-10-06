@@ -17,7 +17,9 @@ use cobre_core::{
     temporal::{SeasonMap, Stage},
 };
 
-use crate::{StochasticError, par::fitting::find_season_for_date};
+use crate::{
+    StochasticError, par::fitting::find_season_for_date, season_cast::observation_occurrence_year,
+};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -98,8 +100,6 @@ pub fn discover_historical_windows(
     season_map: Option<&SeasonMap>,
     forward_passes: u32,
 ) -> Result<Vec<i32>, StochasticError> {
-    let all_years: HashSet<i32> = inflow_history.iter().map(|r| r.start_date.year()).collect();
-
     let mut stage_index: Vec<(NaiveDate, NaiveDate, i32, usize)> = stages
         .iter()
         .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, s.id, sid)))
@@ -109,10 +109,8 @@ pub fn discover_historical_windows(
     let lookup: HashSet<(EntityId, i32, usize)> = inflow_history
         .iter()
         .filter_map(|r| {
-            let season_id = find_season_for_date(&stage_index, r.start_date)
-                .or_else(|| season_map.and_then(|sm| sm.season_for_date(r.start_date)))
-                .or_else(|| season_map.is_none().then(|| r.start_date.month0() as usize))?;
-            Some((r.hydro_id, r.start_date.year(), season_id))
+            let (season_id, year) = history_row_key(&stage_index, season_map, r.start_date)?;
+            Some((r.hydro_id, year, season_id))
         })
         .collect();
 
@@ -121,7 +119,12 @@ pub fn discover_historical_windows(
 
     let mut candidate_years: Vec<i32> = match user_pool {
         Some(pool) => pool.to_years(),
-        None => all_years.into_iter().collect(),
+        None => lookup
+            .iter()
+            .map(|&(_, year, _)| year)
+            .collect::<HashSet<i32>>()
+            .into_iter()
+            .collect(),
     };
     candidate_years.sort_unstable();
 
@@ -154,6 +157,22 @@ pub fn discover_historical_windows(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// The `(season_id, year)` key of a history row dated `date`. Under a season
+/// map the year is [`observation_occurrence_year`], so it equals the year
+/// `build_observation_sequence` dates the matching study entry with.
+pub(super) fn history_row_key(
+    stage_index: &[(NaiveDate, NaiveDate, i32, usize)],
+    season_map: Option<&SeasonMap>,
+    date: NaiveDate,
+) -> Option<(usize, i32)> {
+    let stage_season = find_season_for_date(stage_index, date);
+    let Some(sm) = season_map else {
+        return Some((stage_season.unwrap_or(date.month0() as usize), date.year()));
+    };
+    let season_id = stage_season.or_else(|| sm.season_for_date(date))?;
+    Some((season_id, observation_occurrence_year(sm, season_id, date)))
+}
 
 fn is_window_complete(
     y: i32,

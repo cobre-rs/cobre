@@ -1,5 +1,5 @@
 //! Arrow schema definitions for all Parquet output files per output-schemas spec
-//! (SS5.1–5.11 and SS6.1–6.3).
+//! (SS5.1–5.11 and SS6.1–6.2).
 //!
 //! Every `*_schema()` function in this module has exactly one row in
 //! [`OUTPUT_SCHEMAS`], the crate-internal registry that pairs each schema with
@@ -537,22 +537,6 @@ pub(crate) fn iteration_timing_schema() -> Schema {
     ])
 }
 
-/// Schema for `training/timing/mpi_ranks.parquet` — per-rank timing statistics.
-///
-/// See output-schemas.md SS6.3.
-pub(crate) fn rank_timing_schema() -> Schema {
-    Schema::new(vec![
-        Field::new("iteration", DataType::Int32, false),
-        Field::new("rank", DataType::Int32, false),
-        Field::new("forward_time_ms", DataType::Int64, false),
-        Field::new("backward_time_ms", DataType::Int64, false),
-        Field::new("communication_time_ms", DataType::Int64, false),
-        Field::new("idle_time_ms", DataType::Int64, false),
-        Field::new("lp_solves", DataType::Int64, false),
-        Field::new("scenarios_processed", DataType::Int32, false),
-    ])
-}
-
 /// Schema for `training/solver/iterations.parquet` -- per-iteration, per-phase
 /// solver statistics for diagnosing LP conditioning and retry behavior.
 ///
@@ -873,10 +857,6 @@ pub(crate) const OUTPUT_SCHEMAS: &[SchemaRegistryEntry] = &[
     SchemaRegistryEntry {
         csv_label: Some("iteration_timing"),
         schema_fn: iteration_timing_schema,
-    },
-    SchemaRegistryEntry {
-        csv_label: Some("rank_timing"),
-        schema_fn: rank_timing_schema,
     },
     SchemaRegistryEntry {
         csv_label: Some("cut_selection"),
@@ -1545,28 +1525,6 @@ mod tests {
     }
 
     #[test]
-    fn rank_timing_schema_field_count() {
-        let schema = rank_timing_schema();
-        assert_eq!(
-            schema.fields().len(),
-            8,
-            "rank_timing schema must have 8 fields"
-        );
-    }
-
-    #[test]
-    fn rank_timing_schema_all_non_nullable() {
-        let schema = rank_timing_schema();
-        for field in schema.fields() {
-            assert!(
-                !field.is_nullable(),
-                "rank_timing field '{}' must not be nullable",
-                field.name()
-            );
-        }
-    }
-
-    #[test]
     fn row_selection_schema_field_count_and_types() {
         let schema = row_selection_schema();
         assert_eq!(
@@ -1684,7 +1642,6 @@ mod tests {
             (Arc::new(paths_schema()), "paths"),
             (Arc::new(convergence_schema()), "convergence"),
             (Arc::new(iteration_timing_schema()), "iteration_timing"),
-            (Arc::new(rank_timing_schema()), "rank_timing"),
             (Arc::new(row_selection_schema()), "cut_selection"),
             (Arc::new(solver_iterations_schema()), "solver_iterations"),
             (Arc::new(retry_histogram_schema()), "retry_histogram"),
@@ -1719,7 +1676,6 @@ mod tests {
             ("paths", 3),
             ("convergence", 15),
             ("iteration_timing", 19),
-            ("rank_timing", 8),
             ("cut_selection", 10),
             ("solver_iterations", 19),
             ("retry_histogram", 5),
@@ -1786,7 +1742,7 @@ mod tests {
     /// the same change.
     #[test]
     fn output_schema_registry_has_no_duplicate_or_missing_rows() {
-        const EXPECTED_SCHEMA_COUNT: usize = 34;
+        const EXPECTED_SCHEMA_COUNT: usize = 33;
         assert_eq!(
             OUTPUT_SCHEMAS.len(),
             EXPECTED_SCHEMA_COUNT,

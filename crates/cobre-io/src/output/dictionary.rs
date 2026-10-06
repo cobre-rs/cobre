@@ -275,15 +275,8 @@ fn arrow_type_str(dt: &DataType) -> &'static str {
 #[allow(clippy::too_many_lines, clippy::match_same_arms)]
 fn unit_for(file: &str, column: &str) -> &'static str {
     match column {
-        "scenario_id"
-        | "stage_id"
-        | "node_id"
-        | "block_id"
-        | "lag"
-        | "iteration"
-        | "rank"
-        | "forward_passes"
-        | "scenarios_processed" => return "",
+        "scenario_id" | "stage_id" | "node_id" | "block_id" | "lag" | "iteration" | "rank"
+        | "forward_passes" => return "",
         "generation_mw"
         | "available_mw"
         | "curtailment_mw"
@@ -384,10 +377,6 @@ fn unit_for(file: &str, column: &str) -> &'static str {
         | "fwd_scheduling_overhead_ms"
         | "overhead_ms"
         | "lazy_scoring_ms"
-        | "forward_time_ms"
-        | "backward_time_ms"
-        | "communication_time_ms"
-        | "idle_time_ms"
         | "solve_time_ms"
         | "load_model_time_ms"
         | "set_bounds_time_ms"
@@ -677,14 +666,6 @@ fn description_for(file: &str, column: &str) -> &'static str {
              lazy-selection solve; 0 when that solve path is not used. A \
              sub-component of the forward/backward phases."
         }
-        ("rank_timing", "iteration") => "Iteration number (1-based)",
-        ("rank_timing", "rank") => "MPI rank",
-        ("rank_timing", "forward_time_ms") => "Forward-pass time for this rank",
-        ("rank_timing", "backward_time_ms") => "Backward-pass time for this rank",
-        ("rank_timing", "communication_time_ms") => "Communication time for this rank",
-        ("rank_timing", "idle_time_ms") => "Idle time for this rank",
-        ("rank_timing", "lp_solves") => "LP solves on this rank",
-        ("rank_timing", "scenarios_processed") => "Scenarios processed by this rank",
         ("cut_selection", "iteration") => "Iteration number (1-based)",
         ("cut_selection", "stage_id") => "Declared study stage id",
         ("cut_selection", "cuts_populated") => "Total cuts ever generated at this stage",
@@ -2289,8 +2270,27 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 262,
-            "variables.csv must have exactly 262 data rows (one per column across all schemas)"
+            row_count, 254,
+            "variables.csv must have exactly 254 data rows (one per column across all schemas)"
+        );
+    }
+
+    #[test]
+    fn variables_csv_has_no_per_rank_timing_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_variables_csv(tmp.path()).expect("write_variables_csv must succeed");
+
+        let content = std::fs::read_to_string(tmp.path().join("variables.csv")).unwrap();
+        let mut rdr = csv::Reader::from_reader(content.as_bytes());
+
+        let per_rank_rows = rdr
+            .records()
+            .filter(|r| r.as_ref().unwrap().get(0).unwrap() == "rank_timing")
+            .count();
+        assert_eq!(
+            per_rank_rows, 0,
+            "variables.csv must not describe a per-rank timing file no run writes; \
+             found {per_rank_rows} per-rank timing rows"
         );
     }
 

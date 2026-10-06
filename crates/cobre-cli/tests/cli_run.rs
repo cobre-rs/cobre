@@ -1467,9 +1467,13 @@ fn missing_policy_directory_is_reported_for_each_load_kind() {
             ])
             .assert()
             .failure()
-            .code(4)
+            .code(1)
             .stderr(predicate::str::contains("Policy directory not found: "))
-            .stderr(predicate::str::contains(sentence));
+            .stderr(predicate::str::contains(sentence))
+            .stderr(predicate::str::contains(
+                "run `cobre validate <CASE_DIR>` for a full diagnostic report",
+            ))
+            .stderr(predicate::str::contains("report this at").not());
     }
 }
 
@@ -1507,10 +1511,76 @@ fn unreadable_policy_checkpoint_is_reported_as_a_read_failure() {
         ])
         .assert()
         .failure()
-        .code(4)
+        .code(1)
         .stderr(predicate::str::contains(
             "failed to read policy checkpoint: ",
-        ));
+        ))
+        .stderr(predicate::str::contains("report this at").not());
+}
+
+fn warm_start_case_with_output_policy_dir() -> (TempDir, TempDir, std::path::PathBuf) {
+    let case = TempDir::new().unwrap();
+    copy_dir_recursive(&case_dir("1dtoy"), case.path());
+    rewrite_json(&case.path().join("config.json"), |config| {
+        config["policy"]["mode"] = serde_json::json!("warm_start");
+    });
+    let output = TempDir::new().unwrap();
+    let policy = output.path().join("policy");
+    fs::create_dir(&policy).unwrap();
+    (case, output, policy)
+}
+
+#[test]
+fn policy_directory_without_manifest_exits_1() {
+    let (case, output, _policy) = warm_start_case_with_output_policy_dir();
+    cobre()
+        .args([
+            "run",
+            case.path().to_str().unwrap(),
+            "--output",
+            output.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "failed to read policy checkpoint: ",
+        ))
+        .stderr(predicate::str::contains("manifest.bin"))
+        .stderr(predicate::str::contains("report this at").not());
+}
+
+#[cfg(unix)]
+#[test]
+fn policy_manifest_the_process_cannot_open_exits_2() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (case, output, policy) = warm_start_case_with_output_policy_dir();
+    let manifest = policy.join("manifest.bin");
+    fs::write(&manifest, b"garbage").unwrap();
+    fs::set_permissions(&manifest, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&manifest).is_ok() {
+        fs::set_permissions(&manifest, fs::Permissions::from_mode(0o644)).unwrap();
+        println!("skipped: permission bits are not enforced for this process");
+        return;
+    }
+
+    let assertion = cobre()
+        .args([
+            "run",
+            case.path().to_str().unwrap(),
+            "--output",
+            output.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert();
+    fs::set_permissions(&manifest, fs::Permissions::from_mode(0o644)).unwrap();
+    assertion
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("I/O error in"))
+        .stderr(predicate::str::contains("manifest.bin"));
 }
 
 // ── Error classification of refusals and in-loop failures ────────────────────

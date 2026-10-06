@@ -32,6 +32,7 @@ use cobre_sddp::SddpError::WireVersionMismatch;
 use cobre_sddp::SimulationError;
 use cobre_sddp::SimulationError::LpInfeasible;
 use cobre_sddp::SimulationError::SolverError;
+use cobre_sddp::policy::full_fcf_load::FullFcfLoadError;
 
 use std::io::Error;
 
@@ -252,6 +253,29 @@ impl From<cobre_sddp::SddpError> for CliError {
     }
 }
 
+impl From<FullFcfLoadError> for CliError {
+    fn from(err: FullFcfLoadError) -> Self {
+        let class = err.class();
+        let message = match err {
+            FullFcfLoadError::Refused(inner)
+            | FullFcfLoadError::FcfConstruction { source: inner, .. } => return Self::from(inner),
+            FullFcfLoadError::Read { source } if class == ErrorClass::Io => {
+                return Self::from(source);
+            }
+            other @ (FullFcfLoadError::MissingPolicyDirectory { .. }
+            | FullFcfLoadError::Read { .. }) => other.to_string(),
+        };
+        match class {
+            ErrorClass::InvalidInput | ErrorClass::IncompatiblePolicy => Self::Validation {
+                report: message,
+                already_rendered: false,
+            },
+            ErrorClass::Solver => Self::Solver { message },
+            ErrorClass::Io | ErrorClass::Internal => Self::Internal { message },
+        }
+    }
+}
+
 impl From<cobre_sddp::SimulationError> for CliError {
     fn from(err: SimulationError) -> Self {
         match err {
@@ -286,6 +310,15 @@ mod tests {
     use super::*;
     use cobre_comm::CommError;
     use cobre_stochastic::StochasticError;
+
+    fn expected_exit_code(class: ErrorClass) -> i32 {
+        match class {
+            ErrorClass::InvalidInput | ErrorClass::IncompatiblePolicy => 1,
+            ErrorClass::Io => 2,
+            ErrorClass::Solver => 3,
+            ErrorClass::Internal => 4,
+        }
+    }
 
     #[test]
     fn validation_exit_code_is_1() {
@@ -587,6 +620,7 @@ mod tests {
 
     #[test]
     fn cli_exit_code_follows_the_error_class() {
+        use cobre_sddp::policy::full_fcf_load::FullFcfLoadKind;
         use std::path::PathBuf;
 
         let errors = vec![
@@ -644,15 +678,83 @@ mod tests {
             },
         ];
         for err in errors {
-            let expected = match err.class() {
-                ErrorClass::InvalidInput | ErrorClass::IncompatiblePolicy => 1,
-                ErrorClass::Io => 2,
-                ErrorClass::Solver => 3,
-                ErrorClass::Internal => 4,
-            };
+            let expected = expected_exit_code(err.class());
             let description = err.to_string();
             assert_eq!(CliError::from(err).exit_code(), expected, "{description}");
         }
+
+        let mut policy_load_errors = vec![
+            FullFcfLoadError::Refused(Validation("state_dimension mismatch".to_string())),
+            FullFcfLoadError::Refused(PolicySoftwareMismatch {
+                policy_software: None,
+                policy_version: "0.0.1".to_string(),
+            }),
+            FullFcfLoadError::Read {
+                source: OutputError::IoError {
+                    path: PathBuf::from("policy/manifest.bin"),
+                    source: std::io::Error::from(std::io::ErrorKind::NotFound),
+                },
+            },
+            FullFcfLoadError::Read {
+                source: OutputError::IoError {
+                    path: PathBuf::from("policy/manifest.bin"),
+                    source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                },
+            },
+            FullFcfLoadError::Read {
+                source: OutputError::SerializationError {
+                    entity: "checkpoint_manifest".to_string(),
+                    message: "missing file identifier".to_string(),
+                },
+            },
+            FullFcfLoadError::Read {
+                source: OutputError::SchemaError {
+                    file: "cuts/0.bin".to_string(),
+                    column: "coefficients".to_string(),
+                    message: "unexpected type".to_string(),
+                },
+            },
+            FullFcfLoadError::Read {
+                source: OutputError::ManifestError {
+                    manifest_type: "checkpoint".to_string(),
+                    message: "inconsistent dates".to_string(),
+                },
+            },
+        ];
+        for kind in [
+            FullFcfLoadKind::WarmStart,
+            FullFcfLoadKind::Resume,
+            FullFcfLoadKind::SimulationOnly,
+        ] {
+            policy_load_errors.push(FullFcfLoadError::MissingPolicyDirectory {
+                kind,
+                path: PathBuf::from("out/policy"),
+            });
+            policy_load_errors.push(FullFcfLoadError::FcfConstruction {
+                kind,
+                source: Validation("stage_results is empty".to_string()),
+            });
+        }
+        for err in policy_load_errors {
+            let expected = expected_exit_code(err.class());
+            let description = err.to_string();
+            assert_eq!(CliError::from(err).exit_code(), expected, "{description}");
+        }
+    }
+
+    #[test]
+    fn full_fcf_load_refusals_keep_the_run_message() {
+        let err =
+            FullFcfLoadError::Refused(Validation("entity manifest length mismatch: x".to_string()));
+        let cli_err = CliError::from(err);
+        assert!(
+            matches!(cli_err, CliError::Validation { .. }),
+            "a refused checkpoint must map to CliError::Validation, got: {cli_err:?}"
+        );
+        let CliError::Validation { report, .. } = cli_err else {
+            unreachable!("checked above")
+        };
+        assert_eq!(report, "entity manifest length mismatch: x");
     }
 
     #[test]

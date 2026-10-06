@@ -17,7 +17,6 @@ use cobre_sddp::ValidatedBoundaryCuts;
 use cobre_sddp::inject_boundary_cuts;
 use cobre_sddp::load_boundary_cuts;
 use cobre_sddp::policy::full_fcf_load::CheckedFullFcfLoad;
-use cobre_sddp::policy::full_fcf_load::FullFcfLoadError;
 use cobre_sddp::policy::full_fcf_load::FullFcfLoadKind;
 use cobre_sddp::policy::full_fcf_load::check_full_fcf_load;
 use cobre_sddp::policy::full_fcf_load::locate_policy_dir;
@@ -29,18 +28,6 @@ use crate::error::CliError;
 use crate::summary::print_boundary_summary;
 
 use super::RunContext;
-
-fn cli_error_from_policy_load(err: FullFcfLoadError) -> CliError {
-    match err {
-        FullFcfLoadError::MissingPolicyDirectory { .. } | FullFcfLoadError::Read { .. } => {
-            CliError::Internal {
-                message: err.to_string(),
-            }
-        }
-        FullFcfLoadError::Refused(inner)
-        | FullFcfLoadError::FcfConstruction { source: inner, .. } => CliError::from(inner),
-    }
-}
 
 fn check_policy_load(
     ctx: &RunContext<impl Communicator>,
@@ -54,7 +41,7 @@ fn check_policy_load(
             let _ = ctx.stderr.write_line(&format!("warning: {msg}"));
         }
     })
-    .map_err(cli_error_from_policy_load)
+    .map_err(CliError::from)
 }
 
 /// Apply warm-start or resume policy before training, if requested.
@@ -67,8 +54,7 @@ pub(super) fn apply_training_policy(
 ) -> Result<(), CliError> {
     match policy_mode {
         WarmStart => {
-            let policy_dir = locate_policy_dir(FullFcfLoadKind::WarmStart, &ctx.output_dir, setup)
-                .map_err(cli_error_from_policy_load)?;
+            let policy_dir = locate_policy_dir(FullFcfLoadKind::WarmStart, &ctx.output_dir, setup)?;
             if ctx.is_root && !ctx.quiet {
                 let _ = ctx
                     .stderr
@@ -86,8 +72,7 @@ pub(super) fn apply_training_policy(
             }
         }
         Resume => {
-            let policy_dir = locate_policy_dir(FullFcfLoadKind::Resume, &ctx.output_dir, setup)
-                .map_err(cli_error_from_policy_load)?;
+            let policy_dir = locate_policy_dir(FullFcfLoadKind::Resume, &ctx.output_dir, setup)?;
             if ctx.is_root && !ctx.quiet {
                 let _ = ctx
                     .stderr
@@ -207,8 +192,7 @@ pub(super) fn load_policy_for_simulation(
             .write_line("Training disabled. Loading policy for simulation-only mode...");
     }
 
-    let policy_dir = locate_policy_dir(FullFcfLoadKind::SimulationOnly, &ctx.output_dir, setup)
-        .map_err(cli_error_from_policy_load)?;
+    let policy_dir = locate_policy_dir(FullFcfLoadKind::SimulationOnly, &ctx.output_dir, setup)?;
 
     let checked = check_policy_load(
         ctx,

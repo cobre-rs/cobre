@@ -5,6 +5,7 @@
 //! touching the study, and the returned [`CheckedFullFcfLoad`] is then applied.
 //! Every MPI rank runs the load itself; no step is collective.
 
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use cobre_core::System;
@@ -12,7 +13,7 @@ use cobre_io::output::policy::read_policy_checkpoint;
 use cobre_io::{EntitySlot, OutputError, ProducerBlock};
 
 use crate::cut::fcf::FutureCostFunction;
-use crate::error::SddpError;
+use crate::error::{ErrorClass, SddpError};
 use crate::policy::policy_load::{
     FullFcf, PolicyStageManifest, build_basis_cache_from_checkpoint,
     checkpoint_terminal_cost_scale_factor, rescale_checkpoint_cuts_for_load, validate_policy_load,
@@ -71,6 +72,28 @@ pub enum FullFcfLoadError {
         /// The underlying construction failure.
         source: SddpError,
     },
+}
+
+impl FullFcfLoadError {
+    /// The [`ErrorClass`] of this failure.
+    #[must_use]
+    pub fn class(&self) -> ErrorClass {
+        match self {
+            Self::MissingPolicyDirectory { .. } => ErrorClass::InvalidInput,
+            Self::Read { source } => match source {
+                OutputError::IoError { source, .. } if source.kind() != ErrorKind::NotFound => {
+                    ErrorClass::Io
+                }
+                OutputError::IoError { .. }
+                | OutputError::SerializationError { .. }
+                | OutputError::SchemaError { .. }
+                | OutputError::ManifestError { .. } => ErrorClass::IncompatiblePolicy,
+            },
+            // The inner `SddpError::Validation` classifies as `InvalidInput`, but a
+            // refused checkpoint is an incompatible policy.
+            Self::Refused(_) | Self::FcfConstruction { .. } => ErrorClass::IncompatiblePolicy,
+        }
+    }
 }
 
 /// Locate the policy directory of `setup` under `output_dir`.
@@ -257,5 +280,95 @@ impl CheckedFullFcfLoad {
             None,
         );
         (self.fcf, result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+
+    const KINDS: [FullFcfLoadKind; 3] = [
+        FullFcfLoadKind::WarmStart,
+        FullFcfLoadKind::Resume,
+        FullFcfLoadKind::SimulationOnly,
+    ];
+
+    fn read_io_error(kind: ErrorKind) -> FullFcfLoadError {
+        FullFcfLoadError::Read {
+            source: OutputError::IoError {
+                path: PathBuf::from("policy/manifest.bin"),
+                source: io::Error::from(kind),
+            },
+        }
+    }
+
+    #[test]
+    fn missing_policy_directory_classifies_as_invalid_input() {
+        for kind in KINDS {
+            let err = FullFcfLoadError::MissingPolicyDirectory {
+                kind,
+                path: PathBuf::from("out/policy"),
+            };
+            assert_eq!(err.class(), ErrorClass::InvalidInput, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn policy_file_not_found_classifies_as_incompatible_policy() {
+        assert_eq!(
+            read_io_error(ErrorKind::NotFound).class(),
+            ErrorClass::IncompatiblePolicy
+        );
+    }
+
+    #[test]
+    fn unparseable_policy_file_classifies_as_incompatible_policy() {
+        let sources = [
+            OutputError::SerializationError {
+                entity: "checkpoint_manifest".to_string(),
+                message: "missing file identifier".to_string(),
+            },
+            OutputError::SchemaError {
+                file: "cuts/0.bin".to_string(),
+                column: "coefficients".to_string(),
+                message: "unexpected type".to_string(),
+            },
+            OutputError::ManifestError {
+                manifest_type: "checkpoint".to_string(),
+                message: "inconsistent dates".to_string(),
+            },
+        ];
+        for source in sources {
+            let err = FullFcfLoadError::Read { source };
+            assert_eq!(err.class(), ErrorClass::IncompatiblePolicy, "{err}");
+        }
+    }
+
+    #[test]
+    fn os_refused_policy_read_classifies_as_io() {
+        assert_eq!(
+            read_io_error(ErrorKind::PermissionDenied).class(),
+            ErrorClass::Io
+        );
+    }
+
+    #[test]
+    fn refusals_and_fcf_construction_classify_as_incompatible_policy() {
+        let mut errors = vec![
+            FullFcfLoadError::Refused(SddpError::Validation("state_dimension mismatch".into())),
+            FullFcfLoadError::Refused(SddpError::PolicySoftwareMismatch {
+                policy_software: None,
+                policy_version: "0.0.1".to_string(),
+            }),
+        ];
+        errors.extend(KINDS.map(|kind| FullFcfLoadError::FcfConstruction {
+            kind,
+            source: SddpError::Validation("stage_results is empty".into()),
+        }));
+        for err in errors {
+            assert_eq!(err.class(), ErrorClass::IncompatiblePolicy, "{err}");
+        }
     }
 }

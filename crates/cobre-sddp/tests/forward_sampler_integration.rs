@@ -45,8 +45,9 @@ use cobre_sddp::{
 };
 use cobre_solver::ActiveSolver;
 use cobre_stochastic::{
-    ClassSchemes, DerivedSeed, ExternalScenarioLibrary, HistoricalScenarioLibrary,
-    OpeningTreeInputs, PrecomputedPar, build_stochastic_context, check_historical_structure,
+    ClassSchemes, DerivedSeed, ExternalScenarioLibrary, ForwardNoiseTables, ForwardSamplerConfig,
+    HistoricalScenarioLibrary, OpeningTreeInputs, PrecomputedPar, SampleRequest,
+    build_forward_sampler, build_stochastic_context, check_historical_structure,
     par::lag_kernel::{DownstreamLagAccum, LagMajor, PrimaryLagAccum, advance_lag_chain},
     par::lag_transition::{derive_downstream_par_order, precompute_stage_lag_transitions},
     solve_par_noise, standardize_external_inflow, standardize_historical_windows,
@@ -1401,6 +1402,98 @@ fn forward_sampler_convergence_sweep() {
             }
             _ => unreachable!("unexpected case_index = {idx}"),
         }
+    }
+}
+
+#[test]
+fn historical_training_is_bit_identical_with_or_without_a_scenario_seed() {
+    const DRAW_ITERATIONS: u32 = 2;
+    const DRAW_SCENARIOS: u32 = 2;
+
+    let legs: Vec<_> = [None, Some(7), Some(12_345)]
+        .into_iter()
+        .map(|seed| {
+            let (system, source) = build_historical_system(1, 5, 10, seed);
+            let (setup, result) = run_with_setup(&system, &source, 2, 3);
+            let bounds = (
+                result.final_lb.to_bits(),
+                result.final_ub.to_bits(),
+                result.final_ub_std.to_bits(),
+                result.iterations,
+            );
+
+            let ctx = &setup.inputs.stochastic;
+            let stages: Vec<Stage> = system
+                .stages()
+                .iter()
+                .filter(|s| s.id >= 0)
+                .cloned()
+                .collect();
+            let sampler = build_forward_sampler(ForwardSamplerConfig {
+                class_schemes: ClassSchemes {
+                    inflow: Some(source.inflow_scheme),
+                    load: Some(source.load_scheme),
+                    ncs: Some(source.ncs_scheme),
+                },
+                ctx,
+                stages: &stages,
+                historical_library: setup.inputs.scenario_libraries.training.historical.as_ref(),
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+            })
+            .expect("build_forward_sampler must succeed");
+            let inflow_range = ctx.class_dimensions().hydro_range();
+            let mut tables = ForwardNoiseTables::default();
+            let mut noise_buf = vec![0.0_f64; ctx.dim()];
+            let mut corr_scratch = vec![0.0_f64; 2 * ctx.dim()];
+            let mut draws = Vec::new();
+            for iteration in 0..DRAW_ITERATIONS {
+                sampler
+                    .rebuild_noise_tables(iteration, DRAW_SCENARIOS, &[], &mut tables)
+                    .expect("rebuild_noise_tables must succeed");
+                for scenario in 0..DRAW_SCENARIOS {
+                    for (stage_idx, stage) in (0..stages.len()).zip(0_u32..) {
+                        let noise = sampler
+                            .sample(SampleRequest {
+                                iteration,
+                                scenario,
+                                stage,
+                                stage_idx,
+                                noise_buf: &mut noise_buf,
+                                corr_scratch: &mut corr_scratch,
+                                tables: &tables,
+                                total_scenarios: DRAW_SCENARIOS,
+                                noise_group_id: stage,
+                                node_opening_offset: 0,
+                                node_opening_len: 0,
+                                pinned_scenario: None,
+                            })
+                            .expect("sample must succeed");
+                        draws.extend(
+                            noise.as_slice()[inflow_range.clone()]
+                                .iter()
+                                .map(|v| v.to_bits()),
+                        );
+                    }
+                }
+            }
+            (seed, bounds, draws)
+        })
+        .collect();
+
+    let (reference_seed, reference_bounds, reference_draws) = &legs[0];
+    for (seed, bounds, draws) in &legs[1..] {
+        assert_eq!(
+            bounds, reference_bounds,
+            "historical training bounds with scenario seed {seed:?} must match seed \
+             {reference_seed:?} bit for bit"
+        );
+        assert_eq!(
+            draws, reference_draws,
+            "historical forward inflow draws with scenario seed {seed:?} must match seed \
+             {reference_seed:?} bit for bit"
+        );
     }
 }
 

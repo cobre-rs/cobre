@@ -710,7 +710,7 @@
         },
         "seed": {
           "default": null,
-          "description": "Optional random seed for reproducible scenario generation.",
+          "description": "Required when any class uses the `out_of_sample` or `external` scheme.",
           "format": "int64",
           "type": [
             "integer",

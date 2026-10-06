@@ -298,16 +298,20 @@ fn validate_scenario_source_cfg(
         });
     }
 
-    let all_in_sample = source.inflow_scheme == SamplingScheme::InSample
-        && source.load_scheme == SamplingScheme::InSample
-        && source.ncs_scheme == SamplingScheme::InSample;
-    if !all_in_sample && source.seed.is_none() {
+    let requires_seed = [source.inflow_scheme, source.load_scheme, source.ncs_scheme]
+        .into_iter()
+        .any(|scheme| {
+            matches!(
+                scheme,
+                SamplingScheme::OutOfSample | SamplingScheme::External
+            )
+        });
+    if requires_seed && source.seed.is_none() {
         return Err(LoadError::SchemaError {
             path: path.to_path_buf(),
             field: format!("{section}.scenario_source.seed"),
-            message:
-                "seed is required when any class uses out_of_sample, historical, or external scheme"
-                    .to_string(),
+            message: "seed is required when any class uses out_of_sample or external scheme"
+                .to_string(),
         });
     }
 
@@ -1357,6 +1361,55 @@ mod tests {
                     "unexpected message: {message}"
                 );
                 assert!(field.contains("seed"), "unexpected field: {field}");
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn historical_inflow_scenario_source_accepts_an_absent_seed() {
+        let f = write_with_training_scenario_source(r#"{"inflow": {"scheme": "historical"}}"#);
+        let cfg = parse_config(f.path()).unwrap();
+        let source = cfg.training_scenario_source(f.path()).unwrap();
+        assert_eq!(source.inflow_scheme, SamplingScheme::Historical);
+        assert_eq!(source.seed, None);
+    }
+
+    #[test]
+    fn simulation_historical_scenario_source_accepts_an_absent_seed() {
+        let f = write_config(&format!(
+            r#"{{"training": {MINIMAL_TRAINING}, "simulation": {{"scenario_source": {{"inflow": {{"scheme": "historical"}}}}}}}}"#
+        ));
+        let cfg = parse_config(f.path()).unwrap();
+        let source = cfg.simulation_scenario_source(f.path()).unwrap();
+        assert_eq!(source.seed, None);
+    }
+
+    #[test]
+    fn historical_inflow_with_out_of_sample_load_still_requires_the_seed() {
+        let f = write_with_training_scenario_source(
+            r#"{"inflow": {"scheme": "historical"}, "load": {"scheme": "out_of_sample"}}"#,
+        );
+        let err = parse_config(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { message, field, .. } => {
+                assert_eq!(field, "training.scenario_source.seed");
+                assert!(
+                    message.contains("out_of_sample or external"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn external_scheme_still_requires_the_seed() {
+        let f = write_with_training_scenario_source(r#"{"inflow": {"scheme": "external"}}"#);
+        let err = parse_config(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, .. } => {
+                assert_eq!(field, "training.scenario_source.seed");
             }
             other => panic!("expected SchemaError, got: {other:?}"),
         }

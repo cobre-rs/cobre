@@ -547,10 +547,14 @@ fn minimal_config_with_schemes(
     load_scheme: Option<RawSamplingScheme>,
     ncs_scheme: Option<RawSamplingScheme>,
 ) -> Config {
-    // A seed is required when any class uses a non-in-sample scheme.
-    let needs_seed = inflow_scheme.is_some_and(|s| s != RawSamplingScheme::InSample)
-        || load_scheme.is_some_and(|s| s != RawSamplingScheme::InSample)
-        || ncs_scheme.is_some_and(|s| s != RawSamplingScheme::InSample);
+    let needs_seed = [inflow_scheme, load_scheme, ncs_scheme]
+        .into_iter()
+        .any(|scheme| {
+            matches!(
+                scheme,
+                Some(RawSamplingScheme::OutOfSample | RawSamplingScheme::External)
+            )
+        });
     let scenario_source = RawScenarioSourceConfig {
         seed: if needs_seed { Some(42) } else { None },
         historical_years: None,

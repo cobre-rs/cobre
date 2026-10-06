@@ -116,8 +116,8 @@ pub struct ScenarioSource {
     /// Noise source used during the NCS (non-controllable source) forward pass.
     pub ncs_scheme: SamplingScheme,
 
-    /// Random seed for reproducible opening tree generation.
-    /// `None` means non-deterministic (OS entropy).
+    /// Seed from `scenario_source.seed`; `None` when the config omits it.
+    /// Only `OutOfSample` forward-noise generation reads it.
     pub seed: Option<i64>,
 
     /// Historical year pool for [`SamplingScheme::Historical`] inflow sampling.

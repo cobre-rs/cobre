@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[serde(default, deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RawScenarioSourceConfig {
-    /// Optional random seed for reproducible scenario generation.
+    /// Required when any class uses the `out_of_sample` or `external` scheme.
     #[serde(default)]
     pub seed: Option<i64>,
 

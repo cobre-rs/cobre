@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
-use chrono::NaiveDate;
+use chrono::{Datelike, Days, Months, NaiveDate, Weekday};
+use cobre_core::test_support::{StageSpec, date, make_stage};
 use cobre_core::{EntityId, SeasonMap, Stage};
 
 use super::{
@@ -13,6 +14,9 @@ use crate::par::fitting::cycle_positions::twin_fixtures::{
     TwinMaps, calendar_history, calendar_stages, permuted_quarterly_twins, sparse_ring_twins,
 };
 use crate::par::fitting::{ArCoefficientEstimate, SeasonalStats};
+use crate::test_support::{
+    MonthlyLabels, monthly_season_map, quarterly_season_map, weekly_season_map,
+};
 
 /// Test-only: magnitude bound + contribution-based order validation over all
 /// AR estimates.
@@ -822,6 +826,7 @@ fn iterative_pacf_reduction_with_synthetic_observations() {
         n_seasons,
         &[hydro_id],
         &group_obs,
+        &HashMap::new(),
         &stats_map,
         &PacfReductionParams {
             initial_max_order: 3,
@@ -1056,6 +1061,7 @@ fn iterative_pacf_reduction_stable_par2_not_spuriously_reduced() {
         vec![(mu0, s0), (mu1, s1)]
     };
     let obs_refs: Vec<&[f64]> = vec![&obs_s0, &obs_s1];
+    let year_starts = [0; 2];
     let z_alpha = 1.96_f64;
     // Use max_order=2 because the generating process is AR(2).
     // Higher max_order with periodic PACF on a 2-season split of a stationary
@@ -1071,6 +1077,7 @@ fn iterative_pacf_reduction_stable_par2_not_spuriously_reduced() {
             n_seasons,
             &obs_refs,
             &stats_by_season_pop,
+            &year_starts,
         );
         let selected = select_order_pacf(&pacf_values, n_obs, z_alpha).selected_order;
         let yw = estimate_periodic_ar_coefficients(
@@ -1079,6 +1086,7 @@ fn iterative_pacf_reduction_stable_par2_not_spuriously_reduced() {
             n_seasons,
             &obs_refs,
             &stats_by_season_pop,
+            &year_starts,
         );
         estimates.push(ArCoefficientEstimate {
             hydro_id,
@@ -1105,6 +1113,7 @@ fn iterative_pacf_reduction_stable_par2_not_spuriously_reduced() {
         n_seasons,
         &[hydro_id],
         &group_obs,
+        &HashMap::new(),
         &stats_map,
         &PacfReductionParams {
             initial_max_order: max_order,
@@ -1139,6 +1148,7 @@ fn iterative_pacf_reduction_stable_par2_not_spuriously_reduced() {
                 n_seasons,
                 &obs_refs,
                 &stats_by_season_pop,
+                &year_starts,
             );
             for (a, b) in est.coefficients.iter().zip(yw_direct.coefficients.iter()) {
                 assert!(
@@ -1744,4 +1754,243 @@ fn fit_on_a_dense_calendar_ordered_custom_map_is_unchanged() {
             "report season {season_id}"
         );
     }
+}
+
+// ── Lag pairing by occurrence year ───────────────────────────────────────────
+
+/// One hydro's history at `dates`: `x_t = 100 + 10 z_t` with
+/// `z_t = 0.8 z_{t-1} + e_t` and `e_t = ((2t + 3) mod 19) / 19 − 0.5`.
+fn periodic_ar1_history(
+    hydro_id: EntityId,
+    dates: &[NaiveDate],
+) -> Vec<(EntityId, NaiveDate, f64)> {
+    let mut z = 0.0_f64;
+    (0_u32..)
+        .zip(dates)
+        .map(|(t, &date)| {
+            z = 0.8 * z + f64::from((2 * t + 3) % 19) / 19.0 - 0.5;
+            (hydro_id, date, 100.0 + 10.0 * z)
+        })
+        .collect()
+}
+
+fn population_mean_std(values: &[f64]) -> (f64, f64) {
+    let n = values.len() as f64;
+    let mean = values.iter().sum::<f64>() / n;
+    let var = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
+    (mean, var.sqrt())
+}
+
+/// `ρ(position, 1)` pairing each `(position, year)` value with the
+/// `(position − 1 mod n, year − [position == 0])` value, summed in ascending
+/// year, divided by the pair count and clamped as the kernel does.
+fn reference_lag1_rho(
+    values: &BTreeMap<(usize, i32), f64>,
+    stats: &[(f64, f64)],
+    position: usize,
+) -> f64 {
+    let n_seasons = stats.len();
+    let predecessor = (position + n_seasons - 1) % n_seasons;
+    let years_back = i32::from(position == 0);
+    let (mu_ref, std_ref) = stats[position];
+    let (mu_lag, std_lag) = stats[predecessor];
+    let mut gamma = 0.0_f64;
+    let mut n_pairs = 0_u32;
+    for (&(_, year), &value) in values.range((position, i32::MIN)..=(position, i32::MAX)) {
+        if let Some(&lagged) = values.get(&(predecessor, year - years_back)) {
+            gamma += (value - mu_ref) * (lagged - mu_lag);
+            n_pairs += 1;
+        }
+    }
+    gamma /= f64::from(n_pairs);
+    (gamma / (std_ref * std_lag)).clamp(-1.0, 1.0)
+}
+
+fn study_stages(periods: &[(NaiveDate, NaiveDate, usize)]) -> Vec<Stage> {
+    (0_i32..)
+        .zip(periods)
+        .map(|(id, &(start_date, end_date, season_id))| {
+            make_stage(StageSpec {
+                id,
+                start_date,
+                end_date,
+                season_id: Some(season_id),
+                ..StageSpec::default()
+            })
+        })
+        .collect()
+}
+
+/// Fits `max_order = 1` to [`periodic_ar1_history`] at `dates` and asserts that
+/// every season's coefficient is the lag-1 autocorrelation pairing each
+/// occurrence with its calendar predecessor. `occurrence` names a date's
+/// `(season id, calendar position, occurrence year)`.
+fn assert_ar1_fit_pairs_each_occurrence_with_its_calendar_predecessor(
+    season_map: &SeasonMap,
+    stages: &[Stage],
+    dates: &[NaiveDate],
+    occurrence: impl Fn(NaiveDate) -> (usize, usize, i32),
+) {
+    let hydro_id = EntityId(1);
+    let history = periodic_ar1_history(hydro_id, dates);
+    let n_seasons = season_map.seasons.len();
+
+    let mut values: BTreeMap<(usize, i32), f64> = BTreeMap::new();
+    let mut position_of: BTreeMap<usize, usize> = BTreeMap::new();
+    for &(_, date, value) in &history {
+        let (season_id, position, year) = occurrence(date);
+        position_of.insert(season_id, position);
+        values.insert((position, year), value);
+    }
+    let buckets: Vec<Vec<f64>> = (0..n_seasons)
+        .map(|position| {
+            values
+                .range((position, i32::MIN)..=(position, i32::MAX))
+                .map(|(_, &value)| value)
+                .collect()
+        })
+        .collect();
+    let stats: Vec<(f64, f64)> = buckets.iter().map(|b| population_mean_std(b)).collect();
+    let seasonal_stats: Vec<SeasonalStats> = stages
+        .iter()
+        .map(|stage| {
+            let (mean, std) = stats[position_of[&stage.season_id.unwrap()]];
+            SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: stage.id,
+                mean,
+                std,
+            }
+        })
+        .collect();
+
+    for (position, bucket) in buckets.iter().enumerate() {
+        let threshold = 1.96 / (bucket.len() as f64).sqrt();
+        let reference = reference_lag1_rho(&values, &stats, position);
+        assert!(
+            reference > threshold,
+            "position {position}: reference rho {reference} must exceed {threshold}"
+        );
+    }
+
+    let (estimates, _) = estimate_ar_coefficients_with_selection(
+        &history,
+        &seasonal_stats,
+        stages,
+        &[hydro_id],
+        &ArEstimationConfig {
+            max_order: 1,
+            max_coeff_magnitude: None,
+            season_map: Some(season_map),
+            use_annual_component: false,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(estimates.len(), n_seasons);
+    let mismatched: Vec<(usize, &[f64], f64)> = estimates
+        .iter()
+        .filter_map(|estimate| {
+            let reference = reference_lag1_rho(&values, &stats, position_of[&estimate.season_id]);
+            let matches = matches!(
+                estimate.coefficients.as_slice(),
+                [phi] if (phi - reference).abs() < 1e-12
+            );
+            (!matches).then_some((
+                estimate.season_id,
+                estimate.coefficients.as_slice(),
+                reference,
+            ))
+        })
+        .collect();
+    assert!(
+        mismatched.is_empty(),
+        "(season id, coefficients, reference rho) of every season whose fit is not \
+         its reference rho: {mismatched:?}"
+    );
+}
+
+#[test]
+fn ar_fit_pairs_lags_by_year_when_monthly_history_starts_mid_year() {
+    let season_map = monthly_season_map(MonthlyLabels::ZeroBased);
+    let dates: Vec<NaiveDate> = (0..480)
+        .map(|m| date(2000, 7, 1).checked_add_months(Months::new(m)).unwrap())
+        .collect();
+    assert_eq!(dates.last(), Some(&date(2040, 6, 1)));
+    let periods: Vec<(NaiveDate, NaiveDate, usize)> = (0_u32..12)
+        .map(|month0| {
+            let start = date(2041, month0 + 1, 1);
+            let end = start.checked_add_months(Months::new(1)).unwrap();
+            (start, end, month0 as usize)
+        })
+        .collect();
+
+    assert_ar1_fit_pairs_each_occurrence_with_its_calendar_predecessor(
+        &season_map,
+        &study_stages(&periods),
+        &dates,
+        |date| (date.month0() as usize, date.month0() as usize, date.year()),
+    );
+}
+
+#[test]
+fn ar_fit_pairs_lags_by_year_on_a_custom_map_numbered_from_april() {
+    let mut season_map = quarterly_season_map();
+    for (def, id) in season_map.seasons.iter_mut().zip([3, 0, 1, 2]) {
+        def.id = id;
+    }
+    season_map.seasons.sort_by_key(|def| def.id);
+    let dates: Vec<NaiveDate> = (0..160)
+        .map(|q| {
+            date(2000, 4, 1)
+                .checked_add_months(Months::new(3 * q))
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(dates.last(), Some(&date(2040, 1, 1)));
+    let stages = study_stages(&[
+        (date(2040, 4, 1), date(2040, 7, 1), 0),
+        (date(2040, 7, 1), date(2040, 10, 1), 1),
+        (date(2040, 10, 1), date(2041, 1, 1), 2),
+        (date(2041, 1, 1), date(2041, 4, 1), 3),
+    ]);
+
+    assert_ar1_fit_pairs_each_occurrence_with_its_calendar_predecessor(
+        &season_map,
+        &stages,
+        &dates,
+        |date| {
+            let position = (date.month0() / 3) as usize;
+            ((position + 3) % 4, position, date.year())
+        },
+    );
+}
+
+#[test]
+fn ar_fit_counts_weekly_buckets_by_iso_week_numbering_year() {
+    let season_map = weekly_season_map();
+    let dates: Vec<NaiveDate> = (2014..=2053)
+        .flat_map(|iso_year| {
+            (1..=52)
+                .map(move |week| NaiveDate::from_isoywd_opt(iso_year, week, Weekday::Mon).unwrap())
+        })
+        .collect();
+    assert_eq!(dates[0], date(2013, 12, 30));
+    let periods: Vec<(NaiveDate, NaiveDate, usize)> = (1_u32..=52)
+        .map(|week| {
+            let start = NaiveDate::from_isoywd_opt(2054, week, Weekday::Mon).unwrap();
+            (start, start + Days::new(7), week as usize - 1)
+        })
+        .collect();
+
+    assert_ar1_fit_pairs_each_occurrence_with_its_calendar_predecessor(
+        &season_map,
+        &study_stages(&periods),
+        &dates,
+        |date| {
+            let iso_week = date.iso_week();
+            let week0 = iso_week.week0() as usize;
+            (week0, week0, iso_week.year())
+        },
+    );
 }

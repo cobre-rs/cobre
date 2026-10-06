@@ -14,6 +14,13 @@
 /// Season indices are positions in the season cycle: index `(m + n − 1) % n` is
 /// season `m`'s predecessor.
 ///
+/// # Cross-year alignment
+///
+/// Entry `i` of season `s`'s bucket is year `year_starts[s] + i`, and buckets
+/// pair by that absolute year, not by index: season `p` in year `Y` pairs with
+/// the lagged season in year `Y − b`, where `b` is the number of cycle
+/// boundaries the lag crosses (`⌈(k − p) / n⌉` when `k > p`, else `0`).
+///
 /// # Parameters
 ///
 /// - `ref_season` -- 0-based season index of the reference month `p`.
@@ -21,6 +28,8 @@
 /// - `n_seasons` -- total number of seasons in the periodic cycle.
 /// - `observations_by_season` -- chronological values grouped by season.
 /// - `stats_by_season` -- `(mean, std)` per season.
+/// - `year_starts` -- first year of each season's bucket; equal entries recover
+///   the by-index pairing.
 ///
 /// # Returns
 ///
@@ -33,6 +42,7 @@ pub fn periodic_autocorrelation(
     n_seasons: usize,
     observations_by_season: &[&[f64]],
     stats_by_season: &[(f64, f64)],
+    year_starts: &[i32],
 ) -> f64 {
     if lag == 0 {
         return 1.0;
@@ -51,20 +61,16 @@ pub fn periodic_autocorrelation(
     let ref_obs = observations_by_season[ref_season];
     let lag_obs = observations_by_season[lag_season];
 
-    // Year boundaries crossed by the lag fix how many leading observations to
-    // drop: within one cycle, cross when lag_season >= ref_season; otherwise
-    // floor-divide lag / n_seasons.
-    let years_crossed = if lag < n_seasons {
-        usize::from(lag_season >= ref_season)
-    } else {
-        lag / n_seasons
-    };
-
-    let ref_start = years_crossed;
+    #[allow(clippy::cast_possible_wrap)]
+    let (ref_start, lag_start) = bucket_offsets(
+        year_starts[ref_season],
+        year_starts[lag_season],
+        lag_years_back(ref_season, lag, n_seasons) as i64,
+    );
     let n_pairs = ref_obs
         .len()
-        .saturating_sub(years_crossed)
-        .min(lag_obs.len());
+        .saturating_sub(ref_start)
+        .min(lag_obs.len().saturating_sub(lag_start));
 
     if n_pairs == 0 {
         return 0.0;
@@ -75,7 +81,7 @@ pub fn periodic_autocorrelation(
     // buckets differ in length.
     let mut gamma = 0.0_f64;
     for i in 0..n_pairs {
-        gamma += (ref_obs[ref_start + i] - mu_ref) * (lag_obs[i] - mu_lag);
+        gamma += (ref_obs[ref_start + i] - mu_ref) * (lag_obs[lag_start + i] - mu_lag);
     }
     #[allow(clippy::cast_precision_loss)]
     {
@@ -84,6 +90,29 @@ pub fn periodic_autocorrelation(
 
     let rho = gamma / (std_ref * std_lag);
     rho.clamp(-1.0, 1.0)
+}
+
+/// The number of cycle boundaries between season `ref_season` and the season
+/// `lag` steps before it.
+fn lag_years_back(ref_season: usize, lag: usize, n_seasons: usize) -> usize {
+    if lag > ref_season {
+        (lag - ref_season).div_ceil(n_seasons)
+    } else {
+        0
+    }
+}
+
+/// `(ref_offset, lag_offset)`: the leading entries the reference and lagged
+/// buckets skip so that index `i` of each names years `years_back` apart.
+// Rationale: each cast takes a non-negative difference of `i32` years.
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+fn bucket_offsets(ref_year_start: i32, lag_year_start: i32, years_back: i64) -> (usize, usize) {
+    let shift = i64::from(ref_year_start) - i64::from(lag_year_start) - years_back;
+    if shift >= 0 {
+        (0, shift as usize)
+    } else {
+        ((-shift) as usize, 0)
+    }
 }
 
 /// Build the **forward-prediction** periodic Yule-Walker matrix and RHS:
@@ -100,6 +129,8 @@ pub fn periodic_autocorrelation(
 /// - `n_seasons` -- total number of seasons in the periodic cycle.
 /// - `observations_by_season` -- chronological observations grouped by season.
 /// - `stats_by_season` -- `(mean, std)` per season.
+/// - `year_starts` -- first year of each season's bucket (see
+///   [`periodic_autocorrelation`]).
 ///
 /// # Returns
 ///
@@ -112,6 +143,7 @@ pub fn build_periodic_yw_matrix(
     n_seasons: usize,
     observations_by_season: &[&[f64]],
     stats_by_season: &[(f64, f64)],
+    year_starts: &[i32],
 ) -> (Vec<f64>, Vec<f64>) {
     #[cfg(test)]
     BUILD_PERIODIC_YW_MATRIX_CALL_COUNT.with(|c| {
@@ -137,6 +169,7 @@ pub fn build_periodic_yw_matrix(
                 n_seasons,
                 observations_by_season,
                 stats_by_season,
+                year_starts,
             );
             matrix[i * order + j] = rho;
             matrix[j * order + i] = rho;
@@ -150,6 +183,7 @@ pub fn build_periodic_yw_matrix(
             n_seasons,
             observations_by_season,
             stats_by_season,
+            year_starts,
         );
     }
 
@@ -169,6 +203,8 @@ pub fn build_periodic_yw_matrix(
 /// - `n_seasons` -- total number of seasons.
 /// - `observations_by_season` -- observations grouped by season.
 /// - `stats_by_season` -- `(mean, std)` per season.
+/// - `year_starts` -- first year of each season's bucket (see
+///   [`periodic_autocorrelation`]).
 /// - `matrix_out` / `rhs_out` -- caller buffers; resized and overwritten.
 ///
 /// No-op when `order == 0` (buffers cleared to empty).
@@ -178,6 +214,7 @@ pub fn build_periodic_yw_matrix_into(
     n_seasons: usize,
     observations_by_season: &[&[f64]],
     stats_by_season: &[(f64, f64)],
+    year_starts: &[i32],
     matrix_out: &mut Vec<f64>,
     rhs_out: &mut Vec<f64>,
 ) {
@@ -210,6 +247,7 @@ pub fn build_periodic_yw_matrix_into(
                 n_seasons,
                 observations_by_season,
                 stats_by_season,
+                year_starts,
             );
             matrix_out[i * order + j] = rho;
             matrix_out[j * order + i] = rho;
@@ -223,6 +261,7 @@ pub fn build_periodic_yw_matrix_into(
             n_seasons,
             observations_by_season,
             stats_by_season,
+            year_starts,
         );
     }
 }
@@ -239,15 +278,12 @@ pub fn build_periodic_yw_matrix_into(
 ///
 /// Two year offsets compose:
 ///
-/// 1. **Bucket year offset** (`year_diff`): `A` and `Z` buckets start at
-///    different PDF years per season (the rolling 12-month `A` window needs a
-///    full year of look-back), so pairing aligns by absolute PDF year via
-///    `z_year_starts` / `a_year_starts`, not bucket index.
-/// 2. **Lag year wrap** (`pdf_year_back_shift`): when the lagged season wraps,
-///    `Z`'s PDF year is one or more earlier than `A`'s.
-///
-/// **Lag-0 guard**: `lag == 0` forces `pdf_year_back_shift = 0`; otherwise the
-/// `lag_season >= ref_season` branch would falsely cross a year boundary.
+/// 1. **Bucket year offset**: `A` and `Z` buckets start at different PDF years
+///    per season (the rolling 12-month `A` window needs a full year of
+///    look-back), so pairing aligns by absolute PDF year via `z_year_starts` /
+///    `a_year_starts`, not bucket index.
+/// 2. **Lag year count**: `Z`'s PDF year is earlier than `A`'s by the number of
+///    cycle boundaries the lag crosses, as in [`periodic_autocorrelation`].
 ///
 /// # Parameters
 ///
@@ -290,25 +326,12 @@ pub fn cross_correlation_z_a(
     let a_obs = annual_observations_by_season[ref_season];
     let z_obs = observations_by_season[lag_season];
 
-    let pdf_year_back_shift = if lag == 0 {
-        0
-    } else if lag < n_seasons {
-        usize::from(lag_season >= ref_season)
-    } else {
-        lag / n_seasons
-    };
-
-    let year_diff = i64::from(a_year_starts[ref_season]) - i64::from(z_year_starts[lag_season]);
     #[allow(clippy::cast_possible_wrap)]
-    let shift = year_diff - pdf_year_back_shift as i64;
-
-    // Positive shift skips leading Z (Z starts earlier); negative skips leading A.
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-    let (a_start, z_start) = if shift >= 0 {
-        (0_usize, shift as usize)
-    } else {
-        ((-shift) as usize, 0_usize)
-    };
+    let (a_start, z_start) = bucket_offsets(
+        a_year_starts[ref_season],
+        z_year_starts[lag_season],
+        lag_years_back(ref_season, lag, n_seasons) as i64,
+    );
 
     let n_pairs = a_obs
         .len()
@@ -388,18 +411,11 @@ pub fn cross_correlation_a_z_neg1(
     let a_obs = annual_observations_by_season[ref_season];
     let z_obs = observations_by_season[z_season];
 
-    let pdf_year_forward_shift = usize::from(z_season == 0);
-
-    let year_diff = i64::from(a_year_starts[ref_season]) - i64::from(z_year_starts[z_season]);
-    #[allow(clippy::cast_possible_wrap)]
-    let shift = year_diff + pdf_year_forward_shift as i64;
-
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-    let (a_start, z_start) = if shift >= 0 {
-        (0_usize, shift as usize)
-    } else {
-        ((-shift) as usize, 0_usize)
-    };
+    let (a_start, z_start) = bucket_offsets(
+        a_year_starts[ref_season],
+        z_year_starts[z_season],
+        -i64::from(z_season == 0),
+    );
 
     let n_pairs = a_obs
         .len()
@@ -447,8 +463,8 @@ pub fn cross_correlation_a_z_neg1(
 /// - `n_seasons` — total number of seasons in the periodic cycle.
 /// - `observations_by_season` — chronological `Z` observations grouped by season.
 /// - `stats_by_season` — `(mean, std)` for each `Z` season.
-/// - `z_year_starts` — first PDF year of each `Z` bucket; threaded to the
-///   cross-correlation helpers for absolute-year alignment (see
+/// - `z_year_starts` — first PDF year of each `Z` bucket; aligns every pairing
+///   with `Z` by absolute year (see [`periodic_autocorrelation`] and
 ///   [`cross_correlation_z_a`]).
 /// - `annual_observations_by_season` — `A` observations grouped by season.
 /// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
@@ -488,6 +504,7 @@ pub fn build_extended_periodic_yw_matrix(
                 n_seasons,
                 observations_by_season,
                 stats_by_season,
+                z_year_starts,
             );
             matrix[i * dim + j] = rho;
             matrix[j * dim + i] = rho;
@@ -501,6 +518,7 @@ pub fn build_extended_periodic_yw_matrix(
             n_seasons,
             observations_by_season,
             stats_by_season,
+            z_year_starts,
         );
     }
 

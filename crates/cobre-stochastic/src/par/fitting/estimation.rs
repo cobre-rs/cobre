@@ -27,6 +27,7 @@ use crate::par::fitting::{
     estimate_periodic_ar_coefficients, find_season_for_date, periodic_pacf, select_order_pacf,
     select_order_pacf_annual,
 };
+use crate::season_cast::observation_occurrence_year;
 
 /// Reason a season's AR order was reduced during estimation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -287,12 +288,19 @@ fn estimate_ar_with_pacf(
 
     let (stage_index, stats_map, n_seasons) = build_pacf_stage_lookups(stages, seasonal_stats);
     let group_obs = group_observations_by_season(observations, hydro_ids, &stage_index, season_map);
+    let group_year_starts = group_year_starts(observations, hydro_ids, &stage_index, season_map);
 
     // 95% CI z-score for the PACF significance threshold.
     let z_alpha = 1.96_f64;
 
     let mut estimates = estimate_all_hydro_ar_coefficients(
-        hydro_ids, &group_obs, &stats_map, n_seasons, max_order, z_alpha,
+        hydro_ids,
+        &group_obs,
+        &group_year_starts,
+        &stats_map,
+        n_seasons,
+        max_order,
+        z_alpha,
     );
 
     let reductions = iterative_pacf_reduction(
@@ -300,6 +308,7 @@ fn estimate_ar_with_pacf(
         n_seasons,
         hydro_ids,
         &group_obs,
+        &group_year_starts,
         &stats_map,
         &PacfReductionParams {
             initial_max_order: max_order,
@@ -347,30 +356,8 @@ fn estimate_ar_with_pacf_annual(
     let (stage_index, stats_map, n_seasons) = build_pacf_stage_lookups(stages, seasonal_stats);
 
     let group_obs = group_observations_by_season(observations, hydro_ids, &stage_index, season_map);
+    let group_z_year_starts = group_year_starts(observations, hydro_ids, &stage_index, season_map);
     let entity_set: HashSet<EntityId> = hydro_ids.iter().copied().collect();
-    let group_z_year_starts: HashMap<(EntityId, usize), i32> = {
-        let mut starts: HashMap<(EntityId, usize), i32> = HashMap::new();
-        for &(entity_id, date, _value) in observations {
-            if !entity_set.contains(&entity_id) {
-                continue;
-            }
-            let Some(season_id) = find_season_for_date(&stage_index, date)
-                .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
-            else {
-                continue;
-            };
-            let y = date.year();
-            starts
-                .entry((entity_id, season_id))
-                .and_modify(|cur| {
-                    if y < *cur {
-                        *cur = y;
-                    }
-                })
-                .or_insert(y);
-        }
-        starts
-    };
 
     // Rolling-window A_t groups must reproduce the chronological grouping of
     // `estimate_annual_seasonal_stats` so A and Z align by season.
@@ -406,7 +393,7 @@ fn estimate_ar_with_pacf_annual(
                 .entry((entity_id, season_id))
                 .or_default()
                 .push(mean_a);
-            let y = target_date.year();
+            let y = observation_year(season_map, season_id, target_date);
             annual_group_year_starts
                 .entry((entity_id, season_id))
                 .and_modify(|cur| {
@@ -939,10 +926,52 @@ fn group_observations_by_season(
     group_obs
 }
 
+/// The year that keys an observation's season occurrence: the season map's
+/// occurrence year, or the calendar year without a map.
+fn observation_year(season_map: Option<&SeasonMap>, season_id: usize, date: NaiveDate) -> i32 {
+    season_map.map_or_else(
+        || date.year(),
+        |sm| observation_occurrence_year(sm, season_id, date),
+    )
+}
+
+/// First [`observation_year`] of each `(EntityId, season_id)` bucket of
+/// [`group_observations_by_season`].
+fn group_year_starts(
+    observations: &[(EntityId, NaiveDate, f64)],
+    hydro_ids: &[EntityId],
+    stage_index: &[(chrono::NaiveDate, chrono::NaiveDate, i32, usize)],
+    season_map: Option<&SeasonMap>,
+) -> HashMap<(EntityId, usize), i32> {
+    let entity_set: HashSet<EntityId> = hydro_ids.iter().copied().collect();
+    let mut starts: HashMap<(EntityId, usize), i32> = HashMap::new();
+    for &(entity_id, date, _value) in observations {
+        if !entity_set.contains(&entity_id) {
+            continue;
+        }
+        let Some(season_id) = find_season_for_date(stage_index, date)
+            .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
+        else {
+            continue;
+        };
+        let y = observation_year(season_map, season_id, date);
+        starts
+            .entry((entity_id, season_id))
+            .and_modify(|cur| {
+                if y < *cur {
+                    *cur = y;
+                }
+            })
+            .or_insert(y);
+    }
+    starts
+}
+
 /// Build initial AR coefficient estimates for all hydros using periodic PACF + YW.
 fn estimate_all_hydro_ar_coefficients(
     hydro_ids: &[EntityId],
     group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    group_year_starts: &HashMap<(EntityId, usize), i32>,
     stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
     n_seasons: usize,
     max_order: usize,
@@ -970,6 +999,14 @@ fn estimate_all_hydro_ar_coefficients(
                         .map_or(&[][..], Vec::as_slice)
                 })
                 .collect();
+            let year_starts: Vec<i32> = (0..n_seasons)
+                .map(|season| {
+                    group_year_starts
+                        .get(&(hydro_id, season))
+                        .copied()
+                        .unwrap_or(0)
+                })
+                .collect();
             let mut hydro_estimates: Vec<ArCoefficientEstimate> = Vec::with_capacity(n_seasons);
             for season in 0..n_seasons {
                 let stats_s = stats_by_season[season];
@@ -983,8 +1020,14 @@ fn estimate_all_hydro_ar_coefficients(
                     continue;
                 }
                 let n_obs = obs_refs[season].len();
-                let pacf_values =
-                    periodic_pacf(season, max_order, n_seasons, &obs_refs, &stats_by_season);
+                let pacf_values = periodic_pacf(
+                    season,
+                    max_order,
+                    n_seasons,
+                    &obs_refs,
+                    &stats_by_season,
+                    &year_starts,
+                );
                 let pacf_result = select_order_pacf(&pacf_values, n_obs, z_alpha);
                 let yw_result = estimate_periodic_ar_coefficients(
                     season,
@@ -992,6 +1035,7 @@ fn estimate_all_hydro_ar_coefficients(
                     n_seasons,
                     &obs_refs,
                     &stats_by_season,
+                    &year_starts,
                 );
                 hydro_estimates.push(ArCoefficientEstimate {
                     hydro_id,
@@ -1063,6 +1107,7 @@ fn reduce_entity_orders(
     hydro_id: EntityId,
     indices: &[usize],
     group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    group_year_starts: &HashMap<(EntityId, usize), i32>,
     stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
     params: &PacfReductionParams,
     all_reductions: &mut HashMap<EntityId, Vec<ContributionReduction>>,
@@ -1095,6 +1140,14 @@ fn reduce_entity_orders(
             group_obs
                 .get(&(hydro_id, season))
                 .map_or(&[][..], Vec::as_slice)
+        })
+        .collect();
+    let year_starts: Vec<i32> = (0..n_seasons)
+        .map(|season| {
+            group_year_starts
+                .get(&(hydro_id, season))
+                .copied()
+                .unwrap_or(0)
         })
         .collect();
     loop {
@@ -1139,6 +1192,7 @@ fn reduce_entity_orders(
                 n_seasons,
                 &obs_refs,
                 &stats_by_season,
+                &year_starts,
             );
             let pacf_result = select_order_pacf(&pacf_values, n_obs, params.z_alpha);
             let yw_result = estimate_periodic_ar_coefficients(
@@ -1147,6 +1201,7 @@ fn reduce_entity_orders(
                 n_seasons,
                 &obs_refs,
                 &stats_by_season,
+                &year_starts,
             );
             for &idx in indices {
                 if estimates[idx].season_id == season_id {
@@ -1195,6 +1250,7 @@ fn iterative_pacf_reduction(
     n_seasons: usize,
     hydro_ids: &[EntityId],
     group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    group_year_starts: &HashMap<(EntityId, usize), i32>,
     stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
     params: &PacfReductionParams,
 ) -> HashMap<EntityId, Vec<ContributionReduction>> {
@@ -1217,6 +1273,7 @@ fn iterative_pacf_reduction(
             hydro_id,
             indices,
             group_obs,
+            group_year_starts,
             stats_map,
             params,
             &mut all_reductions,

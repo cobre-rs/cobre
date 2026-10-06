@@ -1320,6 +1320,10 @@ fn pop_mean_std(data: &[f64]) -> (f64, f64) {
     (mean, var.sqrt())
 }
 
+fn same_year_starts(n_seasons: usize) -> Vec<i32> {
+    vec![0; n_seasons]
+}
+
 #[test]
 fn periodic_autocorrelation_single_season_basic() {
     // Single-season (stationary) case with known analytical value.
@@ -1339,7 +1343,7 @@ fn periodic_autocorrelation_single_season_basic() {
     let obs: &[&[f64]] = &[&data];
     let stats_arr: &[(f64, f64)] = &[stats];
 
-    let rho = periodic_autocorrelation(0, 1, 1, obs, stats_arr);
+    let rho = periodic_autocorrelation(0, 1, 1, obs, stats_arr, &same_year_starts(1));
     assert!((rho - 0.5).abs() < 1e-10, "rho(0,1) = {rho}, expected 0.5");
 }
 
@@ -1356,9 +1360,9 @@ fn periodic_autocorrelation_two_season() {
     let stats: &[(f64, f64)] = &[stats_0, stats_1];
 
     // rho(0, 1) = autocorrelation of season 0 with season 1 (lag 1).
-    let rho01 = periodic_autocorrelation(0, 1, 2, obs, stats);
+    let rho01 = periodic_autocorrelation(0, 1, 2, obs, stats, &same_year_starts(2));
     // rho(1, 1) = autocorrelation of season 1 with season 0 (lag 1).
-    let rho10 = periodic_autocorrelation(1, 1, 2, obs, stats);
+    let rho10 = periodic_autocorrelation(1, 1, 2, obs, stats, &same_year_starts(2));
 
     // Both should be finite and in [-1, 1].
     assert!(rho01.abs() <= 1.0);
@@ -1382,11 +1386,25 @@ fn periodic_autocorrelation_cross_year_boundary() {
 
     // For the cross-year case (ref_season=0, lag=1 -> lag_season=11),
     // lag_season (11) >= ref_season (0), so one observation is dropped.
-    let rho_jan_dec = periodic_autocorrelation(0, 1, n_seasons, &obs_refs, &stats);
+    let rho_jan_dec = periodic_autocorrelation(
+        0,
+        1,
+        n_seasons,
+        &obs_refs,
+        &stats,
+        &same_year_starts(n_seasons),
+    );
 
     // For the non-cross-year case (ref_season=6, lag=1 -> lag_season=5),
     // lag_season (5) < ref_season (6), so no observation is dropped.
-    let rho_jul_jun = periodic_autocorrelation(6, 1, n_seasons, &obs_refs, &stats);
+    let rho_jul_jun = periodic_autocorrelation(
+        6,
+        1,
+        n_seasons,
+        &obs_refs,
+        &stats,
+        &same_year_starts(n_seasons),
+    );
 
     // Both should produce valid values.
     assert!((-1.0..=1.0).contains(&rho_jan_dec));
@@ -1409,7 +1427,7 @@ fn periodic_autocorrelation_zero_std_returns_zero() {
     let stats: &[(f64, f64)] = &[stats_0, stats_1];
 
     assert_eq!(stats_0.1, 0.0);
-    let rho = periodic_autocorrelation(0, 1, 2, obs, stats);
+    let rho = periodic_autocorrelation(0, 1, 2, obs, stats, &same_year_starts(2));
     assert_eq!(rho, 0.0);
 }
 
@@ -1424,7 +1442,7 @@ fn periodic_autocorrelation_insufficient_data() {
     // ref_obs.len()-1 = 0 -> 0 pairs -> returns 0.0.
     let stats: &[(f64, f64)] = &[(10.0, 1.0), (20.0, 1.0)];
     let obs: &[&[f64]] = &[&season_0, &season_1];
-    let rho = periodic_autocorrelation(0, 1, 2, obs, stats);
+    let rho = periodic_autocorrelation(0, 1, 2, obs, stats, &same_year_starts(2));
     assert_eq!(rho, 0.0);
 }
 
@@ -1436,7 +1454,7 @@ fn periodic_autocorrelation_clamped_to_range() {
     let season_0 = [100.0, 200.0, 300.0];
     let stats: &[(f64, f64)] = &[(200.0, 0.001)]; // artificially tiny std
     let obs: &[&[f64]] = &[&season_0];
-    let rho = periodic_autocorrelation(0, 1, 1, obs, stats);
+    let rho = periodic_autocorrelation(0, 1, 1, obs, stats, &same_year_starts(1));
     assert!((-1.0..=1.0).contains(&rho), "rho should be clamped: {rho}");
 }
 
@@ -1450,14 +1468,14 @@ fn periodic_autocorrelation_population_divisor() {
     let stats: &[(f64, f64)] = &[(mean, std_val)];
     let obs: &[&[f64]] = &[&data];
 
-    let _rho = periodic_autocorrelation(0, 1, 1, obs, stats);
+    let _rho = periodic_autocorrelation(0, 1, 1, obs, stats, &same_year_starts(1));
 
     let data2 = [1.0, 4.0, 9.0]; // mean=14/3
     let (mean2, std2) = pop_mean_std(&data2);
     let stats2: &[(f64, f64)] = &[(mean2, std2)];
     let obs2: &[&[f64]] = &[&data2];
 
-    let rho2 = periodic_autocorrelation(0, 1, 1, obs2, stats2);
+    let rho2 = periodic_autocorrelation(0, 1, 1, obs2, stats2, &same_year_starts(1));
     // Just verify it produces a valid finite result with population divisor.
     assert!(rho2.is_finite(), "rho should be finite: {rho2}");
     assert!(rho2.abs() <= 1.0);
@@ -1469,7 +1487,10 @@ fn periodic_autocorrelation_lag_zero() {
     let data = [1.0, 2.0, 3.0];
     let stats: &[(f64, f64)] = &[(2.0, 1.0)];
     let obs: &[&[f64]] = &[&data];
-    assert_eq!(periodic_autocorrelation(0, 0, 1, obs, stats), 1.0);
+    assert_eq!(
+        periodic_autocorrelation(0, 0, 1, obs, stats, &same_year_starts(1)),
+        1.0
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -1481,7 +1502,7 @@ fn build_periodic_yw_matrix_order_zero() {
     let data = [1.0, 2.0, 3.0];
     let stats: &[(f64, f64)] = &[(2.0, 1.0)];
     let obs: &[&[f64]] = &[&data];
-    let (mat, rhs) = build_periodic_yw_matrix(0, 0, 1, obs, stats);
+    let (mat, rhs) = build_periodic_yw_matrix(0, 0, 1, obs, stats, &same_year_starts(1));
     assert!(mat.is_empty());
     assert!(rhs.is_empty());
 }
@@ -1496,7 +1517,7 @@ fn build_periodic_yw_matrix_single_season_toeplitz() {
     let stats_arr: &[(f64, f64)] = &[stats];
 
     let order = 3;
-    let (mat, _rhs) = build_periodic_yw_matrix(0, order, 1, obs, stats_arr);
+    let (mat, _rhs) = build_periodic_yw_matrix(0, order, 1, obs, stats_arr, &same_year_starts(1));
 
     assert_eq!(mat.len(), order * order);
     // Check Toeplitz property: M[i,j] depends only on |i-j|.
@@ -1520,7 +1541,7 @@ fn build_periodic_yw_matrix_diagonal_is_one() {
     let stats: &[(f64, f64)] = &[stats_0, stats_1];
 
     let order = 3;
-    let (mat, _) = build_periodic_yw_matrix(0, order, 2, obs, stats);
+    let (mat, _) = build_periodic_yw_matrix(0, order, 2, obs, stats, &same_year_starts(2));
     for i in 0..order {
         assert!(
             (mat[i * order + i] - 1.0).abs() < 1e-15,
@@ -1543,7 +1564,7 @@ fn build_periodic_yw_matrix_symmetry() {
     let obs: Vec<&[f64]> = vec![&s0, &s1, &s2];
 
     let order = 4;
-    let (mat, _) = build_periodic_yw_matrix(1, order, 3, &obs, &stats);
+    let (mat, _) = build_periodic_yw_matrix(1, order, 3, &obs, &stats, &same_year_starts(3));
     for i in 0..order {
         for j in (i + 1)..order {
             assert!(
@@ -1564,7 +1585,8 @@ fn build_periodic_yw_matrix_rhs_length() {
     let stats_arr: &[(f64, f64)] = &[stats];
 
     for order in 1..=5 {
-        let (mat, rhs) = build_periodic_yw_matrix(0, order, 1, obs, stats_arr);
+        let (mat, rhs) =
+            build_periodic_yw_matrix(0, order, 1, obs, stats_arr, &same_year_starts(1));
         assert_eq!(
             mat.len(),
             order * order,
@@ -1586,7 +1608,7 @@ fn build_periodic_yw_matrix_two_season_not_toeplitz() {
     let stats: &[(f64, f64)] = &[stats_0, stats_1];
 
     let order = 3;
-    let (mat, _) = build_periodic_yw_matrix(0, order, 2, obs, stats);
+    let (mat, _) = build_periodic_yw_matrix(0, order, 2, obs, stats, &same_year_starts(2));
 
     // In a Toeplitz matrix, M[0,1] == M[1,2]. For the periodic matrix,
     // row i uses ref_month = (season + n_seasons - (i+1)) % n_seasons.
@@ -1630,7 +1652,14 @@ fn build_periodic_yw_matrix_forward_prediction_two_season_ar2() {
     let expected_rhs0 = -0.375_f64;
     let expected_rhs1 = -0.625_f64;
 
-    let (mat_orig, rhs_orig) = build_periodic_yw_matrix(season, order, n_seasons, obs, stats);
+    let (mat_orig, rhs_orig) = build_periodic_yw_matrix(
+        season,
+        order,
+        n_seasons,
+        obs,
+        stats,
+        &same_year_starts(n_seasons),
+    );
 
     assert!(
         (mat_orig[1] - expected_rho_m).abs() < 1e-14,
@@ -1658,7 +1687,14 @@ fn build_periodic_yw_matrix_forward_prediction_two_season_ar2() {
     );
 
     // Solve the forward YW system and verify round-trip and analytical solution.
-    let (mut mat, mut rhs) = build_periodic_yw_matrix(season, order, n_seasons, obs, stats);
+    let (mut mat, mut rhs) = build_periodic_yw_matrix(
+        season,
+        order,
+        n_seasons,
+        obs,
+        stats,
+        &same_year_starts(n_seasons),
+    );
     let phi = solve_linear_system(&mut mat, &mut rhs, order)
         .expect("forward YW system must not be singular");
 
@@ -1815,9 +1851,11 @@ fn periodic_autocorrelation_single_season_yw_solve_roundtrip() {
 
     let order = 3;
     // Save the RHS before the solve (solve modifies in-place).
-    let (mat_orig, rhs_orig) = build_periodic_yw_matrix(0, order, 1, obs, stats_arr);
+    let (mat_orig, rhs_orig) =
+        build_periodic_yw_matrix(0, order, 1, obs, stats_arr, &same_year_starts(1));
 
-    let (mut mat, mut rhs) = build_periodic_yw_matrix(0, order, 1, obs, stats_arr);
+    let (mut mat, mut rhs) =
+        build_periodic_yw_matrix(0, order, 1, obs, stats_arr, &same_year_starts(1));
     let phi = solve_linear_system(&mut mat, &mut rhs, order).unwrap();
 
     // Verify R * phi = rhs_orig.
@@ -1845,7 +1883,7 @@ fn periodic_autocorrelation_two_obs_per_season() {
     let stats: &[(f64, f64)] = &[stats_0, stats_1];
 
     // Should not panic.
-    let rho = periodic_autocorrelation(0, 1, 2, obs, stats);
+    let rho = periodic_autocorrelation(0, 1, 2, obs, stats, &same_year_starts(2));
     assert!(rho.is_finite());
     assert!(rho.abs() <= 1.0);
 }
@@ -1859,9 +1897,131 @@ fn periodic_autocorrelation_large_lag_wraps() {
     let obs: Vec<&[f64]> = vec![&s0, &s1];
 
     // Lag=3 with n_seasons=2: lag_season = (0 + 2 - 3%2) % 2 = (2 - 1)%2 = 1.
-    let rho = periodic_autocorrelation(0, 3, 2, &obs, &stats);
+    let rho = periodic_autocorrelation(0, 3, 2, &obs, &stats, &same_year_starts(2));
     assert!(rho.is_finite());
     assert!(rho.abs() <= 1.0);
+}
+
+#[test]
+fn lag_years_back_counts_whole_cycles_for_long_lags() {
+    let z0 = [1.0, 2.0, 4.0, 3.0, 5.0];
+    let z1 = [6.0, 8.0, 7.0, 9.0, 5.0];
+    let a0 = [2.0, 1.0, 3.0, 5.0, 4.0];
+    let obs: &[&[f64]] = &[&z0, &z1];
+    let stats = [pop_mean_std(&z0), pop_mean_std(&z1)];
+    let annual_obs: &[&[f64]] = &[&a0, &[]];
+    let annual_stats = [pop_mean_std(&a0), (0.0, 0.0)];
+    let year_starts = same_year_starts(2);
+
+    let rho_three_seasons_back = periodic_autocorrelation(0, 3, 2, obs, &stats, &year_starts);
+    let rho_one_cycle_back = periodic_autocorrelation(1, 3, 2, obs, &stats, &year_starts);
+    let rho_z_a = cross_correlation_z_a(
+        0,
+        3,
+        2,
+        obs,
+        &stats,
+        &year_starts,
+        annual_obs,
+        &annual_stats,
+        &year_starts,
+    );
+
+    assert!(
+        (rho_three_seasons_back + 1.0 / 6.0).abs() < 1e-12,
+        "season 0 of year Y pairs with season 1 of year Y - 2: got {rho_three_seasons_back}"
+    );
+    assert!(
+        rho_one_cycle_back.abs() < 1e-12,
+        "season 1 of year Y pairs with season 0 of year Y - 1: got {rho_one_cycle_back}"
+    );
+    assert!(
+        (rho_z_a - 0.2).abs() < 1e-12,
+        "A of season 0 in year Y pairs with Z of season 1 in year Y - 2: got {rho_z_a}"
+    );
+}
+
+/// Season 0's bucket starts a year after season 1's.
+const SHIFTED_YEAR_STARTS: [i32; 2] = [2001, 2000];
+
+fn two_season_buckets() -> ([f64; 4], [f64; 4]) {
+    ([1.0, 2.0, 4.0, 3.0], [5.0, 7.0, 6.0, 8.0])
+}
+
+#[test]
+fn periodic_autocorrelation_pairs_buckets_by_absolute_year() {
+    let (s0, s1) = two_season_buckets();
+    let obs: &[&[f64]] = &[&s0, &s1];
+    let stats = [pop_mean_std(&s0), pop_mean_std(&s1)];
+    let rho = |season: usize, year_starts: &[i32]| {
+        periodic_autocorrelation(season, 1, 2, obs, &stats, year_starts)
+    };
+
+    let cases = [
+        (0, SHIFTED_YEAR_STARTS, 0.4),
+        (1, SHIFTED_YEAR_STARTS, 7.0 / 15.0),
+        (0, [2000, 2000], 1.0 / 3.0),
+        (1, [2000, 2000], 0.4),
+    ];
+    for (season, year_starts, expected) in cases {
+        let got = rho(season, &year_starts);
+        assert!(
+            (got - expected).abs() < 1e-12,
+            "rho({season}, 1) with year starts {year_starts:?}: got {got}, expected {expected}"
+        );
+    }
+}
+
+#[test]
+fn extended_yw_rhs_pairs_z_by_absolute_year() {
+    let (s0, s1) = two_season_buckets();
+    let obs: &[&[f64]] = &[&s0, &s1];
+    let stats = [pop_mean_std(&s0), pop_mean_std(&s1)];
+    let a0 = [2.0, 1.0, 3.0];
+    let a1 = [4.0, 6.0, 5.0];
+    let annual_obs: &[&[f64]] = &[&a0, &a1];
+    let annual_stats = [pop_mean_std(&a0), pop_mean_std(&a1)];
+
+    let (_, rhs) = build_extended_periodic_yw_matrix(
+        0,
+        1,
+        2,
+        obs,
+        &stats,
+        &SHIFTED_YEAR_STARTS,
+        annual_obs,
+        &annual_stats,
+        &[2001, 2001],
+    );
+
+    let expected = periodic_autocorrelation(0, 1, 2, obs, &stats, &SHIFTED_YEAR_STARTS);
+    assert_eq!(rhs[0].to_bits(), expected.to_bits());
+}
+
+#[test]
+fn partitioned_covariance_pairs_z_by_absolute_year() {
+    let (s0, s1) = two_season_buckets();
+    let obs: &[&[f64]] = &[&s0, &s1];
+    let stats = [pop_mean_std(&s0), pop_mean_std(&s1)];
+    let a0 = [2.0, 1.0, 3.0];
+    let a1 = [4.0, 6.0, 5.0];
+    let annual_obs: &[&[f64]] = &[&a0, &a1];
+    let annual_stats = [pop_mean_std(&a0), pop_mean_std(&a1)];
+
+    let cov = assemble_partitioned_covariance(
+        0,
+        1,
+        2,
+        obs,
+        &stats,
+        &SHIFTED_YEAR_STARTS,
+        annual_obs,
+        &annual_stats,
+        &[2001, 2001],
+    );
+
+    let expected = periodic_autocorrelation(0, 1, 2, obs, &stats, &SHIFTED_YEAR_STARTS);
+    assert_eq!(cov.sigma_11[1].to_bits(), expected.to_bits());
 }
 
 #[test]
@@ -1877,7 +2037,7 @@ fn periodic_autocorrelation_population_divisor_verification() {
     let obs: &[&[f64]] = &[&s0, &s1];
     let stats: &[(f64, f64)] = &[stats_0, stats_1];
 
-    let rho = periodic_autocorrelation(0, 1, 2, obs, stats);
+    let rho = periodic_autocorrelation(0, 1, 2, obs, stats, &same_year_starts(2));
     // The important check: with population std divisor, the result is valid.
     assert!(rho.is_finite());
     assert!(rho.abs() <= 1.0);
@@ -1912,9 +2072,11 @@ fn periodic_yw_matrix_solve_residual_check() {
     let stats: &[(f64, f64)] = &[stats_0, stats_1];
 
     let order = 3;
-    let (mat_orig, rhs_orig) = build_periodic_yw_matrix(0, order, 2, obs, stats);
+    let (mat_orig, rhs_orig) =
+        build_periodic_yw_matrix(0, order, 2, obs, stats, &same_year_starts(2));
 
-    let (mut mat, mut rhs) = build_periodic_yw_matrix(0, order, 2, obs, stats);
+    let (mut mat, mut rhs) =
+        build_periodic_yw_matrix(0, order, 2, obs, stats, &same_year_starts(2));
     let phi = solve_linear_system(&mut mat, &mut rhs, order).unwrap();
 
     // Verify R * phi = rhs_orig.
@@ -1949,11 +2111,11 @@ fn periodic_yw_matrix_rhs_matches_extended_matrix() {
 
     let order = 2;
     let season = 1;
-    let (_, rhs) = build_periodic_yw_matrix(season, order, 3, &obs, &stats);
+    let (_, rhs) = build_periodic_yw_matrix(season, order, 3, &obs, &stats, &same_year_starts(3));
 
     // Verify each RHS entry: rhs[i] = rho(season, i+1).
-    let expected_rhs0 = periodic_autocorrelation(season, 1, 3, &obs, &stats);
-    let expected_rhs1 = periodic_autocorrelation(season, 2, 3, &obs, &stats);
+    let expected_rhs0 = periodic_autocorrelation(season, 1, 3, &obs, &stats, &same_year_starts(3));
+    let expected_rhs1 = periodic_autocorrelation(season, 2, 3, &obs, &stats, &same_year_starts(3));
 
     assert!(
         (rhs[0] - expected_rhs0).abs() < 1e-10,
@@ -1979,7 +2141,7 @@ fn periodic_pacf_empty_for_zero_order() {
     let stats = pop_mean_std(&data);
     let obs: &[&[f64]] = &[&data];
     let stats_arr: &[(f64, f64)] = &[stats];
-    let pacf = periodic_pacf(0, 0, 1, obs, stats_arr);
+    let pacf = periodic_pacf(0, 0, 1, obs, stats_arr, &same_year_starts(1));
     assert!(pacf.is_empty());
 }
 
@@ -1992,8 +2154,8 @@ fn periodic_pacf_single_season_matches_ar1() {
     let obs: &[&[f64]] = &[&data];
     let stats_arr: &[(f64, f64)] = &[stats];
 
-    let rho1 = periodic_autocorrelation(0, 1, 1, obs, stats_arr);
-    let pacf = periodic_pacf(0, 3, 1, obs, stats_arr);
+    let rho1 = periodic_autocorrelation(0, 1, 1, obs, stats_arr, &same_year_starts(1));
+    let pacf = periodic_pacf(0, 3, 1, obs, stats_arr, &same_year_starts(1));
 
     assert!(!pacf.is_empty());
     // PACF(1) should equal rho(1) (the AR(1) coefficient).
@@ -2014,7 +2176,7 @@ fn periodic_pacf_two_season_differs_from_ld() {
     let stats: Vec<(f64, f64)> = [&s0[..], &s1[..]].iter().map(|s| pop_mean_std(s)).collect();
     let obs: Vec<&[f64]> = vec![&s0, &s1];
 
-    let pacf = periodic_pacf(0, 3, 2, &obs, &stats);
+    let pacf = periodic_pacf(0, 3, 2, &obs, &stats, &same_year_starts(2));
 
     // Should produce values (not empty due to singularity).
     assert!(!pacf.is_empty(), "PACF should not be empty");
@@ -2035,7 +2197,7 @@ fn periodic_pacf_length_matches_max_order() {
     let obs: &[&[f64]] = &[&data];
     let stats_arr: &[(f64, f64)] = &[stats];
 
-    let pacf = periodic_pacf(0, 5, 1, obs, stats_arr);
+    let pacf = periodic_pacf(0, 5, 1, obs, stats_arr, &same_year_starts(1));
     assert_eq!(pacf.len(), 5, "PACF should have max_order entries");
 }
 
@@ -2062,7 +2224,7 @@ fn periodic_pacf_values_bounded() {
     let obs: Vec<&[f64]> = vec![&s0, &s1, &s2];
 
     for season in 0..3 {
-        let pacf = periodic_pacf(season, 4, 3, &obs, &stats);
+        let pacf = periodic_pacf(season, 4, 3, &obs, &stats, &same_year_starts(3));
         for (k, &v) in pacf.iter().enumerate() {
             assert!(
                 v.is_finite(),
@@ -2084,7 +2246,7 @@ fn estimate_periodic_ar_order_zero() {
     let obs: &[&[f64]] = &[&data];
     let stats_arr: &[(f64, f64)] = &[stats];
 
-    let result = estimate_periodic_ar_coefficients(0, 0, 1, obs, stats_arr);
+    let result = estimate_periodic_ar_coefficients(0, 0, 1, obs, stats_arr, &same_year_starts(1));
     assert!(result.coefficients.is_empty());
     assert!(result.sigma2_per_order.is_empty());
 }
@@ -2100,11 +2262,11 @@ fn estimate_periodic_ar_order_one_known_rho() {
     let obs: &[&[f64]] = &[&data];
     let stats_arr: &[(f64, f64)] = &[stats];
 
-    let result = estimate_periodic_ar_coefficients(0, 1, 1, obs, stats_arr);
+    let result = estimate_periodic_ar_coefficients(0, 1, 1, obs, stats_arr, &same_year_starts(1));
     assert_eq!(result.coefficients.len(), 1);
     assert_eq!(result.sigma2_per_order.len(), 1);
     // sigma2 = 1 - phi * rho(1)
-    let rho1 = periodic_autocorrelation(0, 1, 1, obs, stats_arr);
+    let rho1 = periodic_autocorrelation(0, 1, 1, obs, stats_arr, &same_year_starts(1));
     let expected_sigma2 = 1.0 - result.coefficients[0] * rho1;
     assert!(
         (result.sigma2_per_order[0] - expected_sigma2).abs() < 1e-10,
@@ -2126,7 +2288,7 @@ fn estimate_periodic_ar_two_season() {
     let stats: Vec<(f64, f64)> = [&s0[..], &s1[..]].iter().map(|s| pop_mean_std(s)).collect();
     let obs: Vec<&[f64]> = vec![&s0, &s1];
 
-    let result = estimate_periodic_ar_coefficients(0, 2, 2, &obs, &stats);
+    let result = estimate_periodic_ar_coefficients(0, 2, 2, &obs, &stats, &same_year_starts(2));
     assert_eq!(result.coefficients.len(), 2);
     assert_eq!(result.sigma2_per_order.len(), 2);
 }
@@ -2139,7 +2301,8 @@ fn estimate_periodic_ar_sigma2_per_order_length() {
     let stats_arr: &[(f64, f64)] = &[stats];
 
     for order in 1..=5 {
-        let result = estimate_periodic_ar_coefficients(0, order, 1, obs, stats_arr);
+        let result =
+            estimate_periodic_ar_coefficients(0, order, 1, obs, stats_arr, &same_year_starts(1));
         assert_eq!(
             result.sigma2_per_order.len(),
             order,
@@ -2165,7 +2328,7 @@ fn estimate_periodic_ar_sigma2_finite() {
     let obs: &[&[f64]] = &[&data];
     let stats_arr: &[(f64, f64)] = &[stats];
 
-    let result = estimate_periodic_ar_coefficients(0, 4, 1, obs, stats_arr);
+    let result = estimate_periodic_ar_coefficients(0, 4, 1, obs, stats_arr, &same_year_starts(1));
     for k in 0..result.sigma2_per_order.len() {
         assert!(
             result.sigma2_per_order[k].is_finite(),
@@ -2240,7 +2403,7 @@ fn periodic_pacf_two_season_par2_analytical_verification() {
     let stats: Vec<(f64, f64)> = vec![stats_s0, stats_s1];
 
     let max_order = 4;
-    let pacf_s0 = periodic_pacf(0, max_order, 2, &obs, &stats);
+    let pacf_s0 = periodic_pacf(0, max_order, 2, &obs, &stats, &same_year_starts(2));
 
     assert!(
         pacf_s0.len() >= 2,
@@ -2250,7 +2413,8 @@ fn periodic_pacf_two_season_par2_analytical_verification() {
 
     // Identity 1: PACF(k) == estimate_periodic_ar_coefficients(order=k)[k-1].
     for k in 1..=pacf_s0.len() {
-        let yw_result = estimate_periodic_ar_coefficients(0, k, 2, &obs, &stats);
+        let yw_result =
+            estimate_periodic_ar_coefficients(0, k, 2, &obs, &stats, &same_year_starts(2));
         let expected = yw_result.coefficients[k - 1];
         let actual = pacf_s0[k - 1];
         assert!(
@@ -2261,7 +2425,7 @@ fn periodic_pacf_two_season_par2_analytical_verification() {
     }
 
     // Identity 2: PACF(1) == rho(season=0, lag=1) exactly.
-    let rho1 = periodic_autocorrelation(0, 1, 2, &obs, &stats);
+    let rho1 = periodic_autocorrelation(0, 1, 2, &obs, &stats, &same_year_starts(2));
     let pacf1 = pacf_s0[0];
     assert!(
         (pacf1 - rho1).abs() < 1e-10,
@@ -2437,7 +2601,14 @@ fn estimate_periodic_ar_coefficients_calls_build_once_per_order() {
     // Reset counter before the call under test.
     BUILD_PERIODIC_YW_MATRIX_CALL_COUNT.with(|c| *c.borrow_mut() = 0);
 
-    let result = estimate_periodic_ar_coefficients(0, selected_order, 1, obs, stats_arr);
+    let result = estimate_periodic_ar_coefficients(
+        0,
+        selected_order,
+        1,
+        obs,
+        stats_arr,
+        &same_year_starts(1),
+    );
 
     let call_count = BUILD_PERIODIC_YW_MATRIX_CALL_COUNT.with(|c| *c.borrow());
 
@@ -2576,7 +2747,14 @@ fn build_extended_periodic_yw_matrix_top_left_block_matches_classical() {
         &ann_stats,
         &[0_i32; 32],
     );
-    let (cls_mat, cls_rhs) = build_periodic_yw_matrix(season, order, n_seasons, obs, &stats);
+    let (cls_mat, cls_rhs) = build_periodic_yw_matrix(
+        season,
+        order,
+        n_seasons,
+        obs,
+        &stats,
+        &same_year_starts(n_seasons),
+    );
 
     // Extended matrix has dim = order+1 = 3; classical has dim = order = 2.
     let dim_e = order + 1;
@@ -3144,7 +3322,14 @@ fn conditional_facp_partitioned_collapses_to_classical_when_a_constant_zero() {
         &ann_stats,
         &[0_i32; 32],
     );
-    let classical = periodic_pacf(season, max_order, n_seasons, obs, &stats);
+    let classical = periodic_pacf(
+        season,
+        max_order,
+        n_seasons,
+        obs,
+        &stats,
+        &same_year_starts(n_seasons),
+    );
 
     // k=1: conditioning set is just A_{t-1}; cross-terms are 0; result = PACF(1) exactly.
     if !cond.is_empty() && !classical.is_empty() {
@@ -3357,7 +3542,14 @@ fn conditional_facp_partitioned_two_season_hand_computed() {
     //
     // The helpers compute this; we verify the result against an independent
     // application of the formula using the same helpers.
-    let rho_1 = periodic_autocorrelation(season, 1, n_seasons, obs, &stats);
+    let rho_1 = periodic_autocorrelation(
+        season,
+        1,
+        n_seasons,
+        obs,
+        &stats,
+        &same_year_starts(n_seasons),
+    );
     let alpha = cross_correlation_a_z_neg1(
         (season + n_seasons - 1) % n_seasons,
         n_seasons,
@@ -3407,7 +3599,14 @@ fn conditional_facp_partitioned_two_season_hand_computed() {
     );
     // Verify the ρ^0(2)=0 claim: sigma_11[0,1]=0, so after the Schur correction
     // the off-diagonal can only be driven negative by the cross-terms.
-    let rho_2 = periodic_autocorrelation(season, 2, n_seasons, obs, &stats);
+    let rho_2 = periodic_autocorrelation(
+        season,
+        2,
+        n_seasons,
+        obs,
+        &stats,
+        &same_year_starts(n_seasons),
+    );
     assert!(
         rho_2.abs() < 1e-10,
         "ρ^0(2) must be 0 for this dataset, got {rho_2}"

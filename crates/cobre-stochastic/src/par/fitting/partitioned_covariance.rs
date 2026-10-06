@@ -61,7 +61,7 @@ pub(crate) fn assemble_partitioned_covariance(
 ) -> PartitionedCov {
     let prev_season = (season + n_seasons - 1) % n_seasons;
 
-    let rho_k = periodic_autocorrelation(season, k, n_seasons, obs_z, stats_z);
+    let rho_k = periodic_autocorrelation(season, k, n_seasons, obs_z, stats_z, z_year_starts);
     let sigma_11 = [1.0, rho_k, rho_k, 1.0];
 
     let mut sigma_22 = vec![0.0_f64; k * k];
@@ -71,7 +71,8 @@ pub(crate) fn assemble_partitioned_covariance(
         let ref_month = (prev_season + n_seasons - i % n_seasons) % n_seasons;
         for j in (i + 1)..k.saturating_sub(1) {
             let lag = j - i;
-            let rho = periodic_autocorrelation(ref_month, lag, n_seasons, obs_z, stats_z);
+            let rho =
+                periodic_autocorrelation(ref_month, lag, n_seasons, obs_z, stats_z, z_year_starts);
             sigma_22[i * k + j] = rho;
             sigma_22[j * k + i] = rho;
         }
@@ -101,7 +102,7 @@ pub(crate) fn assemble_partitioned_covariance(
     let mut sigma_12 = vec![0.0_f64; 2 * k];
 
     for (j, entry) in sigma_12[..k.saturating_sub(1)].iter_mut().enumerate() {
-        let rho = periodic_autocorrelation(season, j + 1, n_seasons, obs_z, stats_z);
+        let rho = periodic_autocorrelation(season, j + 1, n_seasons, obs_z, stats_z, z_year_starts);
         *entry = rho;
     }
     sigma_12[k - 1] = cross_correlation_a_z_neg1(
@@ -122,7 +123,8 @@ pub(crate) fn assemble_partitioned_covariance(
     for (j, entry) in sigma_12[k..k + k.saturating_sub(1)].iter_mut().enumerate() {
         let ref_season = (season + n_seasons - (1 + j) % n_seasons) % n_seasons;
         let lag = k.saturating_sub(1).saturating_sub(j);
-        let rho = periodic_autocorrelation(ref_season, lag, n_seasons, obs_z, stats_z);
+        let rho =
+            periodic_autocorrelation(ref_season, lag, n_seasons, obs_z, stats_z, z_year_starts);
         *entry = rho;
     }
     sigma_12[k + (k - 1)] = cross_correlation_z_a(

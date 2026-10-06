@@ -27,6 +27,8 @@ pub struct PeriodicYwResult {
 /// - `n_seasons` -- total number of seasons in the periodic cycle.
 /// - `observations_by_season` -- observations grouped by season.
 /// - `stats_by_season` -- `(mean, std)` for each season.
+/// - `year_starts` -- first year of each season's bucket (see
+///   [`periodic_autocorrelation`](super::periodic_autocorrelation)).
 ///
 /// # Returns
 ///
@@ -38,6 +40,7 @@ pub fn estimate_periodic_ar_coefficients(
     n_seasons: usize,
     observations_by_season: &[&[f64]],
     stats_by_season: &[(f64, f64)],
+    year_starts: &[i32],
 ) -> PeriodicYwResult {
     let zero_result = PeriodicYwResult {
         coefficients: Vec::new(),
@@ -63,6 +66,7 @@ pub fn estimate_periodic_ar_coefficients(
             n_seasons,
             observations_by_season,
             stats_by_season,
+            year_starts,
             &mut matrix_buf,
             &mut rhs_buf,
         );

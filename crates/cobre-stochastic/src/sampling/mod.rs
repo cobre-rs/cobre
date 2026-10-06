@@ -424,8 +424,7 @@ fn build_class_sampler<'a>(
             let forward_seed =
                 forward_seed.ok_or_else(|| StochasticError::MissingScenarioSource {
                     scheme: "out_of_sample".to_string(),
-                    reason: "no forward_seed configured; set a seed in stages.json for \
-                             out-of-sample forward pass noise generation"
+                    reason: "no forward seed was supplied for out-of-sample noise generation"
                         .to_string(),
                 })?;
             Ok(ClassSampler::OutOfSample {

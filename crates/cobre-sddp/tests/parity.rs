@@ -2,7 +2,10 @@
 //! `cobre-sddp`.
 //!
 //! Groups the golden parity-hash regression, the self-reproducibility regression,
-//! the b6a hydro-inflow parity, and the determinism conformance suite into one
+//! the b6a hydro-inflow parity, the determinism conformance suite, and
+//! `simulation_scenario_seed` (the simulation seed's effect on out-of-sample
+//! draws, its fallback to the training seed, and their declaration-order and
+//! thread-count invariance) into one
 //! binary so the statically-linked solver links once rather than once per file.
 //! The two parity-hash sources carry mutually exclusive solver-backend gates, so
 //! each is a per-`mod` `#[cfg(feature = …)]`: `parity_hash_highs` compiles under
@@ -2447,6 +2450,187 @@ mod water_travel_time_gate_byte_neutrality {
             system.post_study_stages().is_none(),
             "the water goldens' deck declares no post-study calendar, so the \
              arrival-calendar extension cannot move them"
+        );
+    }
+}
+
+mod simulation_scenario_seed {
+    use std::path::Path;
+    use std::sync::mpsc;
+
+    use cobre_io::Config;
+    use cobre_io::config::{
+        RawClassConfigEntry, RawSamplingScheme, RawScenarioSourceConfig, SimulationSelection,
+        StoppingRuleConfig,
+    };
+    use cobre_solver::ActiveSolver;
+
+    use super::common::parity_hash::compute_parity_hash;
+    use super::common::permute::permute_case;
+    use super::common::{StubComm, fresh_setup_with};
+
+    const SIMULATED_SCENARIOS: u32 = 4;
+
+    fn simulated_hash(case: &Path, n_threads: usize, mutate: impl FnOnce(&mut Config)) -> String {
+        let mut setup = fresh_setup_with(case, |config| {
+            config.simulation.enabled = true;
+            config.simulation.selection = Some(SimulationSelection::Sampled {
+                num_scenarios: SIMULATED_SCENARIOS,
+            });
+            mutate(config);
+        });
+        let threads = rayon::ThreadPoolBuilder::new()
+            .num_threads(n_threads)
+            .build()
+            .expect("rayon pool must build");
+        let results = threads.install(|| {
+            let comm = StubComm;
+            let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
+            let outcome = setup
+                .train(&mut solver, &comm, n_threads, ActiveSolver::new, None, None)
+                .expect("train must return Ok");
+            assert!(
+                outcome.error.is_none(),
+                "training returned an error: {:?}",
+                outcome.error
+            );
+
+            let mut workspace_pool = setup
+                .create_workspace_pool(&comm, n_threads, ActiveSolver::new)
+                .expect("create_workspace_pool must succeed");
+            let (result_tx, result_rx) =
+                mpsc::sync_channel(setup.simulation_config().io_channel_capacity.max(1));
+            let drain = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
+            setup
+                .simulate(
+                    &mut workspace_pool.workspaces,
+                    &comm,
+                    &result_tx,
+                    None,
+                    None,
+                    &outcome.result.basis_cache,
+                )
+                .expect("simulate must return Ok");
+            // A live sender keeps the drain's `into_iter` blocked, deadlocking the join.
+            drop(result_tx);
+            drain.join().expect("drain thread must not panic")
+        });
+        compute_parity_hash(&setup, results)
+    }
+
+    #[test]
+    fn simulation_out_of_sample_draws_follow_the_simulation_seed() {
+        let d29 = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/deterministic/d29-weekly-par-noise-sharing");
+        let seed_42 = simulated_hash(&d29, 1, |config| {
+            config.simulation.scenario_source = Some(RawScenarioSourceConfig {
+                seed: Some(42),
+                inflow: Some(RawClassConfigEntry {
+                    scheme: RawSamplingScheme::OutOfSample,
+                }),
+                ..Default::default()
+            });
+        });
+        let seed_999 = simulated_hash(&d29, 1, |config| {
+            config.simulation.scenario_source = Some(RawScenarioSourceConfig {
+                seed: Some(999),
+                inflow: Some(RawClassConfigEntry {
+                    scheme: RawSamplingScheme::OutOfSample,
+                }),
+                ..Default::default()
+            });
+        });
+        assert_ne!(
+            seed_42, seed_999,
+            "simulation seeds 42 and 999 must draw different out-of-sample noise"
+        );
+    }
+
+    #[test]
+    fn simulation_without_its_own_scenario_source_keeps_the_training_seed() {
+        let d29 = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/deterministic/d29-weekly-par-noise-sharing");
+        let shipped = simulated_hash(&d29, 1, |_| {});
+        let cloned = simulated_hash(&d29, 1, |config| {
+            config.simulation.scenario_source = config.training.scenario_source.clone();
+        });
+        assert_eq!(
+            shipped, cloned,
+            "an absent simulation source must draw exactly as a copy of the training source"
+        );
+    }
+
+    #[test]
+    fn simulation_out_of_sample_runs_after_historical_training_without_a_seed() {
+        let d26 = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/deterministic/d26-estimated-par2");
+        simulated_hash(&d26, 1, |config| {
+            config.training.scenario_source = Some(RawScenarioSourceConfig {
+                inflow: Some(RawClassConfigEntry {
+                    scheme: RawSamplingScheme::Historical,
+                }),
+                ..Default::default()
+            });
+            config.training.stopping_rules =
+                Some(vec![StoppingRuleConfig::IterationLimit { limit: 3 }]);
+            config.simulation.scenario_source = Some(RawScenarioSourceConfig {
+                seed: Some(42),
+                inflow: Some(RawClassConfigEntry {
+                    scheme: RawSamplingScheme::OutOfSample,
+                }),
+                ..Default::default()
+            });
+        });
+    }
+
+    #[test]
+    fn simulation_seed_draws_are_invariant_to_declaration_order() {
+        let d19 = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/deterministic/d19-multi-hydro-par");
+        let simulation_seed = |seed: i64| {
+            move |config: &mut Config| {
+                config.simulation.scenario_source = Some(RawScenarioSourceConfig {
+                    seed: Some(seed),
+                    inflow: Some(RawClassConfigEntry {
+                        scheme: RawSamplingScheme::OutOfSample,
+                    }),
+                    ..Default::default()
+                });
+            }
+        };
+        let base = simulated_hash(&d19, 1, simulation_seed(7));
+        assert_ne!(
+            base,
+            simulated_hash(&d19, 1, simulation_seed(8)),
+            "the deck's draws must depend on the simulation seed, or the order check below is vacuous"
+        );
+        let permuted_dir = permute_case(&d19, super::SHUFFLE_BASE_SEED);
+        let permuted = simulated_hash(permuted_dir.path(), 1, simulation_seed(7));
+        assert_eq!(
+            base, permuted,
+            "simulation-seeded draws must not depend on entity declaration order"
+        );
+    }
+
+    #[test]
+    fn simulation_seed_draws_are_invariant_to_thread_count() {
+        let d29 = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/deterministic/d29-weekly-par-noise-sharing");
+        let simulation_seed_999 = |config: &mut Config| {
+            config.simulation.scenario_source = Some(RawScenarioSourceConfig {
+                seed: Some(999),
+                inflow: Some(RawClassConfigEntry {
+                    scheme: RawSamplingScheme::OutOfSample,
+                }),
+                ..Default::default()
+            });
+        };
+        let one_thread = simulated_hash(&d29, 1, simulation_seed_999);
+        let one_thread_per_scenario =
+            simulated_hash(&d29, SIMULATED_SCENARIOS as usize, simulation_seed_999);
+        assert_eq!(
+            one_thread, one_thread_per_scenario,
+            "simulation-seeded draws must not depend on the thread count"
         );
     }
 }

@@ -376,6 +376,45 @@ fn invalid_simulation_scenario_source_fails_validate_and_run() {
 }
 
 #[test]
+fn simulation_out_of_sample_with_its_own_seed_passes_validate_and_run() {
+    let dir = TempDir::new().unwrap();
+    copy_dir_recursive(
+        &common::case_dir("deterministic/d29-weekly-par-noise-sharing"),
+        dir.path(),
+    );
+    let config_path = dir.path().join("config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    config["training"]["scenario_source"] =
+        serde_json::json!({ "inflow": { "scheme": "in_sample" } });
+    config["training"]["stopping_rules"] =
+        serde_json::json!([{ "type": "iteration_limit", "limit": 3 }]);
+    config["simulation"] = serde_json::json!({
+        "enabled": true,
+        "selection": { "method": "sampled", "num_scenarios": 2 },
+        "scenario_source": { "seed": 42, "inflow": { "scheme": "out_of_sample" } }
+    });
+    fs::write(&config_path, config.to_string()).unwrap();
+
+    cobre()
+        .args(["validate", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = TempDir::new().unwrap();
+    cobre()
+        .args([
+            "run",
+            dir.path().to_str().unwrap(),
+            "--output",
+            output.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
 fn checkpointing_enabled_without_interval_exits_1() {
     let dir = TempDir::new().unwrap();
     make_valid_case(&dir);

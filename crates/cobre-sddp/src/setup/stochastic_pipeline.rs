@@ -54,6 +54,10 @@ fn class_schemes_for(training_source: &ScenarioSource) -> ClassSchemes {
     }
 }
 
+pub(crate) fn forward_seed_for(source: &ScenarioSource) -> Option<u64> {
+    source.seed.map(i64::unsigned_abs)
+}
+
 /// Load and validate a user-supplied opening tree when
 /// `training.scenario_source.openings` declares `{source: file}`, reading the
 /// convention-located `scenarios/noise_openings.parquet` — consumed by
@@ -394,11 +398,10 @@ pub fn build_stochastic_context_for_study(
         build_opening_tree_library(system, training_source, inflow_lag_depth)?
     };
 
-    let forward_seed = training_source.seed.map(i64::unsigned_abs);
     Ok(build_stochastic_context(
         system,
         seed,
-        forward_seed,
+        forward_seed_for(training_source),
         &entity_factor_entries,
         &ncs_entity_factor_entries,
         OpeningTreeInputs {

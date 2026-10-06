@@ -6726,6 +6726,49 @@ fn test_simulate_uses_simulation_scheme() {
 }
 
 #[test]
+fn simulation_config_carries_the_simulation_sources_forward_seed() {
+    let system = minimal_system(2);
+    let simulation_forward_seed = |simulation_seed: Option<i64>| {
+        let mut config = minimal_config(1, 5);
+        config.simulation.scenario_source = simulation_seed.map(|seed| RawScenarioSourceConfig {
+            seed: Some(seed),
+            inflow: Some(RawClassConfigEntry {
+                scheme: RawSamplingScheme::OutOfSample,
+            }),
+            ..Default::default()
+        });
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            OpeningTreeInputs::default(),
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
+        StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+            Vec::new(),
+        )
+        .expect("setup")
+        .simulation_config()
+        .forward_seed
+    };
+
+    assert_eq!(simulation_forward_seed(Some(99)), Some(99));
+    assert_eq!(simulation_forward_seed(Some(-99)), Some(99));
+    assert_eq!(simulation_forward_seed(None), None);
+}
+
+#[test]
 fn test_sim_historical_library_built_when_sim_scheme_is_historical() {
     let system = system_with_historical_inflow(2);
 

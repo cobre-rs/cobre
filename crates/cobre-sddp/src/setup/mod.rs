@@ -411,7 +411,7 @@ impl StudySetup {
             &node_graph,
             &config,
             simulation_profile,
-            stochastic.forward_seed(),
+            stochastic_pipeline::forward_seed_for(simulation_source),
         )?;
 
         let (fcf, cut_state_layouts) =

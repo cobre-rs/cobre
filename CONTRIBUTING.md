@@ -485,11 +485,11 @@ only consumes the exported output.
 ### Python Parity
 
 Every output file written by the CLI (`write_training_outputs` / `write_simulation_outputs` in `crates/cobre-cli/src/commands/run/outputs.rs`)
-must also be written by the Python bindings (`run_via_study` / `run_training_phase_py` in `crates/cobre-python/src/run.rs`).
+must also be written by the Python bindings (`write_training_outputs` / `run_simulation_phase_py` in `crates/cobre-python/src/run.rs`).
 When adding a new output:
 
-1. Add the `cobre_io::write_*` call in both the CLI and Python paths
-2. Run `python3 scripts/ci/check_python_parity.py` to verify parity
+1. Add the `cobre_io::write_*` call to the phase's writer on both the CLI and Python paths, before that phase's `write_success_marker` call
+2. Run `python3 scripts/ci/check_python_parity.py` to verify parity. The script also fails when any write follows `write_success_marker`, or when a phase writer listed in its `PHASE_WRITERS` is missing
 3. The pre-commit hook runs this check automatically
 
 See `.claude/architecture-rules.md` for the full Python parity checklist.

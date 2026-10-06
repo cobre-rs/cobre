@@ -36,7 +36,7 @@ still carry the canonical boundary regex).
 | `check-allow-rationale.sh`           | Every `#[allow]` carries a `// Rationale:` (E4; diff-scoped via `BASE_REF`).                               |
 | `check-infra-genericity.sh`          | No algorithm-specific vocabulary in the infrastructure crates.                                             |
 | `check-cut-selection-determinism.sh` | Cut-selection code stays declaration-order deterministic.                                                  |
-| `check_python_parity.py`             | Both write paths call the same set of `cobre_io` / `cobre_sddp::policy::orchestration` writers.            |
+| `check_python_parity.py`             | Both write paths call the same set of `cobre_io` / `cobre_sddp::policy::orchestration` writers, and each phase writer calls `write_success_marker` as its last write. |
 | `check_schemas.sh`                   | Exported JSON schemas match the source types (needs the release binary; `--build`).                        |
 | `quality-report.sh`                  | Advisory code-quality hotspot report; also runs the comment-bloat advisory.                                |
 | `lib/comment_scan.sh`                | Shared `cfg(test)`-boundary helpers, sourced by the comment gates.                                         |

@@ -250,9 +250,11 @@ the invariant CLAUDE.md's Python-parity hard rule owns (state the rule, not a
 "currently none missing" snapshot). When adding a new output:
 
 1. The CLI writes it via `write_training_outputs` / `write_simulation_outputs`
-   in `crates/cobre-cli/src/commands/run/outputs.rs`.
-2. Wire the same `cobre_io` write into the Python path — `run_via_study` /
-   `run_training_phase_py` in `crates/cobre-python/src/run.rs` — so both surfaces
-   emit the file. `cobre-python` is excluded from the Cargo workspace, so
-   `cargo test --workspace` does not catch a missing mirror; check both paths by
-   hand.
+   in `crates/cobre-cli/src/commands/run/outputs.rs`, before the phase's
+   `write_success_marker` call.
+2. Wire the same `cobre_io` write into the Python path — `write_training_outputs` /
+   `run_simulation_phase_py` in `crates/cobre-python/src/run.rs` — so both
+   surfaces emit the file. `cobre-python` is excluded from the Cargo workspace,
+   but `scripts/ci/check_python_parity.py` (also run by
+   `cargo test -p cobre-cli --test python_parity_check`) checks that both paths
+   call the same writers and that no write follows the phase marker.

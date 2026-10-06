@@ -114,7 +114,7 @@ layout and which sub-module owns each piece is mapped in
 
 When adding new output files, check both CLI and Python write paths:
 → `crates/cobre-cli/src/commands/run/outputs.rs` (`write_training_outputs` / `write_simulation_outputs` functions)
-→ `crates/cobre-python/src/run.rs` (`run_via_study` / `run_training_phase_py` functions)
+→ `crates/cobre-python/src/run.rs` (`write_training_outputs` / `run_simulation_phase_py` functions)
 
 When changing schema-bearing `cobre-io` types (fields, `#[derive(JsonSchema)]`
 types, or schemars-visible doc comments), regenerate the committed schemas —

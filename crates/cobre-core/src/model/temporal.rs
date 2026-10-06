@@ -524,6 +524,130 @@ impl SeasonMap {
 }
 
 // ---------------------------------------------------------------------------
+// SeasonCycles
+// ---------------------------------------------------------------------------
+
+/// Number of days within which two calendar spans count as one temporal
+/// resolution.
+pub const SUB_PERIOD_TOLERANCE_DAYS: i64 = 7;
+
+/// The season cycles of a [`SeasonMap`], one per temporal-resolution level.
+///
+/// A level groups the seasons whose canonical spans
+/// ([`SeasonDefinition::span_days`]) differ by at most
+/// [`SUB_PERIOD_TOLERANCE_DAYS`]. Within a level the seasons are listed in
+/// calendar order and the cycle wraps, so every season has exactly one
+/// predecessor. A map that layers no overlapping resolutions is a single level.
+///
+/// Construction is a pure function of the set of definitions: it does not
+/// depend on the order of [`SeasonMap::seasons`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeasonCycles {
+    groups: Vec<Vec<usize>>,
+    overlap: Option<(usize, usize)>,
+}
+
+impl SeasonCycles {
+    /// Builds the cycles of `season_map`.
+    ///
+    /// A `Custom` map that layers several resolutions (see
+    /// [`SeasonMap::is_multi_resolution`]) is split into levels by span, finest
+    /// first. Any other map is a single level. A hand-built map in which two
+    /// seasons of one level share a calendar day still gets a deterministic
+    /// cycle; the clash is reported by [`SeasonCycles::overlapping_pair`].
+    #[must_use]
+    pub fn new(season_map: &SeasonMap) -> Self {
+        let multi_resolution = season_map.is_multi_resolution();
+        let mut groups = if multi_resolution {
+            split_by_span(&season_map.seasons)
+        } else {
+            vec![season_map.seasons.iter().collect()]
+        };
+        for group in &mut groups {
+            group.sort_unstable_by_key(|def| calendar_key(def, season_map.cycle_type));
+        }
+        let overlap = if multi_resolution {
+            groups.iter().find_map(|group| first_shared_day(group))
+        } else {
+            None
+        };
+        let groups = groups
+            .iter()
+            .map(|group| group.iter().map(|def| def.id).collect())
+            .collect();
+        Self { groups, overlap }
+    }
+
+    /// The season that precedes `season_id` in its level's cycle, wrapping from
+    /// the first season of the level to the last.
+    ///
+    /// A level with one season is its own predecessor. `None` when
+    /// `season_id` belongs to no level.
+    #[must_use]
+    pub fn predecessor(&self, season_id: usize) -> Option<usize> {
+        self.groups.iter().find_map(|group| {
+            let position = group.iter().position(|&id| id == season_id)?;
+            let previous = position.checked_sub(1).unwrap_or(group.len() - 1);
+            group.get(previous).copied()
+        })
+    }
+
+    /// The two lowest ids among the seasons of one level that cover the first
+    /// shared calendar day, scanning the levels finest first and the year from
+    /// January 1. `None` when no two seasons of a level share a day.
+    #[must_use]
+    pub fn overlapping_pair(&self) -> Option<(usize, usize)> {
+        self.overlap
+    }
+}
+
+fn split_by_span(seasons: &[SeasonDefinition]) -> Vec<Vec<&SeasonDefinition>> {
+    let mut by_span: Vec<(i64, &SeasonDefinition)> = seasons
+        .iter()
+        .map(|def| {
+            let span = i64::try_from(def.span_days(SeasonCycleType::Custom)).unwrap_or(i64::MAX);
+            (span, def)
+        })
+        .collect();
+    by_span.sort_unstable_by_key(|&(span, def)| (span, def.id));
+    let mut groups: Vec<Vec<&SeasonDefinition>> = Vec::new();
+    let mut previous_span: Option<i64> = None;
+    for (span, def) in by_span {
+        if previous_span.is_none_or(|previous| span - previous > SUB_PERIOD_TOLERANCE_DAYS) {
+            groups.push(Vec::new());
+        }
+        if let Some(group) = groups.last_mut() {
+            group.push(def);
+        }
+        previous_span = Some(span);
+    }
+    groups
+}
+
+fn calendar_key(def: &SeasonDefinition, cycle_type: SeasonCycleType) -> (u32, u32, usize) {
+    match cycle_type {
+        SeasonCycleType::Custom => (def.month_start, def.day_start.unwrap_or(1), def.id),
+        SeasonCycleType::Monthly => (def.month_start, 0, def.id),
+        SeasonCycleType::Weekly => (0, 0, def.id),
+    }
+}
+
+fn first_shared_day(group: &[&SeasonDefinition]) -> Option<(usize, usize)> {
+    CANONICAL_CALENDAR_DAYS.iter().find_map(|&(month, day)| {
+        let mut covering: Vec<usize> = group
+            .iter()
+            .filter(|def| def.covers(month, day))
+            .map(|def| def.id)
+            .collect();
+        covering.sort_unstable();
+        match covering.as_slice() {
+            [first, second, ..] => Some((*first, *second)),
+            _ => None,
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Transition (SS12.9)
 // ---------------------------------------------------------------------------
 
@@ -915,5 +1039,120 @@ mod tests {
         let season_map = d30_shaped_season_map();
         let july_15 = NaiveDate::from_ymd_opt(2024, 7, 15).unwrap();
         assert_eq!(season_map.season_for_date(july_15), Some(6));
+    }
+
+    fn custom_season(id: usize, start: (u32, u32), end: (u32, u32)) -> SeasonDefinition {
+        SeasonDefinition {
+            id,
+            label: format!("S{id}"),
+            month_start: start.0,
+            day_start: Some(start.1),
+            month_end: Some(end.0),
+            day_end: Some(end.1),
+        }
+    }
+
+    fn custom_map(seasons: Vec<SeasonDefinition>) -> SeasonMap {
+        SeasonMap {
+            cycle_type: SeasonCycleType::Custom,
+            seasons,
+        }
+    }
+
+    fn d30_shaped_map_with_duplicate_january() -> SeasonMap {
+        let mut season_map = d30_shaped_season_map();
+        season_map.seasons.push(custom_season(16, (1, 1), (1, 31)));
+        season_map
+    }
+
+    #[test]
+    fn season_cycles_split_a_layered_map_into_calendar_ordered_groups() {
+        let cycles = SeasonCycles::new(&d30_shaped_season_map());
+        for (season_id, predecessor) in [(0, 11), (1, 0), (12, 15), (13, 12), (14, 13), (15, 14)] {
+            assert_eq!(
+                cycles.predecessor(season_id),
+                Some(predecessor),
+                "predecessor of season {season_id}"
+            );
+        }
+        assert_eq!(cycles.overlapping_pair(), None);
+    }
+
+    #[test]
+    fn season_cycles_keep_one_cycle_on_single_resolution_maps() {
+        let monthly = SeasonMap {
+            cycle_type: SeasonCycleType::Monthly,
+            seasons: (0..12u32)
+                .map(|i| SeasonDefinition {
+                    id: i as usize,
+                    label: format!("Month{}", i + 1),
+                    month_start: i + 1,
+                    day_start: None,
+                    month_end: None,
+                    day_end: None,
+                })
+                .collect(),
+        };
+        let monthly = SeasonCycles::new(&monthly);
+        assert_eq!(monthly.predecessor(0), Some(11));
+        assert_eq!(monthly.predecessor(1), Some(0));
+
+        let weekly = SeasonMap {
+            cycle_type: SeasonCycleType::Weekly,
+            seasons: (0..52u32)
+                .map(|i| SeasonDefinition {
+                    id: i as usize,
+                    label: format!("W{:02}", i + 1),
+                    month_start: 1,
+                    day_start: None,
+                    month_end: None,
+                    day_end: None,
+                })
+                .collect(),
+        };
+        let weekly = SeasonCycles::new(&weekly);
+        assert_eq!(weekly.predecessor(0), Some(51));
+        assert_eq!(weekly.predecessor(1), Some(0));
+
+        let ring = SeasonCycles::new(&custom_map(vec![
+            custom_season(0, (1, 1), (1, 31)),
+            custom_season(1, (2, 1), (2, 28)),
+            custom_season(2, (3, 1), (3, 31)),
+            custom_season(12, (4, 1), (6, 30)),
+            custom_season(13, (7, 1), (9, 30)),
+        ]));
+        assert_eq!(ring.predecessor(0), Some(13));
+        assert_eq!(ring.predecessor(12), Some(2));
+        assert_eq!(ring.predecessor(13), Some(12));
+
+        let wrapping = SeasonCycles::new(&custom_map(vec![
+            custom_season(0, (11, 1), (2, 28)),
+            custom_season(1, (3, 1), (10, 31)),
+        ]));
+        assert_eq!(wrapping.predecessor(1), Some(0));
+        assert_eq!(wrapping.predecessor(0), Some(1));
+
+        for cycles in [&monthly, &weekly, &ring, &wrapping] {
+            assert_eq!(cycles.overlapping_pair(), None);
+            assert_eq!(cycles.predecessor(99), None);
+        }
+    }
+
+    #[test]
+    fn season_cycles_report_two_same_level_seasons_sharing_a_day() {
+        let cycles = SeasonCycles::new(&d30_shaped_map_with_duplicate_january());
+        assert_eq!(cycles.overlapping_pair(), Some((0, 16)));
+    }
+
+    #[test]
+    fn season_cycles_do_not_depend_on_definition_order() {
+        for season_map in [
+            d30_shaped_season_map(),
+            d30_shaped_map_with_duplicate_january(),
+        ] {
+            let mut reversed = season_map.clone();
+            reversed.seasons.reverse();
+            assert_eq!(SeasonCycles::new(&reversed), SeasonCycles::new(&season_map));
+        }
     }
 }

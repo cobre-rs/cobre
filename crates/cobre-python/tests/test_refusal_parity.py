@@ -64,6 +64,22 @@ def _pumping_endpoint_exits_while_station_active(case: pathlib.Path) -> None:
     _edit_json(case / "system" / "hydros.json", edit)
 
 
+def _duplicate_january_season(case: pathlib.Path) -> None:
+    def edit(stages: Any) -> None:
+        stages["season_definitions"]["seasons"].append(
+            {
+                "id": 16,
+                "label": "January bis",
+                "month_start": 1,
+                "day_start": 1,
+                "month_end": 1,
+                "day_end": 31,
+            }
+        )
+
+    _edit_json(case / "stages.json", edit)
+
+
 ROWS = [
     _row(
         name="travel_time_negative",
@@ -90,6 +106,15 @@ ROWS = [
         outcome="BracketedRefusal",
         kind="BusinessRuleViolation",
         fragment="is not Operating there",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="season_overlap_within_one_level",
+        base_case="deterministic/d30-multi-resolution-monthly-quarterly",
+        mutate=_duplicate_january_season,
+        outcome="BracketedRefusal",
+        kind="SchemaViolation",
+        fragment="overlap within one resolution level",
         error_class_name="ValidationError",
     ),
 ]

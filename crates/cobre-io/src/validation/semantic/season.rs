@@ -3,9 +3,9 @@
 use std::collections::{HashMap, HashSet};
 
 use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
-use crate::stages::SUB_PERIOD_TOLERANCE_DAYS;
 
 use cobre_core::SeasonMap;
+use cobre_core::temporal::SUB_PERIOD_TOLERANCE_DAYS;
 
 // ── Rules 27+29: Season ID range coverage and resolution consistency ──────────
 

@@ -47,8 +47,9 @@
 use chrono::{Datelike, NaiveDate};
 use cobre_core::HorizonGraph;
 use cobre_core::temporal::{
-    Block, BlockMode, Node, NoiseMethod, PolicyGraphType, ScenarioSourceConfig, SeasonCycleType,
-    SeasonDefinition, SeasonMap, Stage, StageRiskConfig, StageStateConfig, Transition,
+    Block, BlockMode, Node, NoiseMethod, PolicyGraphType, SUB_PERIOD_TOLERANCE_DAYS,
+    ScenarioSourceConfig, SeasonCycleType, SeasonCycles, SeasonDefinition, SeasonMap, Stage,
+    StageRiskConfig, StageStateConfig, Transition,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -1055,10 +1056,22 @@ fn convert_season_definitions(
                 })
                 .collect();
             seasons.sort_by_key(|s| s.id);
-            Ok(Some(SeasonMap {
+            let season_map = SeasonMap {
                 cycle_type,
                 seasons,
-            }))
+            };
+            if let Some((a, b)) = SeasonCycles::new(&season_map).overlapping_pair() {
+                return Err(LoadError::SchemaError {
+                    path: path.to_path_buf(),
+                    field: "season_definitions.seasons".into(),
+                    message: format!(
+                        "seasons {a} and {b} overlap within one resolution level; \
+                         seasons whose spans differ by at most {SUB_PERIOD_TOLERANCE_DAYS} days \
+                         form one level and must not share a calendar day"
+                    ),
+                });
+            }
+            Ok(Some(season_map))
         }
     }
 }
@@ -1142,19 +1155,6 @@ fn resolve_or_validate_season_id(
         ),
     })
 }
-
-/// Tolerance (days) shared with the semantic layer's season-duration-spread
-/// check (`validation::semantic::season::check_season_id_consistency`, rule
-/// 29): stages sharing a `season_id` are treated as one resolution when their
-/// durations are within this many days of each other. Applied here: a stage
-/// counts as a sub-period of its resolved season — and its declared
-/// `season_id` is trusted as an operator grouping label rather than
-/// cross-checked against the calendar — only when its own duration sits more
-/// than this tolerance below the resolved season's full period width.
-///
-/// `pub(crate)` so Rule 29 reads the same literal rather than forking a
-/// second `7`.
-pub(crate) const SUB_PERIOD_TOLERANCE_DAYS: i64 = 7;
 
 /// Calendar width, in days, of the period identified by `season_id` under
 /// `season_map`'s cycle: the specific month's length for `Monthly` (leap-aware,
@@ -1686,6 +1686,46 @@ mod tests {
                 assert!(
                     message.contains("multi-resolution") && message.contains("explicit"),
                     "message should instruct declaring an explicit season_id, got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// Given the d30-shaped map plus a second January (`id` 16) that shares
+    /// every day of monthly season 0, when `parse_stages` runs, it returns a
+    /// `SchemaError` naming both seasons.
+    #[test]
+    fn test_overlapping_same_level_seasons_rejected() {
+        let mut season_definitions: serde_json::Value =
+            serde_json::from_str(D30_SHAPED_SEASON_DEFINITIONS).unwrap();
+        season_definitions["seasons"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": 16, "month_start": 1, "day_start": 1,
+                "month_end": 1, "day_end": 31, "label": "January bis"
+            }));
+        let json = format!(
+            r#"{{
+              "policy_graph": {{ "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] }},
+              "season_definitions": {season_definitions},
+              "stages": [{{
+                "id": 6, "start_date": "2024-07-01", "end_date": "2024-10-01",
+                "season_id": 12,
+                "blocks": [{{ "id": 0, "name": "SINGLE", "hours": 2208.0 }}], "num_openings": 1
+              }}]
+            }}"#
+        );
+        let f = write_json(&json);
+        let err = parse_stages(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert_eq!(field, "season_definitions.seasons");
+                assert!(
+                    message.contains("overlap within one resolution level")
+                        && message.contains("seasons 0 and 16"),
+                    "message should name both overlapping seasons, got: {message}"
                 );
             }
             other => panic!("expected SchemaError, got: {other:?}"),

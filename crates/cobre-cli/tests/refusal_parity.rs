@@ -83,6 +83,15 @@ const ROWS: &[ParityRow] = &[
         },
         fragment: "is not Operating there",
     },
+    ParityRow {
+        name: "season_overlap_within_one_level",
+        base_case: "deterministic/d30-multi-resolution-monthly-quarterly",
+        mutate: duplicate_january_season,
+        outcome: Outcome::BracketedRefusal {
+            kind: "SchemaViolation",
+        },
+        fragment: "overlap within one resolution level",
+    },
 ];
 
 fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) {
@@ -106,6 +115,22 @@ fn release_before_downstream_entry(case: &Path) {
 fn pumping_endpoint_exits_while_station_active(case: &Path) {
     edit_json(&case.join("system/hydros.json"), |hydros| {
         hydros["hydros"][1]["exit_stage_id"] = json!(1);
+    });
+}
+
+fn duplicate_january_season(case: &Path) {
+    edit_json(&case.join("stages.json"), |stages| {
+        stages["season_definitions"]["seasons"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id": 16,
+                "label": "January bis",
+                "month_start": 1,
+                "day_start": 1,
+                "month_end": 1,
+                "day_end": 31
+            }));
     });
 }
 

@@ -37,7 +37,8 @@ pub use estimation::{EstimationConfig, OrderSelectionMethod};
 pub use exports::ExportsConfig;
 pub use modeling::{InflowNonNegativityConfig, InflowNonNegativityMethod, ModelingConfig};
 pub use policy::{
-    BoundaryPolicy, CheckpointSchedule, CheckpointingConfig, PolicyConfig, PolicyMode,
+    BoundaryPolicy, CheckpointSchedule, CheckpointingConfig, PolicyConfig, PolicyDirIntent,
+    PolicyMode,
 };
 pub use scenario_source::{
     HistoricalYearRange, Openings, RawClassConfigEntry, RawHistoricalYearsConfig,
@@ -444,6 +445,17 @@ impl Config {
             first_iteration: u64::from(checkpointing.initial_iteration.unwrap_or(n)),
             interval,
         }))
+    }
+
+    /// What the run does with its policy directory: a training run always
+    /// writes its final checkpoint there.
+    #[must_use]
+    pub fn policy_dir_intent(&self) -> PolicyDirIntent {
+        if self.training.enabled {
+            PolicyDirIntent::Replace
+        } else {
+            PolicyDirIntent::Read
+        }
     }
 
     /// The training-phase `openings` source declaration, or `None` when absent
@@ -2270,6 +2282,280 @@ mod tests {
             }
             other => panic!("expected SchemaError, got: {other:?}"),
         }
+    }
+
+    // ── policy directory against the output directory ─────────────────────────
+
+    const BOTH_INTENTS: [PolicyDirIntent; 2] = [PolicyDirIntent::Read, PolicyDirIntent::Replace];
+
+    fn check_policy_dir(
+        policy_path: &str,
+        output_dir: &Path,
+        intent: PolicyDirIntent,
+    ) -> Result<(), LoadError> {
+        let policy = PolicyConfig {
+            path: policy_path.to_string(),
+            ..PolicyConfig::default()
+        };
+        policy.check_dir(Path::new("config.json"), output_dir, intent)
+    }
+
+    fn policy_dir_refusal(policy_path: &str, output_dir: &Path, intent: PolicyDirIntent) -> String {
+        match check_policy_dir(policy_path, output_dir, intent) {
+            Err(LoadError::SchemaError {
+                path,
+                field,
+                message,
+            }) => {
+                assert_eq!(path, Path::new("config.json"));
+                assert_eq!(field, "policy.path");
+                message
+            }
+            other => panic!("expected a policy.path refusal for {policy_path:?}, got: {other:?}"),
+        }
+    }
+
+    fn output_dir_refusal_text(value: &str) -> String {
+        format!(
+            "{value:?} names the output directory or one of its ancestors, which a checkpoint \
+             write would replace; choose another directory, such as \"./policy\""
+        )
+    }
+
+    fn cleared_dir_refusal_text(
+        value: &str,
+        relation: &str,
+        cleared_dir: &str,
+        clearing: crate::output::Clearing,
+    ) -> String {
+        match clearing {
+            crate::output::Clearing::WholeTree => format!(
+                "{value:?} {relation} {cleared_dir}, which a run removes whole before writing \
+                 its outputs; choose a directory that neither contains nor lies inside it, \
+                 such as \"./policy\""
+            ),
+            crate::output::Clearing::NamedFiles => format!(
+                "{value:?} {relation} {cleared_dir}, which holds files a run writes and a \
+                 checkpoint write would replace; choose a directory that neither names nor \
+                 contains it, such as \"./policy\""
+            ),
+        }
+    }
+
+    #[test]
+    fn policy_dir_at_or_above_the_output_directory_is_refused() {
+        for policy_path in ["../out", "/r/out", "/r"] {
+            for intent in BOTH_INTENTS {
+                assert_eq!(
+                    policy_dir_refusal(policy_path, Path::new("/r/out"), intent),
+                    output_dir_refusal_text(policy_path),
+                    "{policy_path:?} with {intent:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn policy_path_naming_a_cleared_directory_or_inside_a_removed_tree_is_refused() {
+        let out = Path::new("/r/out");
+        for (cleared_dir, clearing) in crate::output::cleared_output_dirs() {
+            let cleared = cleared_dir.to_str().unwrap();
+            let mut refused = vec![(cleared.to_string(), "names")];
+            if clearing == crate::output::Clearing::WholeTree {
+                refused.push((format!("{cleared}/policy"), "lies inside"));
+                refused.push((
+                    out.join(cleared).join("p").display().to_string(),
+                    "lies inside",
+                ));
+            }
+            for (policy_path, relation) in refused {
+                for intent in BOTH_INTENTS {
+                    assert_eq!(
+                        policy_dir_refusal(&policy_path, out, intent),
+                        cleared_dir_refusal_text(&policy_path, relation, cleared, clearing),
+                        "{policy_path:?} with {intent:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn policy_path_naming_an_ancestor_of_a_cleared_directory_is_refused() {
+        use crate::output::Clearing::{NamedFiles, WholeTree};
+        for (policy_path, first_cleared, clearing) in [
+            ("simulation", "simulation/costs", WholeTree),
+            (
+                "simulation/violations",
+                "simulation/violations/generic",
+                WholeTree,
+            ),
+            ("training", "training/solver", NamedFiles),
+        ] {
+            for intent in BOTH_INTENTS {
+                assert_eq!(
+                    policy_dir_refusal(policy_path, Path::new("/r/out"), intent),
+                    cleared_dir_refusal_text(policy_path, "contains", first_cleared, clearing),
+                    "{policy_path:?} with {intent:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn policy_paths_the_run_clearing_leaves_alone_are_accepted() {
+        let out = tempfile::TempDir::new().unwrap();
+        let named_file_dirs = crate::output::cleared_output_dirs()
+            .into_iter()
+            .filter(|(_, clearing)| *clearing == crate::output::Clearing::NamedFiles)
+            .map(|(dir, _)| format!("{}/policy", dir.display()));
+        let accepted: Vec<String> = [
+            "simulation_policy",
+            "training_policy",
+            "simulation/policy",
+            "training/policy",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .chain(named_file_dirs)
+        .collect();
+        assert!(accepted.contains(&"training/solver/policy".to_string()));
+        for policy_path in &accepted {
+            for intent in BOTH_INTENTS {
+                check_policy_dir(policy_path, out.path(), intent).unwrap_or_else(|e| {
+                    panic!("{policy_path:?} with {intent:?} must be accepted, got: {e:?}")
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn policy_dir_holding_an_unrecognized_entry_is_refused_only_for_replace() {
+        let foreign_entry_text = |dir: PathBuf, entry: PathBuf| {
+            crate::output::OutputError::ForeignEntry { dir, entry }.to_string()
+        };
+
+        let out = tempfile::TempDir::new().unwrap();
+        let policy_dir = out.path().join("policy");
+        std::fs::create_dir(&policy_dir).unwrap();
+        std::fs::write(policy_dir.join("notes.txt"), "user notes").unwrap();
+        assert_eq!(
+            policy_dir_refusal("policy", out.path(), PolicyDirIntent::Replace),
+            foreign_entry_text(policy_dir.clone(), policy_dir.join("notes.txt"))
+        );
+        check_policy_dir("policy", out.path(), PolicyDirIntent::Read).unwrap();
+
+        let out = tempfile::TempDir::new().unwrap();
+        let previous_dir = out.path().join("policy.previous");
+        std::fs::create_dir(&previous_dir).unwrap();
+        std::fs::write(previous_dir.join("notes.txt"), "user notes").unwrap();
+        assert_eq!(
+            policy_dir_refusal("policy", out.path(), PolicyDirIntent::Replace),
+            foreign_entry_text(previous_dir.clone(), previous_dir.join("notes.txt"))
+        );
+
+        let out = tempfile::TempDir::new().unwrap();
+        let policy_file = out.path().join("policy");
+        std::fs::write(&policy_file, "not a directory").unwrap();
+        assert_eq!(
+            policy_dir_refusal("policy", out.path(), PolicyDirIntent::Replace),
+            foreign_entry_text(out.path().to_path_buf(), policy_file)
+        );
+        check_policy_dir("policy", out.path(), PolicyDirIntent::Read).unwrap();
+    }
+
+    #[test]
+    fn policy_dir_holding_an_earlier_release_metadata_file_is_accepted_for_replace() {
+        let out = tempfile::TempDir::new().unwrap();
+        let policy_dir = out.path().join("policy");
+        std::fs::create_dir_all(policy_dir.join("cuts")).unwrap();
+        std::fs::write(policy_dir.join("manifest.bin"), b"manifest").unwrap();
+        std::fs::write(policy_dir.join("cuts/000.bin"), b"cuts").unwrap();
+        std::fs::write(policy_dir.join("metadata.json"), "{}").unwrap();
+
+        check_policy_dir("./policy", out.path(), PolicyDirIntent::Replace).unwrap();
+    }
+
+    #[test]
+    fn policy_dir_intent_follows_training_enabled() {
+        let training =
+            Config::with_overrides(&base_value(OVERRIDE_BASE_CONFIG), &override_map(&[])).unwrap();
+        assert_eq!(training.policy_dir_intent(), PolicyDirIntent::Replace);
+
+        let overrides = override_map(&[("training.enabled", serde_json::json!(false))]);
+        let simulation_only =
+            Config::with_overrides(&base_value(OVERRIDE_BASE_CONFIG), &overrides).unwrap();
+        assert_eq!(simulation_only.policy_dir_intent(), PolicyDirIntent::Read);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn policy_path_link_is_checked_at_its_target() {
+        let root = tempfile::TempDir::new().unwrap();
+        let out = root.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        let link = out.join("policy");
+
+        let empty_elsewhere = root.path().join("empty");
+        std::fs::create_dir(&empty_elsewhere).unwrap();
+        let foreign_elsewhere = root.path().join("foreign");
+        std::fs::create_dir(&foreign_elsewhere).unwrap();
+        std::fs::write(foreign_elsewhere.join("notes.txt"), "user notes").unwrap();
+        let removed_tree_child = out.join("simulation/costs/p");
+        let missing = root.path().join("missing");
+
+        let check_through_link = |target: &Path, intent: PolicyDirIntent| {
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(target, &link).unwrap();
+            let result = check_policy_dir("./policy", &out, intent);
+            assert_eq!(std::fs::read_link(&link).unwrap(), target);
+            result
+        };
+        let refusal_through_link =
+            |target: &Path, intent: PolicyDirIntent| match check_through_link(target, intent) {
+                Err(LoadError::SchemaError { field, message, .. }) => {
+                    assert_eq!(field, "policy.path");
+                    message
+                }
+                other => panic!("expected a policy.path refusal through {target:?}, got {other:?}"),
+            };
+
+        for intent in BOTH_INTENTS {
+            assert_eq!(
+                refusal_through_link(&out, intent),
+                output_dir_refusal_text(&format!("./policy -> {}", out.display())),
+                "link to the output directory with {intent:?}"
+            );
+            assert_eq!(
+                refusal_through_link(&removed_tree_child, intent),
+                cleared_dir_refusal_text(
+                    &format!("./policy -> {}", removed_tree_child.display()),
+                    "lies inside",
+                    "simulation/costs",
+                    crate::output::Clearing::WholeTree,
+                ),
+                "link into a removed tree with {intent:?}"
+            );
+            check_through_link(&empty_elsewhere, intent).unwrap_or_else(|e| {
+                panic!("a link to an empty directory elsewhere with {intent:?}, got: {e:?}")
+            });
+        }
+
+        assert_eq!(
+            refusal_through_link(&foreign_elsewhere, PolicyDirIntent::Replace),
+            crate::output::OutputError::ForeignEntry {
+                dir: foreign_elsewhere.clone(),
+                entry: foreign_elsewhere.join("notes.txt"),
+            }
+            .to_string()
+        );
+        check_through_link(&foreign_elsewhere, PolicyDirIntent::Read).unwrap();
+
+        assert!(
+            refusal_through_link(&missing, PolicyDirIntent::Replace)
+                .contains("is not part of a checkpoint")
+        );
+        check_through_link(&missing, PolicyDirIntent::Read).unwrap();
     }
 
     /// A stray key in the `historical_years` range form is a deserialize

@@ -649,7 +649,7 @@ fn swap_siblings(target: &Path) -> Option<(PathBuf, PathBuf)> {
 
 /// The directory a checkpoint at `path` lives in: the recorded target of a
 /// symbolic link at `path`, else `path` itself.
-fn checkpoint_target(path: &Path) -> Result<PathBuf, OutputError> {
+pub(crate) fn checkpoint_target(path: &Path) -> Result<PathBuf, OutputError> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             // `read_link`, not `canonicalize`: a link left pointing at nothing by

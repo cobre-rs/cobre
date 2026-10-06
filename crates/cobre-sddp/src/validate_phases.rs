@@ -183,8 +183,9 @@ impl PolicyLoadFailure {
 /// Why [`validate_study`] stopped.
 #[derive(Debug)]
 pub enum ValidateFailure {
-    /// `config.json` names a scenario source the study cannot resolve.
-    ScenarioSource(LoadError),
+    /// `config.json` names a policy directory the run refuses before training or a
+    /// scenario source the study cannot resolve.
+    ConfigLoad(LoadError),
     /// A preparation phase failed.
     Phase(PhaseFailure),
     /// The configured warm-start, resume or simulation-only policy cannot be loaded.
@@ -288,8 +289,9 @@ pub fn check_configured_policy_load(
 ///
 /// # Errors
 ///
-/// Returns [`ValidateFailure::ScenarioSource`] when the training scenario source
-/// cannot be resolved, [`ValidateFailure::PolicyLoad`] when the configured policy
+/// Returns [`ValidateFailure::ConfigLoad`] when the policy directory is refused
+/// or the training scenario source cannot be resolved,
+/// [`ValidateFailure::PolicyLoad`] when the configured policy
 /// cannot be loaded, and [`ValidateFailure::Phase`] with the failing
 /// [`PrepPhase`] for every other check.
 pub fn validate_study(request: ValidateRequest<'_>) -> Result<ValidatedStudy, ValidateFailure> {
@@ -301,10 +303,15 @@ pub fn validate_study(request: ValidateRequest<'_>) -> Result<ValidatedStudy, Va
         output_dir,
     } = request;
 
+    let config_path = case_dir.join("config.json");
+    config
+        .policy
+        .check_dir(&config_path, output_dir, config.policy_dir_intent())
+        .map_err(ValidateFailure::ConfigLoad)?;
     let params = StudyParams::from_config(config, Vec::new()).map_err(at(PrepPhase::Config))?;
     let training_source = config
-        .training_scenario_source(&case_dir.join("config.json"))
-        .map_err(ValidateFailure::ScenarioSource)?;
+        .training_scenario_source(&config_path)
+        .map_err(ValidateFailure::ConfigLoad)?;
     let requirements =
         resolve_boundary_state_requirements(case_dir, config).map_err(at(PrepPhase::Boundary))?;
     let prepared = prepare_stochastic(

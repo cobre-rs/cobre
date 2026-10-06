@@ -941,6 +941,14 @@ pub(crate) fn build_study_setup(
     let warnings = report.warnings;
 
     let config = load_effective_config(&case_dir.join("config.json"), overrides)?;
+    config
+        .policy
+        .check_dir(
+            &case_dir.join("config.json"),
+            output_dir,
+            config.policy_dir_intent(),
+        )
+        .map_err(PhaseError::Load)?;
     timings.load_seconds = load_start.elapsed().as_secs_f64();
 
     // Resolve the boundary-derived state requirements once; carried onto the

@@ -297,9 +297,16 @@ pub fn execute(args: &ValidateArgs) -> Result<(), CliError> {
         output_dir: &resolve_output_dir(&args.case_dir, args.output.as_deref()),
     }) {
         Ok(validated) => validated,
-        Err(ValidateFailure::ScenarioSource(err)) => {
-            emit_json_error(args.json, err.kind(), &err.to_string())?;
-            return Err(CliError::from(err));
+        Err(ValidateFailure::ConfigLoad(err)) => {
+            let report = err.to_string();
+            render_failure(stdout_sink, args.json, err.kind(), &report, &args.case_dir)?;
+            return Err(match err {
+                LoadError::IoError { .. } => CliError::from(err),
+                _ => CliError::Validation {
+                    report,
+                    already_rendered: true,
+                },
+            });
         }
         Err(ValidateFailure::Phase(failure)) => {
             let report = failure.report();

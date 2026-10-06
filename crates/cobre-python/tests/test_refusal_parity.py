@@ -108,6 +108,36 @@ def _parent_directory_policy_path(case: pathlib.Path) -> None:
     _set_policy_path(case, "..")
 
 
+def _output_directory_policy_path(case: pathlib.Path) -> None:
+    _set_policy_path(case, str(case / "output"))
+
+
+def _climbing_back_into_the_output_directory_policy_path(case: pathlib.Path) -> None:
+    _set_policy_path(case, "../output")
+
+
+def _unrecognized_file_in_the_policy_directory(case: pathlib.Path) -> None:
+    policy_dir = case / "output" / "policy"
+    policy_dir.mkdir(parents=True)
+    (policy_dir / "notes.txt").write_text("kept by the user")
+
+
+def _simulation_family_child_policy_path(case: pathlib.Path) -> None:
+    _set_policy_path(case, "simulation/costs/policy")
+
+
+def _simulation_solver_policy_path(case: pathlib.Path) -> None:
+    _set_policy_path(case, "simulation/solver")
+
+
+def _simulation_policy_path(case: pathlib.Path) -> None:
+    _set_policy_path(case, "simulation")
+
+
+def _training_policy_path(case: pathlib.Path) -> None:
+    _set_policy_path(case, "training")
+
+
 def _historical_forward_scheme(case: pathlib.Path) -> None:
     def edit(config: Any) -> None:
         config["training"]["scenario_source"]["inflow"] = {"scheme": "historical"}
@@ -316,6 +346,62 @@ ROWS = [
         outcome="BracketedRefusal",
         kind="SchemaViolation",
         fragment="names the output directory or one of its ancestors",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="policy_path_naming_the_output_directory",
+        base_case="1dtoy",
+        mutate=_output_directory_policy_path,
+        outcome="PlainRefusal",
+        fragment="names the output directory or one of its ancestors",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="policy_path_climbing_back_into_the_output_directory",
+        base_case="1dtoy",
+        mutate=_climbing_back_into_the_output_directory_policy_path,
+        outcome="PlainRefusal",
+        fragment="names the output directory or one of its ancestors",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="policy_directory_holding_an_unrecognized_file",
+        base_case="1dtoy",
+        mutate=_unrecognized_file_in_the_policy_directory,
+        outcome="PlainRefusal",
+        fragment="is not part of a checkpoint",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="policy_path_inside_a_simulation_family_directory",
+        base_case="1dtoy",
+        mutate=_simulation_family_child_policy_path,
+        outcome="PlainRefusal",
+        fragment="lies inside simulation/costs, which a run removes whole",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="policy_path_naming_the_simulation_solver_directory",
+        base_case="1dtoy",
+        mutate=_simulation_solver_policy_path,
+        outcome="PlainRefusal",
+        fragment="names simulation/solver, which holds files a run writes",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="policy_path_containing_a_cleared_directory",
+        base_case="1dtoy",
+        mutate=_simulation_policy_path,
+        outcome="PlainRefusal",
+        fragment="contains simulation/costs, which a run removes whole",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="policy_path_containing_the_training_solver_directory",
+        base_case="1dtoy",
+        mutate=_training_policy_path,
+        outcome="PlainRefusal",
+        fragment="contains training/solver, which holds files a run writes",
         error_class_name="ValidationError",
     ),
     _row(

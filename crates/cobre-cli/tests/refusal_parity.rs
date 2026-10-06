@@ -134,6 +134,55 @@ const ROWS: &[ParityRow] = &[
         fragment: "names the output directory or one of its ancestors",
     },
     ParityRow {
+        name: "policy_path_naming_the_output_directory",
+        base_case: "1dtoy",
+        mutate: output_directory_policy_path,
+        outcome: Outcome::PlainRefusal,
+        fragment: "names the output directory or one of its ancestors",
+    },
+    ParityRow {
+        name: "policy_path_climbing_back_into_the_output_directory",
+        base_case: "1dtoy",
+        mutate: climbing_back_into_the_output_directory_policy_path,
+        outcome: Outcome::PlainRefusal,
+        fragment: "names the output directory or one of its ancestors",
+    },
+    ParityRow {
+        name: "policy_directory_holding_an_unrecognized_file",
+        base_case: "1dtoy",
+        mutate: unrecognized_file_in_the_policy_directory,
+        outcome: Outcome::PlainRefusal,
+        fragment: "is not part of a checkpoint",
+    },
+    ParityRow {
+        name: "policy_path_inside_a_simulation_family_directory",
+        base_case: "1dtoy",
+        mutate: simulation_family_child_policy_path,
+        outcome: Outcome::PlainRefusal,
+        fragment: "lies inside simulation/costs, which a run removes whole",
+    },
+    ParityRow {
+        name: "policy_path_naming_the_simulation_solver_directory",
+        base_case: "1dtoy",
+        mutate: simulation_solver_policy_path,
+        outcome: Outcome::PlainRefusal,
+        fragment: "names simulation/solver, which holds files a run writes",
+    },
+    ParityRow {
+        name: "policy_path_containing_a_cleared_directory",
+        base_case: "1dtoy",
+        mutate: simulation_policy_path,
+        outcome: Outcome::PlainRefusal,
+        fragment: "contains simulation/costs, which a run removes whole",
+    },
+    ParityRow {
+        name: "policy_path_containing_the_training_solver_directory",
+        base_case: "1dtoy",
+        mutate: training_policy_path,
+        outcome: Outcome::PlainRefusal,
+        fragment: "contains training/solver, which holds files a run writes",
+    },
+    ParityRow {
         name: "historical_forward_scheme_without_inflow_history",
         base_case: "1dtoy",
         mutate: historical_forward_scheme,
@@ -267,6 +316,36 @@ fn current_directory_policy_path(case: &Path) {
 
 fn parent_directory_policy_path(case: &Path) {
     set_policy_path(case, "..");
+}
+
+fn output_directory_policy_path(case: &Path) {
+    set_policy_path(case, case.join("output").to_str().unwrap());
+}
+
+fn climbing_back_into_the_output_directory_policy_path(case: &Path) {
+    set_policy_path(case, "../output");
+}
+
+fn unrecognized_file_in_the_policy_directory(case: &Path) {
+    let policy_dir = case.join("output/policy");
+    fs::create_dir_all(&policy_dir).unwrap();
+    fs::write(policy_dir.join("notes.txt"), "kept by the user").unwrap();
+}
+
+fn simulation_family_child_policy_path(case: &Path) {
+    set_policy_path(case, "simulation/costs/policy");
+}
+
+fn simulation_solver_policy_path(case: &Path) {
+    set_policy_path(case, "simulation/solver");
+}
+
+fn simulation_policy_path(case: &Path) {
+    set_policy_path(case, "simulation");
+}
+
+fn training_policy_path(case: &Path) {
+    set_policy_path(case, "training");
 }
 
 fn historical_forward_scheme(case: &Path) {

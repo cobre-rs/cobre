@@ -81,6 +81,7 @@ type LoadedCase = (
 /// Load case and config on rank 0, capturing errors for MPI collective participation.
 fn load_case_and_config(
     args: &RunArgs,
+    output_dir: &Path,
     quiet: bool,
     stderr: &Term,
 ) -> Result<LoadedCase, CliError> {
@@ -102,6 +103,9 @@ fn load_case_and_config(
     let cobre_io::LoadedCase { system, artifacts } = load_case_with_artifacts(&args.case_dir)?;
     let config_path = args.case_dir.join("config.json");
     let config = parse_config(&config_path)?;
+    config
+        .policy
+        .check_dir(&config_path, output_dir, config.policy_dir_intent())?;
     timings.load_seconds = load_start.elapsed().as_secs_f64();
 
     // Resolve the boundary-derived state requirements once (rank 0, the sole
@@ -263,7 +267,7 @@ pub(super) fn broadcast_and_build_setup(
         raw_scalar_parameters,
         load_err,
     ) = if ctx.is_root {
-        match load_case_and_config(args, ctx.quiet, &ctx.stderr) {
+        match load_case_and_config(args, &ctx.output_dir, ctx.quiet, &ctx.stderr) {
             Ok((prepared, hydro_models, bcast, config, scalar_parameters, timings)) => {
                 root_setup_timings = Some(timings);
                 let bcast_tree = if prepared.stochastic.provenance().opening_tree
@@ -633,6 +637,7 @@ mod tests {
 
     use super::{build_study_setup, load_case_and_config, reconstruct_stochastic_context_non_root};
     use crate::commands::broadcast::BroadcastOpeningTree;
+    use crate::commands::resolve_output_dir;
     use crate::commands::run::{CommBackendArg, RunArgs};
     use crate::error::CliError;
 
@@ -655,9 +660,13 @@ mod tests {
             threads: None,
             comm_backend: CommBackendArg::Local,
         };
-        let (prepared, _hydro_models, bcast, _config, _scalars, _timings) =
-            load_case_and_config(&args, true, &Term::stderr())
-                .expect("D29 must load and prepare stochastic context on rank 0");
+        let (prepared, _hydro_models, bcast, _config, _scalars, _timings) = load_case_and_config(
+            &args,
+            &resolve_output_dir(&args.case_dir, None),
+            true,
+            &Term::stderr(),
+        )
+        .expect("D29 must load and prepare stochastic context on rank 0");
 
         let ids = study_stage_noise_group_ids(&prepared.system);
         assert!(
@@ -721,7 +730,12 @@ mod tests {
                 comm_backend: CommBackendArg::Local,
             };
             let (prepared, hydro_models, mut bcast, _config, scalars, _timings) =
-                load_case_and_config(&args, true, &Term::stderr())?;
+                load_case_and_config(
+                    &args,
+                    &resolve_output_dir(&args.case_dir, None),
+                    true,
+                    &Term::stderr(),
+                )?;
 
             let bcast_tree = if prepared.stochastic.provenance().opening_tree
                 == ComponentProvenance::UserSupplied

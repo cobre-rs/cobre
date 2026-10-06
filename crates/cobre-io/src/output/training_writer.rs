@@ -31,7 +31,7 @@ use crate::output::solver_stats_writer::{
     SOLVER_ITERATIONS_FILE, SOLVER_RETRY_HISTOGRAM_FILE, TRAINING_SOLVER_DIR,
 };
 
-const CUT_SELECTION_FILE: &str = "training/cut_selection/iterations.parquet";
+pub(crate) const CUT_SELECTION_FILE: &str = "training/cut_selection/iterations.parquet";
 
 /// Writes training output to `training/convergence.parquet` and
 /// `training/timing/iterations.parquet`, each written atomically.

@@ -12,6 +12,8 @@
 //! crate, and the CLI and the Python bindings must stay in parity on the full
 //! artifact set.
 
+use std::path::{Path, PathBuf};
+
 use chrono::{Datelike, NaiveDate};
 
 pub(crate) mod atomic;
@@ -72,6 +74,49 @@ pub use stochastic::{
 pub use training_writer::{
     TrainingParquetWriter, remove_conditional_training_outputs, write_row_selection_records,
 };
+
+use fixed_delivery::FIXED_DELIVERIES_FILE;
+use solver_stats_writer::{SIMULATION_SOLVER_DIR, TRAINING_SOLVER_DIR};
+use training_writer::CUT_SELECTION_FILE;
+
+/// How a run clears an output directory before writing its outputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Clearing {
+    /// The run removes the directory and everything inside it.
+    WholeTree,
+    /// The run removes only the files it writes there, and the directory only
+    /// if that leaves it empty.
+    NamedFiles,
+}
+
+/// The output subdirectories, relative to the output directory, that a run
+/// clears before writing its outputs, and how.
+pub(crate) fn cleared_output_dirs() -> Vec<(PathBuf, Clearing)> {
+    let family_trees = simulation_family_subpaths()
+        .map(|subpath| (Path::new("simulation").join(subpath), Clearing::WholeTree));
+    let solver_dirs = [SIMULATION_SOLVER_DIR, TRAINING_SOLVER_DIR]
+        .into_iter()
+        .map(|dir| (PathBuf::from(dir), Clearing::NamedFiles));
+    let named_file_dirs = [
+        CUT_SELECTION_FILE,
+        FIXED_DELIVERIES_FILE,
+        FPHA_HYPERPLANES_FILE,
+        EVAPORATION_MODELS_FILE,
+        FPHA_DEVIATION_POINTS_FILE,
+        GENERIC_CONSTRAINT_ECHO_FILE,
+    ]
+    .into_iter()
+    .filter_map(|file| Path::new(file).parent())
+    .map(|dir| (dir.to_path_buf(), Clearing::NamedFiles));
+
+    let mut cleared: Vec<(PathBuf, Clearing)> = Vec::new();
+    for (dir, clearing) in family_trees.chain(solver_dirs).chain(named_file_dirs) {
+        if cleared.iter().all(|(listed, _)| *listed != dir) {
+            cleared.push((dir, clearing));
+        }
+    }
+    cleared
+}
 
 /// Arrow `Date32`'s native representation (days since the Unix epoch,
 /// 1970-01-01) for one calendar date.
@@ -503,6 +548,50 @@ fn merge_simulation_solve_stats(outputs: &[SimulationOutput]) -> MetadataSimulat
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleared_output_dirs_lists_each_directory_once() {
+        let cleared = cleared_output_dirs();
+
+        let mut paths: Vec<&Path> = cleared.iter().map(|(dir, _)| dir.as_path()).collect();
+        paths.sort_unstable();
+        paths.dedup();
+        assert_eq!(
+            paths.len(),
+            cleared.len(),
+            "a path is listed twice: {cleared:?}"
+        );
+
+        let whole_trees: Vec<&Path> = cleared
+            .iter()
+            .filter(|(_, clearing)| *clearing == Clearing::WholeTree)
+            .map(|(dir, _)| dir.as_path())
+            .collect();
+        let family_trees: Vec<PathBuf> = simulation_family_subpaths()
+            .map(|subpath| Path::new("simulation").join(subpath))
+            .collect();
+        assert_eq!(whole_trees, family_trees);
+
+        for dir in [
+            "simulation/solver",
+            "training/solver",
+            "training/cut_selection",
+            "anticipated",
+            "hydro_models",
+            "generic_constraints",
+        ] {
+            assert!(
+                cleared.contains(&(PathBuf::from(dir), Clearing::NamedFiles)),
+                "{dir} must be cleared file by file: {cleared:?}"
+            );
+        }
+        for dir in ["simulation", "training", "stochastic"] {
+            assert!(
+                cleared.iter().all(|(listed, _)| listed != Path::new(dir)),
+                "{dir} must not be a cleared directory: {cleared:?}"
+            );
+        }
+    }
 
     #[test]
     fn training_output_construction_and_field_access() {

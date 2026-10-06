@@ -256,7 +256,7 @@ fn run_validate_pipeline(
         output_dir,
     })
     .map_err(|failure| match failure {
-        validate_phases::ValidateFailure::ScenarioSource(err) => ValidateFailure {
+        validate_phases::ValidateFailure::ConfigLoad(err) => ValidateFailure {
             kind: err.kind().to_owned(),
             message: err.to_string(),
         },

@@ -7,6 +7,8 @@ use std::num::NonZeroU64;
 use std::path::{Component, Path, PathBuf};
 
 use crate::LoadError;
+use crate::output::policy::{check_checkpoint_replaceable, checkpoint_target};
+use crate::output::{Clearing, OutputError, cleared_output_dirs};
 
 /// Policy initialization mode (`config.json → policy.mode`).
 ///
@@ -32,6 +34,16 @@ impl std::fmt::Display for PolicyMode {
             PolicyMode::Resume => f.write_str("resume"),
         }
     }
+}
+
+/// What a run does with its policy directory, which decides what
+/// [`PolicyConfig::check_dir`] refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyDirIntent {
+    /// The run only reads the policy directory.
+    Read,
+    /// The run writes a checkpoint there, replacing the directory.
+    Replace,
 }
 
 /// Boundary-row configuration for terminal-stage FCF coupling.
@@ -112,6 +124,96 @@ impl PolicyConfig {
             Err(output_dir_or_ancestor_refusal(config_path, &self.path))
         }
     }
+
+    /// Refuses a [`Self::path`] that, resolved against `output_dir`, reaches the
+    /// output directory or one of its ancestors, names or contains a directory a
+    /// run clears before writing its outputs, or lies inside one a run removes
+    /// whole. A symbolic link at the policy path is checked both where it sits
+    /// and where it points. For [`PolicyDirIntent::Replace`], the policy
+    /// directory must also be one a checkpoint write may replace.
+    ///
+    /// The comparisons are lexical, so nothing is created or canonicalised; the
+    /// only link read is the one at the policy path.
+    ///
+    /// # Errors
+    ///
+    /// - [`LoadError::SchemaError`] on `policy.path`, labelled with
+    ///   `config_path`, for each refusal above.
+    /// - [`LoadError::IoError`] when a path cannot be made absolute, or the
+    ///   policy path or its entries cannot be inspected.
+    pub fn check_dir(
+        &self,
+        config_path: &Path,
+        output_dir: &Path,
+        intent: PolicyDirIntent,
+    ) -> Result<(), LoadError> {
+        self.check_path(config_path)?;
+
+        let absolute = |path: &Path, reported: &Path| {
+            std::path::absolute(path)
+                .map(|absolute| normalize_lexically(&absolute))
+                .map_err(|source| LoadError::IoError {
+                    path: reported.to_path_buf(),
+                    source,
+                })
+        };
+        let to_load_error = |err: OutputError| match err {
+            OutputError::IoError { path, source } => LoadError::IoError { path, source },
+            other => LoadError::SchemaError {
+                path: config_path.to_path_buf(),
+                field: "policy.path".to_string(),
+                message: other.to_string(),
+            },
+        };
+
+        let out = absolute(output_dir, output_dir)?;
+        let link = output_dir.join(&self.path);
+        check_against_output_dir(config_path, &self.path, &absolute(&link, output_dir)?, &out)?;
+
+        let target = checkpoint_target(&link).map_err(to_load_error)?;
+        if target != link {
+            let target_dir = absolute(&target, &target)?;
+            let value = format!("{} -> {}", self.path, target_dir.display());
+            check_against_output_dir(config_path, &value, &target_dir, &out)?;
+        }
+
+        if intent == PolicyDirIntent::Replace {
+            check_checkpoint_replaceable(&link).map_err(to_load_error)?;
+        }
+        Ok(())
+    }
+}
+
+/// `dir` and `out` must be absolute and lexically normalised.
+fn check_against_output_dir(
+    config_path: &Path,
+    value: &str,
+    dir: &Path,
+    out: &Path,
+) -> Result<(), LoadError> {
+    if out.starts_with(dir) {
+        return Err(output_dir_or_ancestor_refusal(config_path, value));
+    }
+    for (cleared_dir, clearing) in cleared_output_dirs() {
+        let cleared = normalize_lexically(&out.join(&cleared_dir));
+        let relation = if dir == cleared {
+            "names"
+        } else if cleared.starts_with(dir) {
+            "contains"
+        } else if clearing == Clearing::WholeTree && dir.starts_with(&cleared) {
+            "lies inside"
+        } else {
+            continue;
+        };
+        return Err(cleared_dir_refusal(
+            config_path,
+            value,
+            relation,
+            &cleared_dir,
+            clearing,
+        ));
+    }
+    Ok(())
 }
 
 fn normalize_lexically(path: &Path) -> PathBuf {
@@ -144,6 +246,33 @@ fn output_dir_or_ancestor_refusal(config_path: &Path, value: &str) -> LoadError 
             "{value:?} names the output directory or one of its ancestors, which a \
              checkpoint write would replace; choose another directory, such as \"./policy\""
         ),
+    }
+}
+
+fn cleared_dir_refusal(
+    config_path: &Path,
+    value: &str,
+    relation: &str,
+    cleared_dir: &Path,
+    clearing: Clearing,
+) -> LoadError {
+    let cleared_dir = cleared_dir.display();
+    let message = match clearing {
+        Clearing::WholeTree => format!(
+            "{value:?} {relation} {cleared_dir}, which a run removes whole before writing its \
+             outputs; choose a directory that neither contains nor lies inside it, such as \
+             \"./policy\""
+        ),
+        Clearing::NamedFiles => format!(
+            "{value:?} {relation} {cleared_dir}, which holds files a run writes and a checkpoint \
+             write would replace; choose a directory that neither names nor contains it, such \
+             as \"./policy\""
+        ),
+    };
+    LoadError::SchemaError {
+        path: config_path.to_path_buf(),
+        field: "policy.path".to_string(),
+        message,
     }
 }
 

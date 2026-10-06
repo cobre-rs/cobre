@@ -19,6 +19,7 @@ pub mod records;
 pub use checkpoint::{
     ResolvedCheckpoint, read_policy_checkpoint, resolve_policy_checkpoint, write_policy_checkpoint,
 };
+pub(crate) use checkpoint::{check_checkpoint_replaceable, checkpoint_target};
 pub use codec::{deserialize_stage_basis, deserialize_stage_cuts, deserialize_stage_states};
 pub use codec::{serialize_stage_basis, serialize_stage_cuts, serialize_stage_states};
 pub use records::{

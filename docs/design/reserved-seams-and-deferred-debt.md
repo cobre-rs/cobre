@@ -776,6 +776,42 @@ inside `sbatch` jobs for its cluster cases, and has no `--signal` case.
 local `mpiexec` reproduction, or the first CI job that launches ranks with
 `srun`.
 
+### Policy-path checks compare paths lexically
+
+**What it is.** The output-directory and cleared-directory checks on
+`policy.path` (`PolicyConfig::check_dir`, `crates/cobre-io/src/config/policy.rs`)
+compare paths lexically. A symbolic link at the policy path itself is checked
+through its recorded target. A `policy.path`, output directory or link target
+can still reach the output directory or a cleared directory
+through a symlinked parent component, or by another spelling of the same
+directory. Such a path passes load-time validation. If that directory holds cobre's outputs,
+the checkpoint writer refuses it with its foreign-entry error at its first
+write. If the path lies inside a tree a run removes whole, the run-start clear
+deletes the policy directory with that tree.
+
+**Owner.** The cobre-io output owner.
+
+**Trigger.** A user reports a symlinked output tree, or load-time
+canonicalisation becomes possible without creating directories.
+
+### Policy directory in a directory a run writes into but never clears
+
+**What it is.** The cleared-directory guard covers only the directories a run
+clears before writing (`cleared_output_dirs`, `crates/cobre-io/src/output/mod.rs`).
+A `policy.path` naming a directory that cobre writes into but never clears,
+such as `stochastic/`, `training/dictionaries/` or `training/timing/`, passes
+both pre-training checks on a fresh output directory. The first checkpoint
+write, periodic or final, then refuses it with the foreign-entry error, after
+the training it was meant to save has run. Nothing is deleted, but the
+training time is lost. A rerun into the same output directory is refused
+before training, because the directory then holds cobre's files.
+
+**Owner.** The cobre-io output owner.
+
+**Trigger.** A user reports a training run lost to this refusal, or cobre-io
+gains one registry of every path a run writes, from which this guard can take
+the written directories as it takes the cleared ones.
+
 ## Deferred-debt register — whole-lifecycle audit findings
 
 Findings of the full `cobre run` lifecycle read, described by behavior. Each

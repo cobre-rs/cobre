@@ -445,8 +445,7 @@ pub fn standardize_historical_windows(
         })
     };
 
-    let full_sequence: Vec<(i32, usize)> =
-        super::build_observation_sequence(stages, max_order, season_map);
+    let full_sequence: Vec<(i32, usize)> = super::build_observation_sequence(stages, season_map);
 
     // Digest over little-endian f64 bytes so it is reproducible across runs.
     {
@@ -928,6 +927,86 @@ mod tests {
             (eta_1 - expected_1).abs() < 1e-10,
             "eta stage 1: expected {expected_1}, got {eta_1} (rolling chain: lag=130.0)"
         );
+    }
+
+    #[test]
+    fn standardize_reads_only_the_study_entry_observations() {
+        let hydro = EntityId(1);
+        let stages = twelve_monthly_stages();
+        let models: Vec<InflowModel> = std::iter::once(-1_i32)
+            .chain(0..12_i32)
+            .map(|stage_id| InflowModel {
+                hydro_id: hydro,
+                stage_id,
+                mean_m3s: 160.0,
+                std_m3s: 25.0,
+                ar_coefficients: vec![0.5],
+                residual_std_ratio: 1.0,
+                annual: None,
+            })
+            .collect();
+        let par = PrecomputedPar::build(&models, &stages, &[hydro], None).unwrap();
+        assert_eq!(par.max_order(), 1);
+
+        let window_years = [1991, 1992];
+        let full_history: Vec<InflowHistoryRow> = (1990..=1992)
+            .flat_map(|y| {
+                (0..12_u32).map(move |m| {
+                    make_row(
+                        hydro,
+                        y,
+                        m,
+                        100.0 + 3.0 * f64::from(m) + 7.0 * f64::from(y - 1990),
+                    )
+                })
+            })
+            .collect();
+        let study_entry_history: Vec<InflowHistoryRow> = full_history
+            .iter()
+            .filter(|r| window_years.contains(&r.start_date.year()))
+            .cloned()
+            .collect();
+
+        let standardize = |history: &[InflowHistoryRow]| {
+            let mut lib = HistoricalScenarioLibrary::new(2, 12, 1, 1, window_years.to_vec());
+            let hydro_ids = [hydro];
+            let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
+            standardize_historical_windows(
+                &structure,
+                &mut lib,
+                history,
+                &par,
+                &window_years,
+                None,
+                DerivedSeed {
+                    lag_values: &[110.0],
+                    l_state: 1,
+                    accum: &[],
+                    weight: &[],
+                },
+                &[],
+                0,
+            );
+            lib
+        };
+        let lib_full = standardize(&full_history);
+        let lib_study_entries = standardize(&study_entry_history);
+
+        for w in 0..window_years.len() {
+            for t in 0..stages.len() {
+                let full: Vec<u64> = lib_full
+                    .eta_slice(w, t)
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect();
+                let study: Vec<u64> = lib_study_entries
+                    .eta_slice(w, t)
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect();
+                assert_eq!(full, study, "window {w}, stage {t}");
+            }
+        }
     }
 
     #[test]
@@ -2276,16 +2355,14 @@ mod tests {
         ];
         let par = PrecomputedPar::build(&models, &stages, &[hydro], None).unwrap();
 
-        let mut history: Vec<InflowHistoryRow> = (1990..=1993)
+        let history: Vec<InflowHistoryRow> = (1990..=1993)
             .map(|y| make_row(hydro, y, 0, 1000.0 + f64::from(y - 1990)))
             .collect();
-        history.extend((1989..=1992).map(|y| make_row(hydro, y, 11, 1.0)));
 
         let windows = crate::sampling::discover_historical_windows(
             &history,
             &[hydro],
             &stages,
-            1,
             None,
             Some(&sm),
             10,

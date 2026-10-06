@@ -785,7 +785,7 @@ mod tests {
             });
         }
 
-        let mut inflow_history: Vec<InflowHistoryRow> = stages
+        let inflow_history: Vec<InflowHistoryRow> = stages
             .iter()
             .enumerate()
             .map(|(t, stage)| InflowHistoryRow {
@@ -795,19 +795,6 @@ mod tests {
                 value_m3s: raw[t],
             })
             .collect();
-        // `discover_historical_windows`'s season-map walk needs one lag
-        // observation at its predecessor of Jan 2026 (season 0): season 13
-        // (Jul-Sep 2025), the ring's last declared season — see
-        // `ring_season_map`'s `Custom` cycle. Its value is never read by
-        // `standardize_historical_windows`, which only consumes the 5
-        // study-stage entries above.
-        let lag_start = NaiveDate::from_ymd_opt(2025, 7, 15).unwrap();
-        inflow_history.push(InflowHistoryRow {
-            hydro_id: RING_HYDRO_ID,
-            start_date: lag_start,
-            end_date: lag_start.succ_opt().unwrap(),
-            value_m3s: 999.0,
-        });
 
         let system = ring_system(
             &stages,
@@ -1013,12 +1000,9 @@ mod tests {
             value_m3s: value,
         };
 
-        let mut inflow_history = vec![month_row(1989, 12, 110.0)];
+        let mut inflow_history = Vec::new();
         for m in 1..=3u32 {
             inflow_history.push(month_row(1990, m, 200.0 + f64::from(m)));
-        }
-        for m in 10..=12u32 {
-            inflow_history.push(month_row(1990, m, 300.0 + f64::from(m)));
         }
         for m in 1..=3u32 {
             inflow_history.push(month_row(1991, m, 400.0 + f64::from(m)));
@@ -1098,7 +1082,7 @@ mod tests {
         assert_eq!(
             fwd_years,
             vec![1990, 1991],
-            "precondition: the forward pass discovers at the applied PAR's own coverage (p = 1)"
+            "precondition: the forward pass admits both years holding their study seasons"
         );
 
         let tree = build_opening_tree_library(&system, &training_source, Some(3))
@@ -1384,7 +1368,7 @@ mod tests {
             })
             .collect();
 
-        let mut inflow_history: Vec<InflowHistoryRow> = stages
+        let inflow_history: Vec<InflowHistoryRow> = stages
             .iter()
             .enumerate()
             .map(|(t, stage)| InflowHistoryRow {
@@ -1394,23 +1378,6 @@ mod tests {
                 value_m3s: raw[t],
             })
             .collect();
-        // `discover_historical_windows`'s season-map walk needs one pre-study
-        // row at its lag-2 predecessor of Dec 2025 (season 11): the walk steps
-        // to Nov 2025 (season 10), then to Aug-Oct 2025 (season 13) — see
-        // `nonaligned_ring_season_map`'s `Custom` cycle. This value is never
-        // read by `standardize_historical_windows`.
-        inflow_history.push(InflowHistoryRow {
-            hydro_id: RING_HYDRO_ID,
-            start_date: NaiveDate::from_ymd_opt(2025, 8, 15).unwrap(),
-            end_date: NaiveDate::from_ymd_opt(2025, 8, 16).unwrap(),
-            value_m3s: 999.0,
-        });
-        inflow_history.push(InflowHistoryRow {
-            hydro_id: RING_HYDRO_ID,
-            start_date: NaiveDate::from_ymd_opt(2025, 11, 15).unwrap(),
-            end_date: NaiveDate::from_ymd_opt(2025, 11, 16).unwrap(),
-            value_m3s: 999.0,
-        });
 
         let system = ring_system(
             &stages,
@@ -1781,7 +1748,7 @@ mod tests {
     /// Cross-source regression at the SAME declared depth (24, the worked
     /// acceptance example): `resolve_state_layout` (the dense-stride + mask
     /// source) still widens past the fixture's AR(0) order to exactly 24, but
-    /// the historical library's width and coverage are the applied PAR's own
+    /// the historical library's width is the applied PAR's own
     /// order — the two sources address different facts and no longer agree.
     /// A forward twin built from the same applied PAR and the same depth-24
     /// seed (`resolve_inflow_seeds` at `state_layout.max_par_order`, the one

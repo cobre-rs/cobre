@@ -12,9 +12,9 @@
 //! ```
 
 use crate::context::ClassSchemes;
-use crate::season_cast::{StageCalendar, occurrence_year};
+use crate::season_cast::occurrence_year;
 
-use chrono::{Datelike, Months, NaiveDate};
+use chrono::{Datelike, NaiveDate};
 use std::fmt;
 pub mod class_sampler;
 mod eta_inversion;
@@ -690,29 +690,13 @@ pub fn build_forward_sampler(
 // Shared helper
 // ---------------------------------------------------------------------------
 
-/// Build the observation sequence as `(year_offset, season_id)` pairs.
-///
-/// The anchor is `stages[0]`; its own resolved year is `y0`, and every other
-/// entry's `year_offset` is relative to it — `window_year` is the first study
-/// observation's year.
-///
-/// **Layout.** The study entries come first, one per stage carrying a
-/// `season_id`, in stage order. The resolved lag entries follow, for
-/// `k = 1..=r` (newest first), where `r <= max_order`: the season-map walk
-/// ([`StageCalendar::season_occurrences`]) may truncate before `max_order` on
-/// a sparse `Custom` map, and there are no lag entries at all when
-/// `stages[0]`'s own season id has no entry in `season_map`.
-///
-/// **Year.** A study or lag entry whose season id resolves to a
-/// [`SeasonDefinition`](cobre_core::temporal::SeasonDefinition) in
-/// `season_map` is dated via [`occurrence_year`]; one that does not (a
-/// missing def, or `season_map: None`) falls back to its own date's calendar
-/// year — the same fallback `None` uses throughout, so a `None` map's lag `k`
-/// is `stages[0].start_date` minus `k` calendar months, keyed by that date's
-/// `month0()`.
+/// The `(year_offset, season_id)` observations the historical library's
+/// consumers read: one per study stage carrying a `season_id`, in stage order,
+/// dated by [`occurrence_year`] relative to the first stage's year. Lags come
+/// from the derived stage-0 seed, never from the window, and window
+/// admissibility and standardization both index this one sequence.
 pub(crate) fn build_observation_sequence(
     stages: &[Stage],
-    max_order: usize,
     season_map: Option<&SeasonMap>,
 ) -> Vec<(i32, usize)> {
     let Some(first_stage) = stages.first() else {
@@ -737,47 +721,14 @@ pub(crate) fn build_observation_sequence(
         first_stage.end_date,
     );
 
-    let mut result: Vec<(i32, usize)> = stages
+    stages
         .iter()
         .filter_map(|stage| {
             let sid = stage.season_id?;
             let year = year_for(Some(sid), stage.start_date, stage.end_date);
             Some((year - y0, sid))
         })
-        .collect();
-
-    match season_map {
-        Some(map) => {
-            if let Some(def0) = first_stage
-                .season_id
-                .and_then(|sid| map.seasons.iter().find(|def| def.id == sid))
-                && let Some(occurrences) = StageCalendar::new(std::slice::from_ref(first_stage))
-                    .season_occurrences(map, def0, max_order)
-            {
-                for occ in occurrences.iter().skip(1) {
-                    let Some(id_k) = map.season_for_date(occ.start) else {
-                        break;
-                    };
-                    let year_k = year_for(Some(id_k), occ.start, occ.end);
-                    result.push((year_k - y0, id_k));
-                }
-            }
-        }
-        None => {
-            for k in 1..=max_order {
-                let months = u32::try_from(k).unwrap_or(u32::MAX);
-                let Some(d) = first_stage
-                    .start_date
-                    .checked_sub_months(Months::new(months))
-                else {
-                    break;
-                };
-                result.push((d.year() - y0, d.month0() as usize));
-            }
-        }
-    }
-
-    result
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

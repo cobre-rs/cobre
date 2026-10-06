@@ -552,14 +552,13 @@ mod tests {
             &history,
             &[hydro1, hydro2],
             &stages,
-            2,
             None,
             None,
             10,
         )
         .unwrap();
 
-        let expected: Vec<i32> = (1991..=2010).collect();
+        let expected: Vec<i32> = (1990..=2010).collect();
         assert_eq!(
             windows, expected,
             "full-coverage windowed history must reproduce the prior point-dated \

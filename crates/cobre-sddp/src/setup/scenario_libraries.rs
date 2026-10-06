@@ -28,7 +28,7 @@ use super::{resolve_stage_lag_transitions, study_stages_slice};
 /// owner of window discovery, allocation, standardization and validation,
 /// shared by the forward pass and the opening tree.
 ///
-/// `par` is the PAR model the LP applies to this η; width and coverage are
+/// `par` is the PAR model the LP applies to this η; its width is
 /// `par.max_order()`. `seed` ([`DerivedSeed`]) seeds the rolling η-inversion
 /// chain, so every forward pass starting from the same derived seed exactly
 /// reconstructs the raw historical observations. `min_windows` is the count
@@ -56,7 +56,6 @@ pub(crate) fn build_historical_inflow_library(
         inflow_history,
         &hydro_ids,
         stages,
-        max_order,
         user_pool,
         season_map,
         min_windows,

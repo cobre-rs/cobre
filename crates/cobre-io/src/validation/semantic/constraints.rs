@@ -11,7 +11,7 @@ use cobre_core::{
     VariableRef, temporal::BlockMode,
 };
 
-use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::super::{ValidationContext, rules, schema::ParsedData};
 
 /// Rule 20. Layer 5a — rejects per-block variable references that address a column a stage
 /// cannot expose, honoring per-`(constraint, stage)` activation.
@@ -108,8 +108,8 @@ pub(super) fn check_productivity_tag_pairing(data: &ParsedData, ctx: &mut Valida
         mismatched.sort_unstable();
 
         for hydro_id in mismatched {
-            ctx.add_warning(
-                ErrorKind::SemanticAmbiguity,
+            ctx.emit(
+                &rules::SEMANTIC_GENERIC_PRODUCTIVITY_TAG_MISMATCH,
                 "constraints/generic_constraints.json",
                 Some(&constraint.name),
                 format!(
@@ -174,8 +174,8 @@ fn add_constraint_error(
     constraint: &GenericConstraint,
     message: String,
 ) {
-    ctx.add_error(
-        ErrorKind::BusinessRuleViolation,
+    ctx.emit(
+        &rules::SEMANTIC_GENERIC_PER_BLOCK_REFERENCE_UNRESOLVABLE,
         "constraints/generic_constraints.json",
         Some(format!("constraint[id={}]", constraint.id.0)),
         message,

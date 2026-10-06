@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 
 use cobre_core::{EntityId, Hydro, HydroUnitGroup};
 
-use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::super::{ValidationContext, rules, schema::ParsedData};
 use super::envelope_tolerance;
 
 /// Per-family constants the rejection messages need: the capitalized family
@@ -224,8 +224,8 @@ fn check_row(
         let group_entity = group_id_entity_clause(group_id);
         let group_message = group_id_message_clause(group_id);
         let entity_str = format!("{entity_label}={entity_id}{group_entity}, stage_id={stage_id}");
-        ctx.add_error(
-            ErrorKind::BusinessRuleViolation,
+        ctx.emit(
+            &rules::SEMANTIC_BOUND_ROW_BLOCK_OUT_OF_RANGE,
             meta.file,
             Some(entity_str),
             format!(
@@ -331,8 +331,8 @@ fn check_row_stage_range(
     let group_entity = group_id_entity_clause(group_id);
     let group_message = group_id_message_clause(group_id);
     let entity_str = format!("{entity_label}={entity_id}{group_entity}, stage_id={stage_id}");
-    ctx.add_error(
-        ErrorKind::BusinessRuleViolation,
+    ctx.emit(
+        &rules::SEMANTIC_BOUND_ROW_STAGE_UNKNOWN,
         meta.file,
         Some(entity_str),
         format!(
@@ -515,8 +515,8 @@ fn check_row_columns(
             Some(b) => format!("block_id={b}"),
             None => "stage-wide".to_string(),
         };
-        ctx.add_error(
-            ErrorKind::DuplicateId,
+        ctx.emit(
+            &rules::SEMANTIC_BOUND_ROW_DUPLICATE,
             meta.file,
             Some(format!(
                 "{entity_label}={entity_id}{group_entity}, stage_id={stage_id}"
@@ -626,8 +626,8 @@ fn emit_ineligible_column_error(
     let name = column.name;
     let reason = column.reason;
     let entity_str = format!("{entity_label}={entity_id}, stage_id={stage_id}");
-    ctx.add_error(
-        ErrorKind::BusinessRuleViolation,
+    ctx.emit(
+        &rules::SEMANTIC_BOUND_ROW_BLOCK_ON_STAGE_COLUMN,
         meta.file,
         Some(entity_str),
         format!(
@@ -672,8 +672,8 @@ pub(super) fn check_block_id_on_anticipated_thermal(
         let thermal_id = row.thermal_id.0;
         let stage_id = row.stage_id;
         let entity_str = format!("thermal_id={thermal_id}, stage_id={stage_id}");
-        ctx.add_error(
-            ErrorKind::BusinessRuleViolation,
+        ctx.emit(
+            &rules::SEMANTIC_BOUND_ROW_BLOCK_ON_ANTICIPATED_THERMAL,
             "constraints/thermal_bounds.parquet",
             Some(entity_str),
             format!(
@@ -753,8 +753,8 @@ fn emit_raises_declared_capacity_error(
     let entity_label = HYDRO.entity_label;
     let entity_str = format!("{entity_label}={entity_id}, stage_id={stage_id}");
     let block_str = block_id_clause(block_id);
-    ctx.add_error(
-        ErrorKind::InvalidValue,
+    ctx.emit(
+        &rules::SEMANTIC_BOUND_ROW_RAISES_PLANT_CAPACITY,
         HYDRO.file,
         Some(entity_str),
         format!(
@@ -837,8 +837,8 @@ fn emit_group_raises_declared_capacity_error(
     let group_message = group_id_message_clause(Some(group_id));
     let entity_str = format!("{entity_label}={hydro_id}{group_entity}, stage_id={stage_id}");
     let block_str = block_id_clause(block_id);
-    ctx.add_error(
-        ErrorKind::InvalidValue,
+    ctx.emit(
+        &rules::SEMANTIC_BOUND_ROW_RAISES_GROUP_CAPACITY,
         HYDRO_UNIT_GROUP.file,
         Some(entity_str),
         format!(

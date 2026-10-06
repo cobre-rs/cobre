@@ -225,10 +225,31 @@ declare_rules! {
     SEMANTIC_FPHA_PLANE_COEFFICIENT_SIGN = "semantic.5a.12",
         Semantic, BusinessRuleViolation, Error,
         "An FPHA hyperplane has a negative gamma_v or a positive gamma_s";
+    SEMANTIC_THERMAL_GENERATION_BOUNDS_INVERTED = "semantic.5a.13",
+        Semantic, InvalidValue, Error,
+        "A thermal's min_generation_mw exceeds its max_generation_mw";
+    SEMANTIC_ANTICIPATED_LEAD_UNREACHABLE = "semantic.5a.14",
+        Semantic, BusinessRuleViolation, Error,
+        "An anticipated thermal's lead is below one stage or reaches no stage within the study horizon or a declared post-study stage";
+    SEMANTIC_ANTICIPATED_COMMITMENTS_INCONSISTENT = "semantic.5a.15",
+        Semantic, BusinessRuleViolation, Error,
+        "past_anticipated_commitments do not match the anticipated thermals one to one, or a plant's windows do not tile its leading delivery stages, straddle the horizon end, or commit a value the plant cannot deliver";
+    SEMANTIC_ANTICIPATED_DECISION_ON_NON_ANTICIPATED = "semantic.5a.17",
+        Semantic, BusinessRuleViolation, Error,
+        "A generic constraint's anticipated_decision term targets a thermal that is not anticipated";
+    SEMANTIC_THERMAL_GENERATION_ON_ANTICIPATED = "semantic.5a.18",
+        Semantic, SemanticAmbiguity, Warning,
+        "A generic constraint's thermal_generation term targets an anticipated thermal, so it reads the delivered generation rather than the commitment";
     // The ids are valid, so the kind is InvalidValue, not InvalidReference.
     SEMANTIC_PUMPING_SAME_ENDPOINTS = "semantic.5a.19",
         Semantic, InvalidValue, Error,
         "A pumping station's source and destination hydro are the same";
+    SEMANTIC_GENERIC_PER_BLOCK_REFERENCE_UNRESOLVABLE = "semantic.5a.20",
+        Semantic, BusinessRuleViolation, Error,
+        "A generic constraint's per-block term names a block or storage boundary that its stage does not expose";
+    SEMANTIC_ANTICIPATED_WINDOW_SPANS_CADENCE_CHANGE = "semantic.5a.28",
+        Semantic, ModelQuality, Warning,
+        "A lead_stages anticipated thermal's active window spans adjacent study stages of different durations";
     SEMANTIC_INFLOW_SEED_ANNUAL_COMPONENT_NOT_MONTHLY = "semantic.5a.29",
         Semantic, BusinessRuleViolation, Error,
         "Inflow annual components are supplied under a season cycle other than Monthly";
@@ -250,6 +271,18 @@ declare_rules! {
     SEMANTIC_INFLOW_SEED_NEGATIVE_RECORD = "semantic.5a.34a",
         Semantic, ModelQuality, Warning,
         "A realized inflow record is negative; it is accepted as incremental inflow";
+    SEMANTIC_BOUND_ROW_BLOCK_OUT_OF_RANGE = "semantic.5a.35",
+        Semantic, BusinessRuleViolation, Error,
+        "A bound-override row's block_id is outside its stage's blocks";
+    SEMANTIC_BOUND_ROW_DUPLICATE = "semantic.5a.36",
+        Semantic, DuplicateId, Error,
+        "Two bound-override rows set the same column for the same entity, stage and block";
+    SEMANTIC_BOUND_ROW_BLOCK_ON_STAGE_COLUMN = "semantic.5a.37",
+        Semantic, BusinessRuleViolation, Error,
+        "A bound-override row gives a block_id to a column that has no per-block variable";
+    SEMANTIC_BOUND_ROW_BLOCK_ON_ANTICIPATED_THERMAL = "semantic.5a.38",
+        Semantic, BusinessRuleViolation, Error,
+        "A thermal_bounds row gives a block_id for an anticipated thermal";
     UNIT_GROUP_DUPLICATE_ID = "semantic.5a.39",
         Semantic, DuplicateId, Error,
         "A hydro declares the same unit group id more than once";
@@ -259,15 +292,30 @@ declare_rules! {
     UNIT_GROUP_MAXIMA_EXCEED_PLANT = "semantic.5a.41",
         Semantic, InvalidValue, Error,
         "A hydro's unit group maxima sum above the plant's own max_turbined_m3s or max_generation_mw";
+    SEMANTIC_BOUND_ROW_RAISES_PLANT_CAPACITY = "semantic.5a.43",
+        Semantic, InvalidValue, Error,
+        "A hydro_bounds row raises max_turbined_m3s or max_generation_mw above the hydro's declared value";
     UNIT_GROUP_MINIMA_BELOW_PLANT = "semantic.5a.44",
         Semantic, InvalidValue, Error,
         "A hydro's unit group minima sum below the plant's own min_turbined_m3s or min_generation_mw";
+    SEMANTIC_BOUND_ROW_RAISES_GROUP_CAPACITY = "semantic.5a.45",
+        Semantic, InvalidValue, Error,
+        "A hydro_unit_group_bounds row raises max_turbined_m3s or max_generation_mw above the unit group's declared value";
     SEMANTIC_HYDRO_DIVERSION_FLOOR_WITHOUT_CHANNEL = "semantic.5a.46",
         Semantic, InvalidValue, Error,
         "A hydro_bounds row sets min_diversion_m3s for a hydro that declares no diversion channel";
+    POST_STUDY_BOUNDARY_INCONSISTENT = "semantic.5a.47",
+        Semantic, BusinessRuleViolation, Error,
+        "post_study_stages.json is not date-contiguous from the study horizon end, lacks a bound an anticipated lead reaches, or its commitments mis-tile post-study stages or fall outside the commissioning window";
+    SEMANTIC_BOUND_ROW_STAGE_UNKNOWN = "semantic.5a.49",
+        Semantic, BusinessRuleViolation, Error,
+        "A bound-override row's stage_id is not a study stage";
     SEMANTIC_HYDRO_EVAPORATION_WITHOUT_GEOMETRY = "semantic.5a.50",
         Semantic, BusinessRuleViolation, Error,
         "A hydro with evaporation coefficients has no rows in hydro_geometry.parquet";
+    SEMANTIC_GENERIC_PRODUCTIVITY_TAG_MISMATCH = "semantic.5a.51",
+        Semantic, SemanticAmbiguity, Warning,
+        "A generic constraint pairs max_stored_energy with accumulated_productivity for the same hydro";
     SEMANTIC_PUMPING_ENDPOINT_NOT_OPERATING = "semantic.5a.52",
         Semantic, BusinessRuleViolation, Error,
         "A pumping station is active at a study stage where its source or destination hydro is not operating";
@@ -388,7 +436,23 @@ mod tests {
     use super::{RULES, ValidationLayer};
     use crate::validation::{Severity, ValidationContext};
 
-    const RETIRED_RULE_IDS: &[&str] = &["travel_time.11", "travel_time.13"];
+    const RETIRED_RULE_IDS: &[&str] = &[
+        "travel_time.11",
+        "travel_time.13",
+        "semantic.5a.16",
+        "semantic.5a.21",
+        "semantic.5a.22",
+        "semantic.5a.23",
+        "semantic.5a.24",
+        "semantic.5a.25",
+        "semantic.5a.25b",
+        "semantic.5a.26",
+        "semantic.5a.26a",
+        "semantic.5a.26b",
+        "semantic.5a.27",
+        "semantic.5a.42",
+        "semantic.5a.48",
+    ];
 
     // Spelled from chars so the source grep in `tests/genericity_gate.rs` does not match this file.
     const BANNED_WORDS: [&[char]; 2] =

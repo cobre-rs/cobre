@@ -4,18 +4,7 @@
 //! history before the arc is sized into any solver-side state. Runtime
 //! conservation checks and recourse-feasibility rows live downstream, not here.
 //!
-//! | # | Rule                                                                    | `ErrorKind`               |
-//! |---|--------------------------------------------------------------------------|---------------------------|
-//! | 1 | `travel_time_hours` negative or non-finite                              | `InvalidValue`            |
-//! | 2 | `travel_time_hours == 0.0` — treated as undeclared, no arc created      | `ModelQuality` (warning)  |
-//! | 3 | `max_t(t_v / h_t)` below [`NEGLIGIBLE_RATIO_THRESHOLD`]                  | `ModelQuality` (warning)  |
-//! | 4 | `t_v` exceeds the remaining study horizon at some stage                 | `ModelQuality` (warning)  |
-//! | 5 | `past_defluences` windows do not cover the arc's in-transit span `[start_0 − t_v, start_0)` (gap or no windows) | `BusinessRuleViolation` |
-//! | 5b | A `past_defluences` window ends after `start_0` (future-dated) | `InvalidValue` |
-//! | 6 | Chronological confluence: 2+ declared arcs into one downstream plant with differing `travel_time_hours`, while any study stage is chronological | `NotImplemented` |
-//! | 11 | *(retired — number never reused)* | |
-//! | 12 | A declared arc releases at a stage where its downstream has not yet reached Operating status (`PreFilling`/`Filling`, or before `entry_stage_id`) | `BusinessRuleViolation` |
-//! | 13 | *(retired — number never reused)* | |
+//! Its rules are the `travel_time.*` entries of [`RULES`](crate::validation::rules::RULES).
 
 use chrono::NaiveDate;
 use cobre_core::{
@@ -99,7 +88,7 @@ fn arrival_depth(t: f64, anchor: usize, study_durations: &[f64]) -> usize {
     window_period_reach_depth(t, future[0], future)
 }
 
-/// Row 12: rejects a declared arc that releases while its downstream has not
+/// Rejects a declared arc that releases while its downstream has not
 /// yet entered — the `PreFilling` short-circuit is same-stage and cannot
 /// carry a delayed delivery into an absent balance row, and a `Filling`
 /// downstream's sufficiency budget does not model bucket-borne arrivals.
@@ -146,7 +135,7 @@ fn check_recourse_downstream_not_operating(
     }
 }
 
-/// Row 6: rejects a superset of the true heterogeneous-confluence cases (any
+/// Rejects a superset of the true heterogeneous-confluence cases (any
 /// chronological study stage, not only the ones whose per-stage-pair spread
 /// resolution actually disagrees) — this infrastructure crate has no access
 /// to that downstream, per-arc computation and must not reproduce it.
@@ -233,7 +222,7 @@ fn study_start_date(data: &ParsedData) -> Option<NaiveDate> {
         .map(|s| s.start_date)
 }
 
-/// Row 3: `max_t(t_v/h_t)` below [`NEGLIGIBLE_RATIO_THRESHOLD`] is an advisory
+/// A `max_t(t_v/h_t)` below [`NEGLIGIBLE_RATIO_THRESHOLD`] is an advisory
 /// ("consider not declaring"), never a silent fold.
 fn check_negligible_ratio(
     hydro_id: i32,
@@ -262,7 +251,7 @@ fn check_negligible_ratio(
     );
 }
 
-/// Row 4: `t_v` exceeding the remaining study horizon at some stage — the
+/// A `t_v` exceeding the remaining study horizon at some stage — the
 /// arc's release never arrives before the horizon ends from that stage
 /// onward. Routed through [`window_reaches_any_period`] (sharing the same
 /// overlap sweep [`arrival_depth`] reuses via [`window_period_reach_depth`])
@@ -308,7 +297,7 @@ fn hours_before(start_0: NaiveDate, date: NaiveDate) -> f64 {
     (start_0 - date).num_hours() as f64
 }
 
-/// Row 5: a declared arc's `past_defluences` windows must cover the in-transit
+/// A declared arc's `past_defluences` windows must cover the in-transit
 /// span `(0, t_v]` hours before the first study stage's start (`start_0`).
 ///
 /// Each window `[start_date, end_date)` maps to the hours-before-`start_0`

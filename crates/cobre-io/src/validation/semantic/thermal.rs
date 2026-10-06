@@ -16,7 +16,7 @@ use cobre_core::{
 };
 use cobre_stochastic::season_cast::{DatedWindow, StageCalendar};
 
-use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::super::{ValidationContext, rules, schema::ParsedData};
 use super::envelope_tolerance;
 use super::travel_time::study_stage_durations;
 use crate::StageIdResolver;
@@ -27,8 +27,8 @@ pub(super) fn check_thermal_generation_bounds(data: &ParsedData, ctx: &mut Valid
     for thermal in &data.thermals {
         if thermal.min_generation_mw > thermal.max_generation_mw {
             let entity_str = format!("Thermal {}", thermal.id.0);
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_THERMAL_GENERATION_BOUNDS_INVERTED,
                 "system/thermals.json",
                 Some(&entity_str),
                 format!(
@@ -119,8 +119,8 @@ pub(super) fn check_anticipated_thermals(data: &ParsedData, ctx: &mut Validation
             let total_horizon_hours: f64 = study_durations.iter().sum();
             if delta_hours > total_horizon_hours && !reaches_post_study {
                 let entity_str = format!("thermals[id={thermal_id}].anticipated_config.lead_time");
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::SEMANTIC_ANTICIPATED_LEAD_UNREACHABLE,
                     "system/thermals.json",
                     Some(&entity_str),
                     format!(
@@ -138,8 +138,8 @@ pub(super) fn check_anticipated_thermals(data: &ParsedData, ctx: &mut Validation
         let entity_str = format!("thermals[id={thermal_id}].anticipated_config.lead_stages");
 
         if k == 0 {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_ANTICIPATED_LEAD_UNREACHABLE,
                 "system/thermals.json",
                 Some(&entity_str),
                 format!("Thermal {thermal_id}: anticipated_config.lead_stages must be >= 1, got 0"),
@@ -150,8 +150,8 @@ pub(super) fn check_anticipated_thermals(data: &ParsedData, ctx: &mut Validation
         let k_u = k as usize;
 
         if k_u > n_stages && !reaches_post_study {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_ANTICIPATED_LEAD_UNREACHABLE,
                 "system/thermals.json",
                 Some(&entity_str),
                 format!(
@@ -188,8 +188,8 @@ pub(super) fn check_anticipated_thermals(data: &ParsedData, ctx: &mut Validation
 
         match windows_by_id.get(&thermal_id) {
             None => {
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::SEMANTIC_ANTICIPATED_COMMITMENTS_INCONSISTENT,
                     "initial_conditions.json",
                     Some("initial_conditions.past_anticipated_commitments"),
                     format!(
@@ -245,8 +245,8 @@ pub(super) fn check_anticipated_thermals(data: &ParsedData, ctx: &mut Validation
         if !anticipated_thermal_ids.contains(&history.thermal_id)
             && reported.insert(history.thermal_id)
         {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_ANTICIPATED_COMMITMENTS_INCONSISTENT,
                 "initial_conditions.json",
                 Some(format!(
                     "initial_conditions.past_anticipated_commitments[thermal_id={}]",
@@ -303,7 +303,7 @@ fn build_thermal_delivery_bounds(
     )
 }
 
-/// Rule 28. Advisory (`ModelQuality`): a `lead_stages`-configured thermal whose active
+/// Rule 28. Advisory: a `lead_stages`-configured thermal whose active
 /// window — decision stage `t` through delivery `t + lead_stages`, `t` ranging
 /// over the plant's commissioning window and the delivery side clamped to the
 /// study horizon — spans a pair of adjacent study stages with differing
@@ -349,8 +349,8 @@ pub(super) fn check_anticipated_cadence_transition(data: &ParsedData, ctx: &mut 
         for i in decision_start..window_end {
             let (prev, next) = (study_durations[i], study_durations[i + 1]);
             if (prev - next).abs() > 1e-9 {
-                ctx.add_warning(
-                    ErrorKind::ModelQuality,
+                ctx.emit(
+                    &rules::SEMANTIC_ANTICIPATED_WINDOW_SPANS_CADENCE_CHANGE,
                     "system/thermals.json",
                     Some(&entity_str),
                     format!(
@@ -658,8 +658,8 @@ fn check_no_straddling_commitment_window(
     let entity_str = format!("thermals[id={}].anticipated_config", thermal_id.0);
     for record in records {
         if record.start_date < horizon_end && record.end_date > horizon_end {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_ANTICIPATED_COMMITMENTS_INCONSISTENT,
                 "initial_conditions.json",
                 Some(&entity_str),
                 format!(
@@ -680,7 +680,7 @@ fn check_no_straddling_commitment_window(
 /// A thermal's commitment windows must tile its leading `k_i` delivery stages
 /// exactly: every leading stage covered at fraction `1.0` (via
 /// [`StageCalendar::covers_exactly`]), and no window reaching any stage at or
-/// beyond `k_i`. Emits a named `BusinessRuleViolation` for an uncovered leading
+/// beyond `k_i`. Reports an uncovered leading
 /// stage (gap) or a stage covered beyond the horizon (over-coverage); overlap
 /// is rejected earlier by the shared windowed-record validator. Returns whether
 /// coverage is exact, gating the per-window bounds/commissioning checks.
@@ -722,8 +722,8 @@ fn check_commitment_coverage(
             .filter(|&i| per_stage[i] != 1.0)
             .map(|i| study_stage_ids[i])
             .collect();
-        ctx.add_error(
-            ErrorKind::BusinessRuleViolation,
+        ctx.emit(
+            &rules::SEMANTIC_ANTICIPATED_COMMITMENTS_INCONSISTENT,
             "initial_conditions.json",
             Some(&entity_str),
             format!(
@@ -742,8 +742,8 @@ fn check_commitment_coverage(
         .map(|i| study_stage_ids[i])
         .collect();
     if !over_covered.is_empty() {
-        ctx.add_error(
-            ErrorKind::BusinessRuleViolation,
+        ctx.emit(
+            &rules::SEMANTIC_ANTICIPATED_COMMITMENTS_INCONSISTENT,
             "initial_conditions.json",
             Some(&entity_str),
             format!(
@@ -822,8 +822,8 @@ fn check_committed_value_bounds(
 
         if coverage.iter().all(|&fraction| fraction == 0.0) {
             if v < min_mw - min_tolerance || v > max_mw + max_tolerance {
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::SEMANTIC_ANTICIPATED_COMMITMENTS_INCONSISTENT,
                     "initial_conditions.json",
                     Some(&entity_str),
                     format!(
@@ -852,8 +852,8 @@ fn check_committed_value_bounds(
             let lb = bx.min_generation_mw;
             let ub = bx.max_generation_mw;
             if lb > ub {
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::SEMANTIC_ANTICIPATED_COMMITMENTS_INCONSISTENT,
                     "initial_conditions.json",
                     Some(&entity_str),
                     format!(
@@ -868,8 +868,8 @@ fn check_committed_value_bounds(
             let lb_tolerance = envelope_tolerance(lb);
             let ub_tolerance = envelope_tolerance(ub);
             if v < lb - lb_tolerance || v > ub + ub_tolerance {
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::SEMANTIC_ANTICIPATED_COMMITMENTS_INCONSISTENT,
                     "initial_conditions.json",
                     Some(&entity_str),
                     format!(
@@ -926,8 +926,8 @@ fn check_seed_within_window(
             }
             let stage_id = study_stage_ids[i];
             if !commissioning_active(entry, exit, stage_id) {
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::SEMANTIC_ANTICIPATED_COMMITMENTS_INCONSISTENT,
                     "initial_conditions.json",
                     Some(&entity_str),
                     format!(
@@ -990,8 +990,8 @@ fn check_fixed_commitment_within_window(
             if coverage[j] == 0.0 {
                 continue;
             }
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::POST_STUDY_BOUNDARY_INCONSISTENT,
                 "post_study_stages.json",
                 Some(&entity_str),
                 format!(
@@ -1027,8 +1027,8 @@ pub(super) fn check_anticipated_decision_target_is_anticipated(
                 && !anticipated_ids.contains(&thermal_id)
             {
                 let entity_str = format!("constraint[id={}]", constraint.id.0);
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::SEMANTIC_ANTICIPATED_DECISION_ON_NON_ANTICIPATED,
                     "constraints/generic_constraints.json",
                     Some(&entity_str),
                     format!(
@@ -1050,7 +1050,7 @@ pub(super) fn check_anticipated_decision_target_is_anticipated(
 /// `thermal_generation` for an anticipated thermal references the per-block
 /// generation at the *delivery* stage, not the *commitment* made at the current
 /// stage. This is valid but surprising; to constrain the commitment use
-/// `anticipated_decision(N)` instead. Emits a `SemanticAmbiguity` warning.
+/// `anticipated_decision(N)` instead. Warns rather than rejects.
 pub(super) fn warn_thermal_generation_on_anticipated_thermal(
     data: &ParsedData,
     ctx: &mut ValidationContext,
@@ -1067,8 +1067,8 @@ pub(super) fn warn_thermal_generation_on_anticipated_thermal(
                 && anticipated_ids.contains(&thermal_id)
             {
                 let entity_str = format!("constraint[id={}]", constraint.id.0);
-                ctx.add_warning(
-                    ErrorKind::SemanticAmbiguity,
+                ctx.emit(
+                    &rules::SEMANTIC_THERMAL_GENERATION_ON_ANTICIPATED,
                     "constraints/generic_constraints.json",
                     Some(&entity_str),
                     format!(
@@ -1125,7 +1125,7 @@ pub(super) fn warn_thermal_generation_on_anticipated_thermal(
 ///   no LP column post-horizon. An explicit zero-valued window over an
 ///   inactive stage stays legitimate.
 ///
-/// Each failure is a `BusinessRuleViolation` naming the offending plant (and the
+/// Each failure names the offending plant (and the
 /// post-study stage(s), for Rule 1 / V2 / V3 / V5 / for (a)). No rule short-circuits
 /// another; a study without `post_study_stages.json` is validated in
 /// [`check_anticipated_thermals`] (a `lead > horizon` plant with no post-study
@@ -1180,8 +1180,8 @@ pub(super) fn check_post_study_stages(data: &ParsedData, ctx: &mut ValidationCon
 
         for &j in &classes.carried {
             if !bound_cells.contains(&(thermal.id, j)) {
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::POST_STUDY_BOUNDARY_INCONSISTENT,
                     "post_study_stages.json",
                     Some(&entity_str),
                     format!(
@@ -1248,7 +1248,7 @@ fn post_study_coverage_per_stage(
 
 /// V2: every index in `fixed_post_study` must be tiled by `per_stage` at
 /// coverage `1.0`, mirroring [`check_commitment_coverage`]'s study-side walk
-/// on the other calendar. Emits one `BusinessRuleViolation` naming every
+/// on the other calendar. Emits one error naming every
 /// uncovered index; a `commissioning_inactive` post-study stage is never a
 /// member of `fixed_post_study`, so it is never demanded here. No-op when
 /// `fixed_post_study` is empty — the common case, every existing deck.
@@ -1273,8 +1273,8 @@ fn check_fixed_post_study_tiling(
     }
 
     let entity_str = format!("thermals[id={}].anticipated_config", thermal_id.0);
-    ctx.add_error(
-        ErrorKind::BusinessRuleViolation,
+    ctx.emit(
+        &rules::POST_STUDY_BOUNDARY_INCONSISTENT,
         "post_study_stages.json",
         Some(&entity_str),
         format!(
@@ -1310,8 +1310,8 @@ fn check_post_study_window_excludes_unreachable_stages(
         .filter(|&j| per_stage[j] != 0.0)
         .collect();
     if !covered_carried.is_empty() {
-        ctx.add_error(
-            ErrorKind::BusinessRuleViolation,
+        ctx.emit(
+            &rules::POST_STUDY_BOUNDARY_INCONSISTENT,
             "post_study_stages.json",
             Some(&entity_str),
             format!(
@@ -1331,8 +1331,8 @@ fn check_post_study_window_excludes_unreachable_stages(
         .filter(|&j| per_stage[j] != 0.0)
         .collect();
     if !covered_beyond_reach.is_empty() {
-        ctx.add_error(
-            ErrorKind::BusinessRuleViolation,
+        ctx.emit(
+            &rules::POST_STUDY_BOUNDARY_INCONSISTENT,
             "post_study_stages.json",
             Some(&entity_str),
             format!(
@@ -1371,8 +1371,8 @@ fn build_post_study_calendar(
                 ));
             }
             _ => {
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::POST_STUDY_BOUNDARY_INCONSISTENT,
                     "post_study_stages.json",
                     Some(format!("stages[{i}]")),
                     format!(
@@ -1388,8 +1388,8 @@ fn build_post_study_calendar(
 
     match (calendar_stages.first(), study_end) {
         (Some(first), Some(end)) if first.start_date != end => {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::POST_STUDY_BOUNDARY_INCONSISTENT,
                 "post_study_stages.json",
                 Some("stages[0].start_date"),
                 format!(
@@ -1401,8 +1401,8 @@ fn build_post_study_calendar(
             well_formed = false;
         }
         (Some(_), None) => {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::POST_STUDY_BOUNDARY_INCONSISTENT,
                 "post_study_stages.json",
                 Some("stages"),
                 "post_study_stages.json is declared but the study has no study stages to anchor \
@@ -1416,8 +1416,8 @@ fn build_post_study_calendar(
 
     for pair in calendar_stages.windows(2) {
         if pair[0].end_date != pair[1].start_date {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::POST_STUDY_BOUNDARY_INCONSISTENT,
                 "post_study_stages.json",
                 Some(format!("stages start_date={}", pair[1].start_date)),
                 format!(

@@ -2,8 +2,9 @@
 //! `cobre.io.validate`, and the metadata that names the phase a failure came from.
 //!
 //! [`validate_study`] is the single pipeline both front ends present: it builds the
-//! study the way `cobre run` does, so every refusal that the run reaches while
-//! constructing the study is reached here too. [`PrepPhase`] and
+//! study the way `cobre run` does and loads the policy the run would load, so every
+//! refusal that the run reaches while constructing the study or loading a
+//! configured policy is reached here too. [`PrepPhase`] and
 //! [`prep_phase_metadata`] derive the human-readable file label and the structured
 //! error-kind string from a [`SddpError`].
 //!
@@ -14,14 +15,18 @@
 //! (that would create a cycle), so the shared logic must live in `cobre-sddp` or
 //! above it in the dependency graph.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cobre_core::System;
-use cobre_io::{CaseArtifacts, Config, LoadError, ReportEntry};
+use cobre_io::{CaseArtifacts, Config, ErrorKind, LoadError, PolicyMode, ReportEntry};
 
 use crate::hydro_models::prepare_hydro_models_from_artifacts;
+use crate::policy::full_fcf_load::{
+    FullFcfLoadError, FullFcfLoadKind, check_full_fcf_load, locate_policy_dir,
+};
+use crate::setup::RunPhasePlan;
 use crate::{
-    BoundaryReconciliation, SddpError, StudyParams, StudySetup, prepare_stochastic,
+    BoundaryReconciliation, ErrorClass, SddpError, StudyParams, StudySetup, prepare_stochastic,
     reconcile_boundary_policy, resolve_boundary_state_requirements,
     validate_generic_constraint_parameters,
 };
@@ -84,6 +89,8 @@ pub struct ValidateRequest<'a> {
     pub system: System,
     /// The pre-parsed case artifacts.
     pub artifacts: CaseArtifacts,
+    /// The directory a configured policy is read from, under `config.policy.path`.
+    pub output_dir: &'a Path,
 }
 
 /// What [`validate_study`] hands back when every check passes.
@@ -95,6 +102,8 @@ pub struct ValidatedStudy {
     pub boundary: Option<BoundaryReconciliation>,
     /// Warnings raised by the checks, for the front ends to render.
     pub warnings: Vec<ReportEntry>,
+    /// The policy load the run would apply and the checks it passed, when one is configured.
+    pub policy_load: Option<PolicyLoadSummary>,
 }
 
 /// A failed [`PrepPhase`] and the error it raised.
@@ -124,6 +133,53 @@ impl PhaseFailure {
     }
 }
 
+/// The policy load a run would apply, and how many stored bases it would leave out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PolicyLoadSummary {
+    /// Which load the run applies.
+    pub load: FullFcfLoadKind,
+    /// Stored bases that do not fit the study and would be left out.
+    pub unused_stored_bases: usize,
+}
+
+/// A configured policy that passed every load check, and the warnings the load raised.
+#[derive(Debug, Clone)]
+pub struct PolicyLoadReport {
+    /// What the load accepted.
+    pub summary: PolicyLoadSummary,
+    /// One warning per message the load emitted, in emission order.
+    pub warnings: Vec<ReportEntry>,
+}
+
+/// A configured policy the run would refuse.
+#[derive(Debug)]
+pub struct PolicyLoadFailure {
+    /// The load that was checked.
+    pub load: FullFcfLoadKind,
+    /// The policy directory the load read.
+    pub policy_dir: PathBuf,
+    /// The step of the load that failed, boxed so the `Result`s carrying this failure stay small.
+    pub error: Box<FullFcfLoadError>,
+}
+
+impl PolicyLoadFailure {
+    /// The stable error-kind string programmatic callers filter on.
+    #[must_use]
+    pub fn kind(&self) -> String {
+        if self.error.class() == ErrorClass::Io {
+            "IoError".to_owned()
+        } else {
+            format!("{:?}", policy_load_error_kind(self.load))
+        }
+    }
+
+    /// The `"<policy directory>: <message>"` line both front ends present.
+    #[must_use]
+    pub fn report(&self) -> String {
+        format!("{}: {}", self.policy_dir.display(), self.error)
+    }
+}
+
 /// Why [`validate_study`] stopped.
 #[derive(Debug)]
 pub enum ValidateFailure {
@@ -131,10 +187,89 @@ pub enum ValidateFailure {
     ScenarioSource(LoadError),
     /// A preparation phase failed.
     Phase(PhaseFailure),
+    /// The configured warm-start, resume or simulation-only policy cannot be loaded.
+    PolicyLoad(PolicyLoadFailure),
 }
 
 fn at(phase: PrepPhase) -> impl FnOnce(SddpError) -> ValidateFailure {
     move |error| ValidateFailure::Phase(PhaseFailure { phase, error })
+}
+
+fn configured_full_fcf_load(plan: RunPhasePlan, mode: PolicyMode) -> Option<FullFcfLoadKind> {
+    match (plan, mode) {
+        (RunPhasePlan::TrainedThenSimulated, PolicyMode::WarmStart) => {
+            Some(FullFcfLoadKind::WarmStart)
+        }
+        (RunPhasePlan::TrainedThenSimulated, PolicyMode::Resume) => Some(FullFcfLoadKind::Resume),
+        (RunPhasePlan::SimulateFromPolicy, _) => Some(FullFcfLoadKind::SimulationOnly),
+        (RunPhasePlan::TrainedThenSimulated, PolicyMode::Fresh) | (RunPhasePlan::Nothing, _) => {
+            None
+        }
+    }
+}
+
+fn policy_load_error_kind(load: FullFcfLoadKind) -> ErrorKind {
+    match load {
+        FullFcfLoadKind::WarmStart | FullFcfLoadKind::SimulationOnly => {
+            ErrorKind::WarmStartIncompatible
+        }
+        FullFcfLoadKind::Resume => ErrorKind::ResumeIncompatible,
+    }
+}
+
+fn policy_load_warning(load: FullFcfLoadKind, policy_dir: &Path, message: &str) -> ReportEntry {
+    ReportEntry {
+        kind: format!("{:?}", policy_load_error_kind(load)),
+        file: policy_dir.display().to_string(),
+        entity: None,
+        message: message.to_owned(),
+    }
+}
+
+/// Check the policy `config` asks the run to load, without applying it.
+///
+/// The load is selected the way `cobre run` selects it, from the training flag,
+/// the simulation scenario count and `config.policy.mode`, and the policy is read
+/// from `output_dir` joined with the study's policy path. Nothing is written and
+/// `setup` is not changed.
+///
+/// # Errors
+///
+/// Returns the [`PolicyLoadFailure`] naming the load step the run would refuse.
+pub fn check_configured_policy_load(
+    system: &System,
+    setup: &StudySetup,
+    config: &Config,
+    output_dir: &Path,
+) -> Result<Option<PolicyLoadReport>, PolicyLoadFailure> {
+    let plan = RunPhasePlan::resolve(
+        config.training.enabled,
+        setup.simulation_config.n_scenarios > 0,
+    );
+    let Some(load) = configured_full_fcf_load(plan, config.policy.mode) else {
+        return Ok(None);
+    };
+
+    let policy_dir = output_dir.join(&setup.policy_path);
+    let failed = |error| PolicyLoadFailure {
+        load,
+        policy_dir: policy_dir.clone(),
+        error: Box::new(error),
+    };
+    let located = locate_policy_dir(load, output_dir, setup).map_err(failed)?;
+    let mut warnings = Vec::new();
+    let checked = check_full_fcf_load(load, &located, system, setup, &mut |message| {
+        warnings.push(policy_load_warning(load, &located, message));
+    })
+    .map_err(failed)?;
+
+    Ok(Some(PolicyLoadReport {
+        summary: PolicyLoadSummary {
+            load,
+            unused_stored_bases: checked.unused_stored_bases().map_or(0, |u| u.count),
+        },
+        warnings,
+    }))
 }
 
 /// Run every pre-solver check `cobre run` reaches before it starts solving, in
@@ -147,10 +282,15 @@ fn at(phase: PrepPhase) -> impl FnOnce(SddpError) -> ValidateFailure {
 /// guard (construction runs it) and reports every construction failure as
 /// [`PrepPhase::Boundary`].
 ///
+/// A configured warm-start, resume or simulation-only policy is checked with
+/// [`check_configured_policy_load`] after the study is built and before the
+/// boundary policy is reconciled, the order the run applies them.
+///
 /// # Errors
 ///
 /// Returns [`ValidateFailure::ScenarioSource`] when the training scenario source
-/// cannot be resolved, and [`ValidateFailure::Phase`] with the failing
+/// cannot be resolved, [`ValidateFailure::PolicyLoad`] when the configured policy
+/// cannot be loaded, and [`ValidateFailure::Phase`] with the failing
 /// [`PrepPhase`] for every other check.
 pub fn validate_study(request: ValidateRequest<'_>) -> Result<ValidatedStudy, ValidateFailure> {
     let ValidateRequest {
@@ -158,6 +298,7 @@ pub fn validate_study(request: ValidateRequest<'_>) -> Result<ValidatedStudy, Va
         config,
         system,
         artifacts,
+        output_dir,
     } = request;
 
     let params = StudyParams::from_config(config, Vec::new()).map_err(at(PrepPhase::Config))?;
@@ -202,15 +343,21 @@ pub fn validate_study(request: ValidateRequest<'_>) -> Result<ValidatedStudy, Va
     )
     .map_err(at(setup_phase))?;
 
+    let policy_load = check_configured_policy_load(&prepared.system, &setup, config, output_dir)
+        .map_err(ValidateFailure::PolicyLoad)?;
+
     let boundary = boundary_policy
         .map(|bp| reconcile_boundary_policy(&setup, &prepared.system, bp, case_dir))
         .transpose()
         .map_err(at(PrepPhase::Boundary))?;
 
+    let (policy_load, warnings) =
+        policy_load.map_or((None, Vec::new()), |r| (Some(r.summary), r.warnings));
     Ok(ValidatedStudy {
         system: prepared.system,
         boundary,
-        warnings: Vec::new(),
+        warnings,
+        policy_load,
     })
 }
 
@@ -267,7 +414,9 @@ pub fn prep_phase_metadata(phase: PrepPhase, err: &SddpError) -> (&'static str, 
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io;
 
+    use cobre_io::OutputError;
     use cobre_stochastic::StochasticError;
     use serde_json::{Value, json};
     use tempfile::TempDir;
@@ -307,6 +456,7 @@ mod tests {
             config: &config,
             system: loaded.system,
             artifacts: loaded.artifacts,
+            output_dir: &case.path().join("output"),
         })
     }
 
@@ -322,6 +472,7 @@ mod tests {
         let validated = validate_toy_case(|_| {}).unwrap();
         assert!(validated.boundary.is_none());
         assert!(validated.warnings.is_empty());
+        assert!(validated.policy_load.is_none());
     }
 
     #[test]
@@ -376,6 +527,98 @@ mod tests {
         assert_eq!(
             prep_phase_metadata(PrepPhase::StudySetup, &validation),
             ("StudySetupError", "config.json")
+        );
+    }
+
+    #[test]
+    fn policy_load_stage_follows_the_run_phase_plan() {
+        use FullFcfLoadKind::{Resume, SimulationOnly, WarmStart};
+
+        let trained = RunPhasePlan::TrainedThenSimulated;
+        let from_policy = RunPhasePlan::SimulateFromPolicy;
+        let nothing = RunPhasePlan::Nothing;
+        let table = [
+            (
+                trained,
+                PolicyMode::WarmStart,
+                Some((WarmStart, ErrorKind::WarmStartIncompatible)),
+            ),
+            (
+                trained,
+                PolicyMode::Resume,
+                Some((Resume, ErrorKind::ResumeIncompatible)),
+            ),
+            (trained, PolicyMode::Fresh, None),
+            (
+                from_policy,
+                PolicyMode::WarmStart,
+                Some((SimulationOnly, ErrorKind::WarmStartIncompatible)),
+            ),
+            (
+                from_policy,
+                PolicyMode::Resume,
+                Some((SimulationOnly, ErrorKind::WarmStartIncompatible)),
+            ),
+            (
+                from_policy,
+                PolicyMode::Fresh,
+                Some((SimulationOnly, ErrorKind::WarmStartIncompatible)),
+            ),
+            (nothing, PolicyMode::WarmStart, None),
+            (nothing, PolicyMode::Resume, None),
+            (nothing, PolicyMode::Fresh, None),
+        ];
+        for (plan, mode, expected) in table {
+            assert_eq!(
+                configured_full_fcf_load(plan, mode),
+                expected.map(|(load, _)| load),
+                "{plan:?} with {mode:?}"
+            );
+            if let Some((load, kind)) = expected {
+                assert_eq!(policy_load_error_kind(load), kind, "{load:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn policy_load_failure_reports_the_load_kind_or_io_error() {
+        let policy_dir = PathBuf::from("/case/output/policy");
+        let missing = |load| PolicyLoadFailure {
+            load,
+            policy_dir: policy_dir.clone(),
+            error: Box::new(FullFcfLoadError::MissingPolicyDirectory {
+                kind: load,
+                path: policy_dir.clone(),
+            }),
+        };
+        assert_eq!(
+            missing(FullFcfLoadKind::WarmStart).kind(),
+            "WarmStartIncompatible"
+        );
+        assert_eq!(
+            missing(FullFcfLoadKind::Resume).kind(),
+            "ResumeIncompatible"
+        );
+        assert_eq!(
+            missing(FullFcfLoadKind::SimulationOnly).kind(),
+            "WarmStartIncompatible"
+        );
+
+        let unreadable = PolicyLoadFailure {
+            load: FullFcfLoadKind::Resume,
+            policy_dir: policy_dir.clone(),
+            error: Box::new(FullFcfLoadError::Read {
+                source: OutputError::IoError {
+                    path: policy_dir.join("manifest.bin"),
+                    source: io::Error::from(io::ErrorKind::PermissionDenied),
+                },
+            }),
+        };
+        assert_eq!(unreadable.kind(), "IoError");
+        assert!(
+            unreadable.report().starts_with("/case/output/policy: "),
+            "got: {}",
+            unreadable.report()
         );
     }
 

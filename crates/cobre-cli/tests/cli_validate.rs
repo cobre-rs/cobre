@@ -2,8 +2,9 @@
 
 #![allow(clippy::unwrap_used)]
 
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use assert_cmd::prelude::*;
@@ -658,22 +659,76 @@ fn append_boundary_policy_with_strict(dir: &Path, boundary_policy_dir: &Path, st
     write_file(dir, "config.json", &config);
 }
 
-/// Rewrites `config.json` to warm-start training from the case's own
-/// just-produced checkpoint at the default `output/policy` path.
+/// Rewrites `config.json` to train with `policy.mode = mode` (`warm_start` or
+/// `resume`) from the case's own just-produced checkpoint at the default
+/// `output/policy` path.
+fn append_policy_mode(dir: &Path, mode: &str) {
+    let config = format!(
+        r#"{{
+            "training": {{
+                "selection": {{ "method": "sampled", "forward_passes": 1 }},
+                "stopping_rules": [{{ "type": "iteration_limit", "limit": 1 }}]
+            }},
+            "simulation": {{ "enabled": false }},
+            "modeling": {{ "inflow_non_negativity": {{ "method": "none" }} }},
+            "policy": {{ "mode": "{mode}" }}
+        }}"#
+    );
+    write_file(dir, "config.json", &config);
+}
+
 fn append_warm_start_policy(dir: &Path) {
+    append_policy_mode(dir, "warm_start");
+}
+
+fn append_resume_policy(dir: &Path) {
+    append_policy_mode(dir, "resume");
+}
+
+/// Rewrites `config.json` to simulate from the case's own just-produced
+/// checkpoint at the default `output/policy` path, without training.
+fn append_simulation_only_policy(dir: &Path) {
     write_file(
         dir,
         "config.json",
         r#"{
             "training": {
+                "enabled": false,
                 "selection": { "method": "sampled", "forward_passes": 1 },
                 "stopping_rules": [{ "type": "iteration_limit", "limit": 1 }]
             },
-            "simulation": { "enabled": false },
-            "modeling": { "inflow_non_negativity": { "method": "none" } },
-            "policy": { "mode": "warm_start" }
+            "simulation": { "enabled": true, "selection": { "method": "sampled", "num_scenarios": 1 } },
+            "modeling": { "inflow_non_negativity": { "method": "none" } }
         }"#,
     );
+}
+
+/// Every file under `dir` keyed by its path relative to `dir`, with its bytes:
+/// two equal snapshots hold the same relative paths, lengths and contents.
+fn snapshot_files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    fn walk(root: &Path, dir: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(root, &path, files);
+            } else {
+                let relative = path.strip_prefix(root).unwrap().to_path_buf();
+                files.insert(relative, fs::read(&path).unwrap());
+            }
+        }
+    }
+    let mut files = BTreeMap::new();
+    walk(dir, dir, &mut files);
+    files
+}
+
+fn validate_json(dir: &Path) -> (std::process::Output, serde_json::Value) {
+    let output = cobre()
+        .args(["validate", dir.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    let value = serde_json::from_slice(&output.stdout).unwrap();
+    (output, value)
 }
 
 /// A compatible boundary (the case's own just-produced checkpoint) prints the
@@ -1063,4 +1118,149 @@ fn boundary_policy_written_by_another_version_is_refused_at_run() {
             "this is cobre {}",
             env!("CARGO_PKG_VERSION")
         )));
+}
+
+/// A policy stamped by another program is refused by `cobre run`, and `cobre
+/// validate` reproduces the refusal without touching the policy directory.
+#[test]
+fn validate_refuses_a_warm_start_policy_written_by_other_software() {
+    let dir = TempDir::new().unwrap();
+    write_boundary_case(dir.path(), 0);
+    run_case(dir.path());
+    append_warm_start_policy(dir.path());
+    common::restamp_policy_software(&dir.path().join("output/policy"), "another-program");
+
+    cobre()
+        .args(["run", dir.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("written by another-program"))
+        .stderr(predicate::str::contains("run `cobre validate <CASE_DIR>`"));
+
+    let before = snapshot_files(&dir.path().join("output/policy"));
+    let (output, value) = validate_json(dir.path());
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["error"]["phase"], "WarmStartIncompatible");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("written by another-program"),
+        "got: {value}"
+    );
+    assert_eq!(snapshot_files(&dir.path().join("output/policy")), before);
+}
+
+/// A checkpoint written by another cobre version is refused by `validate` at
+/// resume load, under the resume kind.
+#[test]
+fn validate_refuses_a_resume_policy_written_by_another_version() {
+    let dir = TempDir::new().unwrap();
+    write_boundary_case(dir.path(), 0);
+    run_case(dir.path());
+    append_resume_policy(dir.path());
+    common::restamp_policy_version(&dir.path().join("output/policy"), "0.0.1");
+
+    let (output, value) = validate_json(dir.path());
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["error"]["phase"], "ResumeIncompatible");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("written by cobre 0.0.1"),
+        "got: {value}"
+    );
+}
+
+/// A simulation-only load shares the warm-start kind: there is no third kind.
+#[test]
+fn validate_refuses_a_simulation_only_policy_under_the_warm_start_kind() {
+    let dir = TempDir::new().unwrap();
+    write_boundary_case(dir.path(), 0);
+    run_case(dir.path());
+    append_simulation_only_policy(dir.path());
+    common::restamp_policy_version(&dir.path().join("output/policy"), "0.0.1");
+
+    let (output, value) = validate_json(dir.path());
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["error"]["phase"], "WarmStartIncompatible");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("written by cobre 0.0.1"),
+        "got: {value}"
+    );
+}
+
+#[test]
+fn validate_refuses_a_missing_policy_directory_without_creating_it() {
+    let dir = TempDir::new().unwrap();
+    write_boundary_case(dir.path(), 0);
+    append_warm_start_policy(dir.path());
+
+    let (output, value) = validate_json(dir.path());
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["error"]["phase"], "WarmStartIncompatible");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Policy directory not found"),
+        "got: {value}"
+    );
+    assert!(!dir.path().join("output").exists());
+}
+
+/// A policy file the process cannot open is an OS failure, not a refusal of the
+/// case: exit 2 under the `IoError` phase.
+#[cfg(unix)]
+#[test]
+fn validate_reports_an_unreadable_policy_manifest_as_an_io_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    write_boundary_case(dir.path(), 0);
+    run_case(dir.path());
+    append_warm_start_policy(dir.path());
+    let manifest = dir.path().join("output/policy/manifest.bin");
+    fs::set_permissions(&manifest, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&manifest).is_ok() {
+        return;
+    }
+
+    let (output, value) = validate_json(dir.path());
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(value["error"]["phase"], "IoError");
+}
+
+#[test]
+fn validate_json_has_no_policy_load_without_a_configured_policy() {
+    let dir = TempDir::new().unwrap();
+    make_valid_case(&dir);
+
+    let (output, value) = validate_json(dir.path());
+    assert_eq!(output.status.code(), Some(0));
+    assert!(!value.as_object().unwrap().contains_key("policy_load"));
+}
+
+/// An accepted warm-start or resume policy reports its mode and no unused bases.
+#[test]
+fn validate_json_reports_the_accepted_policy_load_mode() {
+    let dir = TempDir::new().unwrap();
+    write_boundary_case(dir.path(), 0);
+    run_case(dir.path());
+
+    for mode in ["warm_start", "resume"] {
+        append_policy_mode(dir.path(), mode);
+        let (output, value) = validate_json(dir.path());
+        assert_eq!(output.status.code(), Some(0), "{mode}: {value}");
+        assert_eq!(
+            value["policy_load"],
+            serde_json::json!({ "mode": mode, "unused_stored_bases": 0 }),
+            "{mode}"
+        );
+    }
 }

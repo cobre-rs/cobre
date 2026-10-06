@@ -133,8 +133,9 @@ pub fn load_case(py: Python<'_>, path: PathBuf) -> PyResult<PySystem> {
 ///
 /// Executes the full validation pipeline (case structure, schema, configuration,
 /// stochastic preparation, hydro models, generic constraints, study construction,
-/// and boundary reconciliation when configured), short-circuiting on the first
-/// failure.
+/// the configured warm-start, resume or simulation-only policy read from
+/// `<path>/output/`, and boundary reconciliation when configured),
+/// short-circuiting on the first failure.
 ///
 /// # Arguments
 ///
@@ -195,7 +196,7 @@ pub fn validate(
 }
 
 struct ValidateFailure {
-    kind: &'static str,
+    kind: String,
     message: String,
 }
 
@@ -206,19 +207,19 @@ fn run_validate_pipeline(
 ) -> Result<Vec<ReportEntry>, ValidateFailure> {
     if !path.exists() {
         return Err(ValidateFailure {
-            kind: "IoError",
+            kind: "IoError".to_owned(),
             message: format!("case directory does not exist: {}", path.display()),
         });
     }
 
     let (loaded, report) = validate_case_with_artifacts(path).map_err(|err| ValidateFailure {
-        kind: err.kind(),
+        kind: err.kind().to_owned(),
         message: err.to_string(),
     })?;
 
     let config = load_validate_config(&path.join("config.json"), overrides).map_err(|err| {
         ValidateFailure {
-            kind: err.kind(),
+            kind: err.kind().to_owned(),
             message: err.to_string(),
         }
     })?;
@@ -228,13 +229,18 @@ fn run_validate_pipeline(
         config: &config,
         system: loaded.system,
         artifacts: loaded.artifacts,
+        output_dir: &path.join("output"),
     })
     .map_err(|failure| match failure {
         validate_phases::ValidateFailure::ScenarioSource(err) => ValidateFailure {
-            kind: err.kind(),
+            kind: err.kind().to_owned(),
             message: err.to_string(),
         },
         validate_phases::ValidateFailure::Phase(failure) => ValidateFailure {
+            kind: failure.kind().to_owned(),
+            message: failure.report(),
+        },
+        validate_phases::ValidateFailure::PolicyLoad(failure) => ValidateFailure {
             kind: failure.kind(),
             message: failure.report(),
         },

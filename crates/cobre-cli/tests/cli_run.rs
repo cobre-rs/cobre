@@ -1408,6 +1408,66 @@ fn simulation_only_loads_a_policy_with_a_wider_stored_basis_and_warns() {
         .stderr(predicate::str::contains("stored bases not used").not());
 }
 
+/// The policy of the wider-basis variant, validated against the original
+/// 1dtoy for simulation-only: stored bases that no longer fit are warnings, and
+/// validate still exits 0, with the same count in the human line and in `--json`.
+#[test]
+fn simulation_only_validate_warns_about_unused_stored_bases_and_exits_0() {
+    let variant_dir = TempDir::new().unwrap();
+    copy_dir_recursive(&case_dir("1dtoy"), variant_dir.path());
+    write_file(
+        variant_dir.path(),
+        "system/thermals.json",
+        THERMALS_WITH_EXTRA_JSON,
+    );
+    write_file(variant_dir.path(), "config.json", CONFIG_VARIANT_TRAIN_JSON);
+
+    let sim_only_dir = TempDir::new().unwrap();
+    copy_dir_recursive(&case_dir("1dtoy"), sim_only_dir.path());
+    write_file(
+        sim_only_dir.path(),
+        "config.json",
+        CONFIG_SIMULATION_ONLY_JSON,
+    );
+    cobre()
+        .args([
+            "run",
+            variant_dir.path().to_str().unwrap(),
+            "--output",
+            sim_only_dir.path().join("output").to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .success();
+
+    let human = cobre()
+        .args(["validate", sim_only_dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&human.get_output().stdout).into_owned();
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("warning:") && line.contains("stored bases not used: "))
+        .unwrap_or_else(|| panic!("no unused-basis warning line: {stdout}"));
+    let count: usize = line
+        .split("stored bases not used: ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no count in: {line}"));
+    assert!(count > 0, "{line}");
+
+    let json = cobre()
+        .args(["validate", sim_only_dir.path().to_str().unwrap(), "--json"])
+        .assert()
+        .success();
+    let value: serde_json::Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
+    assert_eq!(
+        value["policy_load"],
+        serde_json::json!({ "mode": "simulation_only", "unused_stored_bases": count })
+    );
+}
+
 fn policy_mode_config(mode: &str) -> String {
     format!(
         r#"{{

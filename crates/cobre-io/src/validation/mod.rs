@@ -82,9 +82,9 @@ pub enum ErrorKind {
     DimensionMismatch,
     /// A domain-specific business rule is violated.
     BusinessRuleViolation,
-    /// A warm-start policy is structurally incompatible with the current system.
+    /// A stored policy loaded to seed training, or to run simulation only, cannot be used with the current case.
     WarmStartIncompatible,
-    /// A resume state is incompatible with the current run configuration.
+    /// A stored checkpoint loaded to resume training cannot be used with the current case.
     ResumeIncompatible,
     /// A feature that is used in the input files is not yet implemented.
     NotImplemented,

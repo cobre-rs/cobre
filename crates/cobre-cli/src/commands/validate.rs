@@ -14,9 +14,10 @@
 //! fail in any phase before the solver begins iterating. After the case loads and
 //! `config.json` parses, every pre-solver check runs through
 //! [`cobre_sddp::validate_phases::validate_study`], the pipeline `cobre.io.validate`
-//! shares: it builds the study with the constructor `cobre run` uses, and, when
+//! shares: it builds the study with the constructor `cobre run` uses, checks the
+//! warm-start, resume or simulation-only policy the run would load, and, when
 //! `config.policy.boundary` is configured, reconciles the boundary policy against
-//! its terminal manifest, without solving. A phase failure exits by its
+//! its terminal manifest, without solving. A failure exits by its
 //! [`cobre_sddp::ErrorClass`].
 
 use std::path::{Path, PathBuf};
@@ -24,8 +25,11 @@ use std::path::{Path, PathBuf};
 use chrono::NaiveDate;
 use clap::Args;
 use cobre_io::{LoadError, ReportEntry, validate_case_with_artifacts};
-use cobre_sddp::validate_phases::{PhaseFailure, ValidateFailure, ValidateRequest, validate_study};
-use cobre_sddp::{BoundaryReconciliation, BoundaryReconciliationReport, ErrorClass, SddpError};
+use cobre_sddp::policy::full_fcf_load::FullFcfLoadKind;
+use cobre_sddp::validate_phases::{
+    PolicyLoadSummary, ValidateFailure, ValidateRequest, validate_study,
+};
+use cobre_sddp::{BoundaryReconciliation, BoundaryReconciliationReport, ErrorClass};
 use console::{Term, style};
 use serde::Serialize;
 
@@ -54,12 +58,21 @@ struct ValidateBoundaryOutput {
     boundary_date: Option<NaiveDate>,
     /// The reconciliation report when `configured` is `Some(true)`.
     report: Option<BoundaryReconciliationReport>,
+    /// The policy load `cobre run` would apply, present only when one is configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_load: Option<PolicyLoadOutput>,
     /// The failing phase and message, populated only on an early abort.
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<ValidateErrorOutput>,
 }
 
-/// Early-abort failure. `phase` is the stable kind string from [`PhaseFailure::kind`] or [`LoadError::kind`] (same string programmatic callers filter on).
+#[derive(Debug, Serialize)]
+struct PolicyLoadOutput {
+    mode: &'static str,
+    unused_stored_bases: usize,
+}
+
+/// Early-abort failure. `phase` is the stable kind string from [`cobre_sddp::validate_phases::PhaseFailure::kind`], [`cobre_sddp::validate_phases::PolicyLoadFailure::kind`] or [`LoadError::kind`] (same string programmatic callers filter on).
 #[derive(Debug, Serialize)]
 struct ValidateErrorOutput {
     phase: String,
@@ -67,11 +80,22 @@ struct ValidateErrorOutput {
 }
 
 impl ValidateBoundaryOutput {
-    fn success(boundary: Option<&BoundaryReconciliation>) -> Self {
+    fn success(
+        boundary: Option<&BoundaryReconciliation>,
+        policy_load: Option<PolicyLoadSummary>,
+    ) -> Self {
         Self {
             configured: Some(boundary.is_some()),
             boundary_date: boundary.map(|b| b.boundary_date),
             report: boundary.map(|b| b.cuts.report().clone()),
+            policy_load: policy_load.map(|summary| PolicyLoadOutput {
+                mode: match summary.load {
+                    FullFcfLoadKind::WarmStart => "warm_start",
+                    FullFcfLoadKind::Resume => "resume",
+                    FullFcfLoadKind::SimulationOnly => "simulation_only",
+                },
+                unused_stored_bases: summary.unused_stored_bases,
+            }),
             error: None,
         }
     }
@@ -81,6 +105,7 @@ impl ValidateBoundaryOutput {
             configured: None,
             boundary_date: None,
             report: None,
+            policy_load: None,
             error: Some(ValidateErrorOutput {
                 phase: phase.to_string(),
                 message: message.to_string(),
@@ -141,35 +166,36 @@ fn print_prep_error(term: &Term, report: &str, case_dir: &Path) {
     let _ = term.write_line(&format!("{} {report}", style("error:").red().bold()));
 }
 
-/// The exit a phase failure takes, from its [`ErrorClass`]. `report` has already
-/// been rendered, so a refusal of the case carries `already_rendered: true`.
-fn phase_failure_cli_error(error: SddpError, report: String) -> CliError {
-    match error.class() {
+/// The exit a failure takes, from its [`ErrorClass`]. `report` has already been
+/// rendered, so a refusal of the case carries `already_rendered: true`; every
+/// other class exits with `other`.
+fn failure_cli_error(class: ErrorClass, report: String, other: CliError) -> CliError {
+    match class {
         ErrorClass::InvalidInput | ErrorClass::IncompatiblePolicy => CliError::Validation {
             report,
             already_rendered: true,
         },
-        ErrorClass::Io | ErrorClass::Solver | ErrorClass::Internal => CliError::from(error),
+        ErrorClass::Io | ErrorClass::Solver | ErrorClass::Internal => other,
     }
 }
 
-/// Render a pre-solver phase failure (human, or the `--json` error object) and
-/// return the error the command exits with. `stdout_sink` is `None` under
-/// `--json`, where the error object replaces the human report.
-fn render_phase_failure(
+/// Render a pre-solver failure (human, or the `--json` error object).
+/// `stdout_sink` is `None` under `--json`, where the error object replaces the
+/// human report.
+fn render_failure(
     stdout_sink: Option<&Term>,
     json: bool,
-    failure: PhaseFailure,
+    kind: &str,
+    report: &str,
     case_dir: &Path,
-) -> Result<CliError, CliError> {
-    let report = failure.report();
+) -> Result<(), CliError> {
     if let Some(term) = stdout_sink {
-        print_prep_error(term, &report, case_dir);
+        print_prep_error(term, report, case_dir);
     }
     if json {
-        emit_validate_json(&ValidateBoundaryOutput::error(failure.kind(), &report))?;
+        emit_validate_json(&ValidateBoundaryOutput::error(kind, report))?;
     }
-    Ok(phase_failure_cli_error(failure.error, report))
+    Ok(())
 }
 
 /// Serialize `output` as `cobre validate --json`'s single stdout JSON object.
@@ -261,6 +287,7 @@ pub fn execute(args: &ValidateArgs) -> Result<(), CliError> {
         config: &config,
         system: loaded.system,
         artifacts: loaded.artifacts,
+        output_dir: &args.case_dir.join("output"),
     }) {
         Ok(validated) => validated,
         Err(ValidateFailure::ScenarioSource(err)) => {
@@ -268,18 +295,41 @@ pub fn execute(args: &ValidateArgs) -> Result<(), CliError> {
             return Err(CliError::from(err));
         }
         Err(ValidateFailure::Phase(failure)) => {
-            return Err(render_phase_failure(
+            let report = failure.report();
+            render_failure(
                 stdout_sink,
                 args.json,
-                failure,
+                failure.kind(),
+                &report,
                 &args.case_dir,
-            )?);
+            )?;
+            return Err(failure_cli_error(
+                failure.error.class(),
+                report,
+                CliError::from(failure.error),
+            ));
+        }
+        Err(ValidateFailure::PolicyLoad(failure)) => {
+            let report = failure.report();
+            render_failure(
+                stdout_sink,
+                args.json,
+                &failure.kind(),
+                &report,
+                &args.case_dir,
+            )?;
+            return Err(failure_cli_error(
+                failure.error.class(),
+                report,
+                CliError::from(*failure.error),
+            ));
         }
     };
 
     if args.json {
         emit_validate_json(&ValidateBoundaryOutput::success(
             validated.boundary.as_ref(),
+            validated.policy_load,
         ))?;
         return Ok(());
     }
@@ -318,6 +368,9 @@ pub fn execute(args: &ValidateArgs) -> Result<(), CliError> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use cobre_io::{ReportEntry, ValidationReport};
+    use cobre_sddp::SddpError;
+
+    use super::*;
 
     fn make_report() -> ValidationReport {
         ValidationReport {
@@ -333,15 +386,18 @@ mod tests {
         }
     }
 
-    use super::*;
-
     #[test]
     fn phase_failure_exit_code_follows_the_error_class() {
         let stochastic =
             SddpError::Stochastic(cobre_stochastic::StochasticError::InsufficientData {
                 context: "no valid historical windows found".to_string(),
             });
-        let refusal = phase_failure_cli_error(stochastic, "scenarios/: refused".to_string());
+        let class = stochastic.class();
+        let refusal = failure_cli_error(
+            class,
+            "scenarios/: refused".to_string(),
+            CliError::from(stochastic),
+        );
         assert!(matches!(
             refusal,
             CliError::Validation {
@@ -355,7 +411,12 @@ mod tests {
             path: PathBuf::from("scenarios/inflow_history.parquet"),
             source: std::io::Error::new(std::io::ErrorKind::NotFound, "not found"),
         });
-        let io = phase_failure_cli_error(unreadable, "scenarios/: not found".to_string());
+        let class = unreadable.class();
+        let io = failure_cli_error(
+            class,
+            "scenarios/: not found".to_string(),
+            CliError::from(unreadable),
+        );
         assert_eq!(io.exit_code(), 2);
     }
 

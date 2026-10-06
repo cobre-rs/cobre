@@ -337,18 +337,16 @@ change; their test suite gave false "still used" confidence.
 **Resolution.** The three methods and their tests are removed in a licensed
 public-API break; `sync_level_records` is the sole cut-exchange path.
 
-### Python-binding Rust tests invisible to CI
+### Python-binding Rust tests invisible to CI — RESOLVED
 
-**What it is.** The Python-binding crate is excluded from the workspace, and its
-CI job runs only the Python build plus pytest, so the crate's Rust `#[cfg(test)]`
-modules are never compiled or run in CI. Fix: either wire a `cargo check --tests`
-for the crate, or hoist a shared node-graph test-fixture builder into
-`cobre_sddp::test_support` so those Rust tests live in a CI-visible crate.
+**What it was.** The Python-binding crate is excluded from the workspace, and its
+CI job ran only the Python build plus pytest, so the crate's Rust `#[cfg(test)]`
+modules were never compiled or run in CI.
 
-**Owner.** The build / CI owner.
-
-**Trigger.** Systemic — the next CI-configuration pass (a Rust test regression in
-that crate would otherwise ship unseen).
+**Resolution.** The `python` job's `Run Rust tests for the bindings crate` step
+runs them on one interpreter leg (`--no-default-features --features highs`, with
+libpython on the loader path). Linting the crate is a separate open item, under
+"The Python bindings crate is not linted by CI".
 
 ### Python policy-write refusal still classified by message prefix
 
@@ -364,7 +362,9 @@ message and leave the prefix branch with no producer.
 **Owner.** The Python bindings owner.
 
 **Trigger.** A second refusal joins the writer, the writer's error text changes, or
-the next change to the bindings' exception routing.
+the next change to the bindings' exception routing. Met by the 2026-10 fix wave (the
+text of `SddpError::PolicySoftwareMismatch` now ends with the sentence
+`policy_checkpoint_remedy` owns); the work is still open.
 
 ### Python raises SolverError for internal faults
 
@@ -372,6 +372,11 @@ the next change to the bindings' exception routing.
 wire-format mismatch, basis-shape mismatch) raise `cobre.errors.SolverError`, while
 `cobre run` reports them as internal faults and `cobre.errors.InternalError` exists
 for that meaning. Mapping them to `InternalError` changes a public exception class.
+The `CheckpointWrite` arm of the same routing (`output_error` in
+`crates/cobre-python/src/errors.rs`) keeps its own table, finer than `ErrorClass`:
+a not-found I/O error is a `FileNotFoundError`, and serialization and schema
+errors are `OutputError`. Folding that arm into the class mapping would change
+those classes too.
 
 **Owner.** The Python bindings owner.
 
@@ -401,7 +406,9 @@ is a deletion candidate.
 
 **Owner.** The setup / config owner.
 
-**Trigger.** The next licensed input-format break.
+**Trigger.** The next licensed input-format break. Met by the 2026-10 fix wave (the
+mandatory `iteration_limit` rule in `training.stopping_rules`); the work is still
+open.
 
 ### Reserved and consumed knobs (snapshot correction)
 
@@ -612,7 +619,9 @@ therefore change the resolved costs.
 key like the one the bound-override files have.
 
 **Trigger.** A case is found with duplicate penalty override rows, or the
-validation rule table next gains an input-uniqueness rule.
+validation rule table next gains an input-uniqueness rule. Met by the 2026-10 fix
+wave (the rule table registers input-uniqueness rules such as
+`SEMANTIC_BOUND_ROW_DUPLICATE`); the work is still open.
 
 ### Exported schema titles and `$defs` names are Rust type names
 
@@ -634,7 +643,9 @@ names to case authors.
 in `crates/cobre-python/src/run.rs`) flattens checkpoint write errors into a
 `POLICY_CHECKPOINT_ERROR_PREFIX` message. A write-time
 `OutputError::ForeignEntry` therefore raises `CaseIoError` there, while the
-CLI exits 1 and `cobre.write_policy_checkpoint` raises `ValidationError`.
+CLI exits 1 and `cobre.write_policy_checkpoint` raises `ValidationError`. A
+write-time `NotFound` splits the same way between Python run's final write and
+its periodic write.
 
 **Owner.** The Python bindings owner.
 
@@ -854,8 +865,9 @@ order, under what guards), held together only by the Python-parity rule plus
 mirror comments, with no shared owner — confirmed across both training and
 simulation outputs, including the census scenario-summary tuple-reshape copied
 on both sides and pinned by a test that itself exists in both crates. Target:
-hoist the shared "output set + guards" (the pattern the Python `*_if_any`
-helpers already prove) into a crate both the CLI and Python depend on.
+hoist the shared "output set + guards" (the pattern Python's
+`write_training_outputs` already follows) into a crate both the CLI and Python
+depend on.
 
 **Current state (2026-09-17).** The Python side now has one internal owner (`cobre.run.run`
 drives the `Study` lifecycle), and a golden test runs the toy example through both entry
@@ -982,12 +994,21 @@ workspace.
   builder submodules use extracted test files. Split each into a directory module
   / sibling test file matching the crate's prevailing convention. **Owner.** The
   training owner. **Trigger.** Navigability-driven, low priority.
-- **Policy-dir resolve triplication + naming split.** The policy-directory
-  resolve-and-guard skeleton is repeated across the warm-start, resume, and
-  simulation load sites; extract a shared resolver. Two naming conventions for the
-  same borrowed/owned duality coexist; unify them. One manifest name is stale (it
-  is a whole-comparison bundle carrying node/pool counts, not a per-stage record).
-  **Owner.** The policy owner. **Trigger.** The next policy-load change.
+- **Policy-dir resolve triplication + naming split.** The warm-start, resume and
+  simulation loads resolve the policy directory through `locate_policy_dir`
+  (`crates/cobre-sddp/src/policy/full_fcf_load.rs`). The sites that write the
+  checkpoint (`write_training_outputs` in
+  `crates/cobre-cli/src/commands/run/outputs.rs` and in
+  `crates/cobre-python/src/run.rs`, and `enable_periodic_checkpoints` in
+  `crates/cobre-sddp/src/setup/accessors.rs`) and the validate phase's policy-load
+  check (`crates/cobre-sddp/src/validate_phases.rs`) still join the output
+  directory and `policy.path` themselves, so the periodic and final checkpoint
+  directories have no single owner. Two naming conventions for the same
+  borrowed/owned duality coexist; unify them. One manifest name is stale
+  (`PolicyStageManifest` is a whole-comparison bundle carrying node/pool counts,
+  not a per-stage record). **Owner.** The policy owner. **Trigger.** The next
+  policy-load change. Met by the 2026-10 fix wave (`locate_policy_dir`); the work
+  is still open.
 - **Basis-reconstruct hardening.** Add the truncation debug-assertion at the
   reconstruction entry and drop the always-zero telemetry field; the positional
   demotion of excess basic cuts is a count-balance necessity, not a quality bug —
@@ -1246,7 +1267,9 @@ byte-neutral because the template sorts entries before CSC assembly.
 
 **Owner.** The LP-builder owner.
 
-**Trigger.** The next outflow-row or entries-builder touch.
+**Trigger.** The next outflow-row or entries-builder touch. Met by the 2026-10 fix
+wave (the maturing-bucket coupling written by `fill_parallel_water_entries` in
+`crates/cobre-sddp/src/lp/builder/entries.rs`); the work is still open.
 
 #### Opening-outcome aggregation takes an untyped projection role
 
@@ -1265,10 +1288,11 @@ pass `&SuccessorSpec`, or a role newtype.
 
 #### Minor residues (same wave, small)
 
-- `IterationScratch`'s upper-bound buffers (`ub_path_weights`,
-  `ub_stage_costs`) are lazily grown on first use while the struct doc
-  promises allocation in `new` — size them in `new` beside their pre-sized
-  siblings. **Owner.** Training. **Trigger.** Next scratch touch.
+- **`IterationScratch` upper-bound buffers — RESOLVED.** `ub_path_weights` and
+  `ub_stage_costs` were lazily grown on first use while the struct doc promises
+  allocation in `new`. **Resolution.** `IterationScratch::new` reserves both with
+  `Vec::with_capacity`. The scratch of the nested risk-adjusted bound
+  (`nested_ub`) grows on first use by design.
 - `CutStateProjection` exposes only the fused `dot_trial_state`; the
   cut-selection sweep open-codes the gather loop. Add a gather-only sibling
   and define the dot over it. **Owner.** Training. **Trigger.** Next
@@ -1313,14 +1337,16 @@ structural fix.
 #### Cross-path static-RHS contract not yet in `.claude/rules/sddp.md`
 
 **What it is.** The stage-0 lower-bound static LP RHS must read the same
-`PrecomputedNormal` moment source the runtime reconstruction uses
-(`load_models_from_normal`) — the load analogue of the "lower-bound evaluation must
-patch NCS" contract. It is a Voice-1 doc comment on the owning symbols + pinned by
-tests, but not yet mirrored into `.claude/rules/sddp.md`.
+`PrecomputedNormal` moment source the runtime reconstruction uses — the load
+analogue of the "lower-bound evaluation must patch NCS" contract. It is a Voice-1
+doc comment on the owning symbols + pinned by tests, but not yet mirrored into
+`.claude/rules/sddp.md`.
 
 **Owner.** The SDDP-rules owner.
 
 **Trigger.** Next `.claude/rules/sddp.md` edit — add the contract beside the NCS one.
+Met by the 2026-10 fix wave (the stored-basis edits to `.claude/rules/sddp.md`); the
+work is still open.
 
 ### Cleared (recorded so a future audit does not re-raise)
 
@@ -1936,8 +1962,11 @@ sets a CPU-specific flag, or a reported CLP allocation failure during a reset.
   `crates/cobre-sddp/src/setup/stochastic_pipeline.rs` and
   `crates/cobre-stochastic/src/par/lag_transition.rs` still say "crosses
   season_id >= 12". The fixtures do cross id 12, so the messages are literally
-  true, but the cascade no longer activates on an id threshold. **Owner.** The
-  training / test owner. **Trigger.** The next edit to those tests.
+  true, but the cascade no longer activates on an id threshold. One of them, in
+  `test_derive_downstream_par_order_custom_quarterly_stays_active`, also says
+  only Weekly is gated off, which holds now only because Weekly seasons span
+  seven days. **Owner.** The training / test owner. **Trigger.** The next edit
+  to those tests.
 - **`.venv` at the repo root is not ignored.** `CONTRIBUTING.md` § "Testing
   cobre-python" creates `.venv` at the repo root, and `.gitignore` ignores
   `.venv-mpi-smoke/` and `.venv.claude/` but not `.venv`. **Owner.** The
@@ -2022,7 +2051,10 @@ bridge's minimum-version constant and its packaging tests treat the dependency
 as a floor. The rework is an exact `==` pin kept equal to that constant by the
 packaging tests, with the floor and lockstep wording in the bridge's
 `CONTRIBUTING.md` and `CLAUDE.md` and a changelog line updated to match. Every
-cobre patch release then needs a matching bridge release, by design.
+cobre patch release then needs a matching bridge release, by design. The bridge's
+`tests/decomp/test_fcf_writer.py` also reads the checkpoint metadata key
+`cobre_version`, which `cobre.results.load_policy` now reports as
+`software_version`, so that test needs the rename.
 
 **Owner.** The build / CI owner.
 
@@ -2041,8 +2073,9 @@ broadcast failure (length 0)", followed by the report-a-bug hint). `execute`
 aborts each rank with its own code, and the launcher reports the first abort it
 receives, which is a peer's. A refusal that exits 1 single-process therefore
 exits 4 under `mpiexec -n 2` with MPICH. Rank 0 renders its own error only in
-`execute`, after the collective, so its text also races the peers' aborts, both
-for a load refusal and for a failed rank-0 write after `agree_post_write`
+`execute`, after the collective, so its text also races the peers' aborts, for
+a load refusal, for a training failure and for a failed rank-0 write after
+`agree_post_write`
 (`crates/cobre-cli/src/commands/run/graceful_stop.rs`).
 
 The rework: in the failure branch only, rank 0 sends its exit code in the
@@ -2078,6 +2111,12 @@ broadcasts.
 - No code in `crates/cobre-python` touches SIGTERM, so the process dies by the
   default action wherever training is, and a scheduler's time-limit SIGTERM loses
   every iteration since the last periodic checkpoint.
+
+Until then, the skipped-simulation writers of this path (`skip_simulation_native`
+in `crates/cobre-python/src/study.rs` and `write_skipped_simulation_py` in
+`crates/cobre-python/src/run.rs`) are unreachable from a Python run, and
+`scripts/ci/check_python_parity.py` still counts that writer as shared with the
+CLI, so the parity gate passes for a write that no Python run performs.
 
 The rework: the calling (main) thread services signals while training runs on a
 `std::thread::scope` worker, looping over the iteration channel and
@@ -2196,7 +2235,10 @@ Small corrections that change no behaviour, one bullet each.
 - **Recording GIFs.** The tapes in `recordings/` now run against the current
   config schema, but the committed GIFs in `recordings/` were rendered earlier
   and show an older banner and earlier CLI output. `recordings/generate.sh`
-  regenerates them, and `recordings/setup.sh` installs its tools.
+  regenerates them, and `recordings/setup.sh` installs its tools. The `Sleep`
+  durations in `recordings/multithreading.tape` were set from runs on a loaded
+  host, and the 1dtoy case now runs to its required iteration limit, so re-time
+  them on a quiet host before regenerating.
   **Trigger.** A release, or a CLI text change that makes the GIFs visibly
   stale.
 
@@ -2587,6 +2629,414 @@ passes today, but its result depends on `drift.diff` still being empty when
 
 **Trigger.** The next edit to that script, or a drift report that lists
 `drift.diff` itself.
+
+### The checkpoint swap cannot tell cobre's leftovers from a user's copies
+
+**What it is.** The checkpoint writer commits a policy through a `<path>.staging`
+sibling and renames the old copy to `<path>.previous`. After an interruption,
+`finish_interrupted_swap` (`crates/cobre-io/src/output/policy/checkpoint.rs`)
+renames back or removes whichever of the two it finds, as its own leftovers. A
+user's backup copy under either name holds only checkpoint entries, so it passes
+`check_checkpoint_replaceable` and is renamed or removed. The names are reserved
+in documentation only; nothing enforces it. A swap journal that records which
+siblings cobre created would tell the two apart. It changes the on-disk protocol
+of the policy directory, so it is a design change, not a patch.
+
+**Owner.** The cobre-io output owner.
+
+**Trigger.** A user reports a backup copy lost beside a policy directory, or the
+next change to the checkpoint commit protocol.
+
+### A refused checkpoint write loses the training outputs
+
+**What it is.** Both `write_training_outputs` functions
+(`crates/cobre-cli/src/commands/run/outputs.rs` and
+`crates/cobre-python/src/run.rs`) call `write_checkpoint` before they write any
+training result. A refusal there therefore ends the phase with none of the
+results on disk. The load-time checks refuse a foreign entry that exists before
+the run. An entry created during training, or one in a directory the run writes
+into but never clears, is refused only at the write, after the training that
+produced the results; a refused periodic write ends the training itself. The
+rework writes the results whatever the checkpoint's outcome, or before it.
+
+**Owner.** The training owner.
+
+**Trigger.** A report of training results lost to a checkpoint refusal, or the
+next change to the order of the training writes.
+
+### Policy reads beside a writer or on a non-coherent file system
+
+**What it is.** A policy read (warm-start, resume, simulation-only or boundary)
+has no protection against a writer that commits at the same time. Two cases:
+
+- a reader job running beside a foreign writer on any file system. A
+  simulation-only run pointed at the policy directory of a live training run
+  that writes periodic checkpoints is the realistic one;
+- NFS or EFS attribute and negative-lookup caching, which can show a node a stale
+  view for a while after another client's swap.
+
+Every rank reads the checkpoint itself, so ranks can resolve different copies.
+A simulation-only run then gives placement-dependent results. A resume gives
+each rank its own starting iteration, hence different collective sequences (a
+hang or an MPI error). A warm-start gives divergent cut pools into the cut
+exchange. A single process can also pair one copy's `manifest.bin` with another
+copy's payload files while a swap runs (`read_checkpoint_dir` in
+`crates/cobre-io/src/output/policy/checkpoint.rs`). The release README states a
+one-writer-per-policy-directory rule for users. The prepared fix is one
+allreduce after `check_policy_load`
+(`crates/cobre-cli/src/commands/run/policy.rs`) over the load outcome and a
+fingerprint of the manifest bytes and completed iterations, failing every rank
+in lockstep when they differ. A success-path collective was weighed and not
+adopted, since it would not make a reader beside a writer correct; a reader-side
+snapshot is a separate design.
+
+**Owner.** The MPI / policy-reuse owner.
+
+**Trigger.** A report of a reader job beside a writer, or a run on an NFS-backed
+output directory.
+
+### One rank's failed policy load aborts the whole job
+
+**What it is.** Warm-start, resume and simulation-only each read the checkpoint
+on every rank (`check_policy_load`,
+`crates/cobre-cli/src/commands/run/policy.rs`). A rank whose load fails ends the
+job through `comm.abort`. Nothing hangs, but the healthy ranks of a
+simulation-only run may leave partial simulation partitions behind, which the
+next run's start-up clear removes. A refusal on rank 0 alone is a different path,
+described under "MPI load refusals do not exit with the refusal's own code". The
+lockstep reconcile described in "Policy reads beside a writer or on a
+non-coherent file system" closes this case too.
+
+**Owner.** The MPI / policy-reuse owner.
+
+**Trigger.** A policy load that fails on a subset of ranks, or the trigger of the
+previous entry.
+
+### Simulation-only runs rewrite training files beside a stale training marker
+
+**What it is.** `run_root_exports`
+(`crates/cobre-cli/src/commands/run/setup.rs`) writes
+`training/hydro_models.json`, `training/model_provenance.json` and
+`training/scaling_report.json` on every run, and removes `training/_SUCCESS`
+only when training is enabled. A simulation-only run therefore rewrites files
+under `training/` beside the earlier training run's marker, although
+`remove_success_marker`'s rustdoc promises that a reused output directory never
+shows an old marker beside files a new run is still writing. The rework skips
+those writes, or removes the marker, when training is not enabled. The Python
+write path is the other copy to check.
+
+**Owner.** The output-contract owner.
+
+**Trigger.** A consumer that reads `training/_SUCCESS` beside the rewritten
+files of a simulation-only run, or the next change to `run_root_exports`.
+
+### A training run that ends on an error is marked complete
+
+**What it is.** When training ends on an error, `write_training_outputs` still
+writes the partial outputs and then `training/_SUCCESS`, and the metadata
+records `status` as `complete` (`RunStatus::Complete` is documented as every
+ending other than a shutdown request, an error included). The run's exit code,
+its `termination_reason` and the Python exception carry the failure. The marker
+therefore means the phase finished writing, not that training succeeded, while
+the "Partial outputs written" message and the wording of `remove_success_marker`
+read as if an errored run left no marker. The rework either words both to say
+what the marker means, or withholds the marker and reports `partial` on an
+error.
+
+**Owner.** The output-contract owner.
+
+**Trigger.** A consumer that takes `training/_SUCCESS` or `status: complete` as
+"training succeeded", or the next change to the marker or `RunStatus`.
+
+### The simulation-output remover deletes whatever sits at a family path
+
+**What it is.** `remove_simulation_outputs`
+(`crates/cobre-io/src/output/simulation_writer.rs`) calls `remove_dir_all` on
+each `simulation/<family>/` tree, so files cobre did not write there are
+deleted, and a symbolic link at a family path is removed. The training remover
+works file by file. If `simulation/solver` is a symbolic link to a directory,
+the remover deletes the two solver files behind the link, and the `remove_dir`
+that follows fails on the link, so the run-start clear stops with an I/O error
+naming `solver/`. That is loud, not silent. The rework removes file by file, as
+the training remover does, or refuses a non-directory at a family path before
+deleting anything.
+
+**Owner.** The output-contract owner.
+
+**Trigger.** A user report of a symlinked or hand-populated `simulation/` tree,
+or the next change to the remover.
+
+### Boundary checkpoint read failures are classed as validation errors
+
+**What it is.** `load_boundary_cuts` and `boundary_policy_required_lag_depth`
+(`crates/cobre-sddp/src/policy/policy_load.rs`) map every `OutputError` from
+reading the boundary checkpoint to `SddpError::Validation`, which is exit 1 and
+`ValidationError`. The full-FCF load classes the same read errors as an
+incompatible policy or an I/O failure. An old-format boundary checkpoint
+therefore raises `ValidationError` in Python where a warm-start of the same
+checkpoint raises `PolicyIncompatibleError`, and an unreadable boundary file
+exits 1 where the full-FCF load exits 2. The rework is a typed boundary-read
+error that carries its class.
+
+**Owner.** The policy owner.
+
+**Trigger.** A caller that tells the two failures apart by exit code or by
+exception class, or the next change to the boundary load.
+
+### Exported schema descriptions present reserved keys as working features
+
+**What it is.** Some `config.json` keys are loaded, validated and
+exported with descriptions that state an effect nothing performs:
+
+- `training.solver.retry_max_attempts` and
+  `training.solver.retry_time_budget_seconds` (`TrainingSolverConfig`,
+  `crates/cobre-io/src/config/training.rs`). The solver's retry ladder reads its
+  own fixed limits, as described under "Solver retry wall-clock budgets decide
+  whether a run completes";
+- the `upper_bound_evaluation` keys (`UpperBoundEvaluationConfig`), the reserved
+  seam recorded in the reserved-seam register.
+
+Both stay reserved, per the rule that unwired config is reserved, not dead.
+`policy.checkpointing.compress` and `store_basis` have their own reserved-seam
+entry and are not repeated here. The exported descriptions in
+`schemas/config.schema.json` come from the doc comments, so rewording them to
+say the key is reserved changes a committed schema, which
+`cobre schema export` regenerates.
+
+**Owner.** The cobre-io input-schema owner.
+
+**Trigger.** A case author or schema consumer that takes one of these
+descriptions as a working feature, or either group of keys being wired.
+
+### Last row wins for history finer than a season
+
+**What it is.** `standardize_historical_windows`
+(`crates/cobre-stochastic/src/sampling/historical.rs`) keeps one value per
+hydro, season and year, the last history row written. History finer than the
+season keeps only the last row of each bucket, while the PAR fit averages the
+rows of the bucket. Under weekly seasons, ISO week 53 folds into the last week
+season, so a 53-week year replays week 53 in that season while the fit averages
+weeks 52 and 53. The behaviour predates the 2026-10 fix wave and does not depend
+on how history rows are keyed.
+
+**Owner.** The stochastic / temporal owner.
+
+**Trigger.** A study with history finer than its season (daily rows under
+weekly seasons, or a 53-week year), or the next change to the standardization
+table.
+
+### A coarse level before a finer one reads the fine predecessor's statistics
+
+**What it is.** `cross_resolution_lag_season`
+(`crates/cobre-stochastic/src/par/precompute.rs`) applies when a lag's stage lies
+in another resolution level than the stage, and steps the stage's season back by
+the lag. It also fires when levels run coarse and then fine (monthly stages after
+quarterly ones). There it reads the fine predecessor's statistics for a lag whose
+value is quarterly, while the lag-state transition
+(`crates/cobre-stochastic/src/par/lag_transition.rs`) rebuilds the lag state only
+at the fine-to-coarse step. No span step fires at a coarse-to-fine boundary, so
+this rule is the only one applied there. It is reachable only when a season map
+declares a coarser level before a finer one.
+
+**Owner.** The stochastic / temporal owner.
+
+**Trigger.** A study with coarse-then-fine layering, or a change to the
+level-transition rules.
+
+### Window discovery outside the rules registry
+
+**What it is.** `discover_historical_windows`
+(`crates/cobre-stochastic/src/sampling/window.rs`) refuses an empty window set
+with an unnumbered `InsufficientData` message. That is the refusal a case
+actually reaches, because the numbered window-count check of the historical
+library cannot fire on that path. When fewer windows than forward passes remain,
+discovery also logs a warning that repeats the library's own warning for the same
+shortfall, so one shortfall produces two warnings.
+
+**Owner.** The stochastic / temporal owner.
+
+**Trigger.** The next change to window discovery, or the rule-table work for the
+historical-library checks described under "Validation rules have no
+machine-readable registry".
+
+### Unnumbered stochastic-preparation refusals
+
+**What it is.** The `StochasticError` refusals raised by PAR fitting, opening-tree
+construction and the class sampler (`build_class_sampler`,
+`crates/cobre-stochastic/src/sampling/mod.rs`) carry no rule id, so a consumer of
+a rule list cannot tell them from free text. This is the stochastic half of the
+gap described under "Validation rules have no machine-readable registry".
+
+**Owner.** The stochastic / temporal owner.
+
+**Trigger.** The same as that entry: a consumer of the rule list, or the next
+refusal added in `cobre-stochastic`.
+
+### The forward-sampler integration bounds are vacuous
+
+**What it is.** The builders in
+`crates/cobre-sddp/tests/forward_sampler_integration.rs` build hydro models with
+`PrepareHydroModelsResult::default_from_system`, which sets every productivity to
+0.0, and the single-hydro and historical builders carry no bus load. The
+training bounds (`final_lb`, `final_ub`, `final_ub_std`) are 0 for every scheme
+and seed, so a bound comparison in that file may hold whether or not the sampler
+is right. The comparisons affected include `out_of_sample_convergence`,
+`out_of_sample_declaration_order_invariance`, `monthly_noise_sharing_regression`
+and the lower-bound equality leg of `forward_sampler_convergence_sweep`. A
+cost-bearing fixture needs nonzero productivity and a load sized so that the
+deficit depends on the inflow; the slow tests' tolerances then need a re-check.
+Every caller of `default_from_system` is test code, so the rustdoc's example of
+non-root MPI ranks rebuilding the result is also stale.
+
+**Owner.** The test-infrastructure owner.
+
+**Trigger.** A change to the forward sampler that a bound comparison should have
+caught, or the next edit to those tests.
+
+### No example or deterministic case exercises historical sampling
+
+**What it is.** No example under `examples/` and no deterministic or parity case
+in `crates/cobre-sddp/tests` uses historical inflow sampling. The bit-exact
+suites therefore cannot see a regression in historical windows at a PAR order
+above 0, and the integration test that has a historical builder compares bounds
+that are vacuous (see "The forward-sampler integration bounds are vacuous"). A slow-gated deterministic case with
+historical sampling at PAR order above 0 would pin it.
+
+**Owner.** The parity / test owner.
+
+**Trigger.** The next change to window discovery or standardization, or a
+historical-sampling regression found by a user.
+
+### CI gates stop scanning a file at its first column-0 `#[cfg(test)]`
+
+**What it is.** `scripts/ci/check-infra-genericity.sh`,
+`scripts/ci/check-no-plan-leaks.sh`, `scripts/ci/check-comment-refs.sh` and
+`scripts/ci/check-allow-rationale.sh` drop every line after the first
+`#[cfg(test)]` line of a Rust source file. A `#[cfg(test)]` item placed above
+production code hides that code from all four. `crates/cobre-io/src/output/dictionary.rs`
+is the concrete case: a `#[cfg(test)]` import sits near the top, so the gates
+read none of its tables (`NAMED_UNITS`, `DESCRIPTIONS`). Whoever fixes the
+boundary, with a `mod tests`-aware cut or a full scan that excludes test modules,
+must also decide about the `row_selection` descriptions in that table, which begin
+"Cuts" and which the genericity gate may then flag. They are user-visible text in
+`variables.csv`, so they are either reworded or allow-listed; the `cut_selection`
+label and the `cuts/` paths are file names and stay.
+
+**Owner.** The build / CI owner.
+
+**Trigger.** A `#[cfg(test)]` item above production code in a scanned file, or the
+next change to one of the four scripts.
+
+### cobre-sddp documentation builds need the CI feature set
+
+**What it is.** `cargo doc -p cobre-sddp --document-private-items` with
+`RUSTDOCFLAGS=-Dwarnings` and no features fails on intra-doc links, in
+`crates/cobre-sddp/src/lp/indexer/range_cursor.rs`,
+`crates/cobre-sddp/src/lp/indexer/state_space.rs` and
+`crates/cobre-sddp/src/setup/mod.rs`, that name items compiled only under
+`test-support` (`StateSpace::new` is one). `cargo test -p cobre-sddp --doc`
+without `test-support` fails on the `ExchangeBuffers` doctest in
+`crates/cobre-sddp/src/training/state_exchange.rs` for the same reason. CI builds
+the documentation and runs the tests with the feature set, so both pass there.
+The rework replaces those links with plain names, and gives the doctest a
+self-contained fixture.
+
+**Owner.** The LP-builder owner for the links and the training-loop owner for the
+doctest.
+
+**Trigger.** A documentation build or doctest run without the CI feature set, or
+the next edit to one of those doc comments.
+
+### Dictionary and struct descriptions say stage index where the writers stamp the stage id
+
+**What it is.** The simulation writers stamp the declared study stage id into
+every result row (`stage_id_u32` in
+`crates/cobre-sddp/src/simulation/pipeline.rs`), but several descriptions still
+say "Stage index". The `stage_id` rows of the simulation families in `DESCRIPTIONS`
+(`crates/cobre-io/src/output/dictionary.rs`, for example `paths`, `costs`,
+`hydros` and `thermals`) are published in `variables.csv`, and the doc comments of
+the `Simulation*Result` structs in `crates/cobre-sddp/src/simulation/types.rs`
+say "Stage index (0-based)". The `noise_openings` row and the stochastic row
+structs of `cobre-io` carry the same wording, and each should be checked against
+its writer when the text is revised. A reader takes the column as a position when
+it is the declared id, and the two agree only when ids run consecutively from 0.
+
+**Owner.** The output data-model owner.
+
+**Trigger.** The next edit to the dictionary's `stage_id` rows or to those struct
+docs, or the output layout being exported in machine-readable form.
+
+### Minor residues (2026-10 fix wave, second pass)
+
+Small items, one bullet each.
+
+- **Slurm test script.** In `tests/slurm/run-tests.sh`, the `cp` in `seed_policy`
+  runs under `set -euo pipefail`, so a failed copy ends the script before
+  `print_summary`. The exit status is still non-zero; only the summary table is
+  lost. **Owner.** The build / CI owner. **Trigger.** The next edit to the script,
+  or a failed seed copy with no summary.
+- **MPI signal-test harness limits.** On the development host, MPICH Hydra does
+  not tear down rank 0 when rank 1 exits early, so the `mpiexec -n 2` tests in
+  `crates/cobre-cli/tests/cli_signal.rs` guard the agreed exit code but cannot
+  show that rank 0 writes before the agreement. Two single-process tests there
+  (`repeated_sigterm_stays_graceful_through_the_final_writes` and
+  `second_sigint_terminates_a_single_process_run_by_sigint`) rely on wall-clock
+  windows. They fail loudly, never by passing falsely, and the second window
+  narrows under `--release`. **Owner.** The test-infrastructure owner.
+  **Trigger.** A flaky failure of one of those tests, or the next edit to the
+  harness.
+- **`train_then_simulate` arity.** `train_then_simulate`
+  (`crates/cobre-cli/src/commands/run/mod.rs`) takes `system`, `setup`,
+  `root_config`, `policy_mode`, `setup_timings` and more as separate arguments. A context
+  struct over `system`, `setup`, `root_config`, `policy_mode` and `setup_timings`,
+  which `LoadBroadcastResult` already carries together, would narrow it.
+  **Owner.** The cobre-cli run-orchestration owner. **Trigger.** The next
+  argument added to the function.
+- **Duplicated error-class mapping.** `From<SddpError>` and
+  `From<FullFcfLoadError>` in `crates/cobre-cli/src/error.rs` each end with the
+  same `match class` block that maps an `ErrorClass` to a `CliError`. A shared
+  constructor from `(ErrorClass, message)` would remove the copy. **Owner.** The
+  cobre-cli owner. **Trigger.** A new `ErrorClass` variant, or the next change to
+  the mapping.
+- **Parity gate over-matches imports.** `direct_write_calls` in
+  `scripts/ci/check_python_parity.py` counts a bare call to any name imported from
+  `cobre_io` as a write, including non-writers such as `get_hostname` and
+  `now_iso8601`, which `crates/cobre-python/src/run.rs` imports. Nothing calls
+  them after a marker today, so the gate is only stricter than it needs to be.
+  Restricting the match to writer-shaped names removes the over-match.
+  **Owner.** The build / CI owner. **Trigger.** A false positive on a non-writer
+  call, or the next change to the script.
+- **Redundant dictionary test.** `variables_csv_documents_only_files_a_run_writes`
+  in `crates/cobre-io/src/output/dictionary.rs` pins the whole label set, which
+  makes `variables_csv_has_no_per_rank_timing_rows` redundant. **Owner.** The
+  output data-model owner. **Trigger.** The next edit to either test.
+- **Schema-test helper.** Older tests in `crates/cobre-io/src/schema.rs` still
+  repeat `.find(|(name, _)| name == "...")` where `schema_named` exists, and the
+  newer ones repeat the `$ref` resolution. **Owner.** The test-infrastructure
+  owner. **Trigger.** The next edit to those tests.
+- **Fixtures inside `cycle_positions.rs`.** The `twin_fixtures` test module in
+  `crates/cobre-stochastic/src/par/fitting/cycle_positions.rs` is a large share of
+  the file and is shared with tests in `correlation.rs` and
+  `estimation/tests.rs`. A shared test-support location would be cleaner.
+  **Owner.** The test-infrastructure owner. **Trigger.** The next edit to those
+  fixtures.
+- **Stale rustdoc example id.** The `# Errors` section of
+  `validate_historical_library` (`crates/cobre-stochastic/src/sampling/historical.rs`)
+  uses `"V2.1: ..."` as its example check id, although V2.1 now runs in
+  `check_historical_structure`. **Owner.** The doc / comment owner. **Trigger.**
+  The next edit to that doc comment, or the rule-table work for the
+  historical-library checks.
+- **Validate's file label for a library-build failure.** `cobre validate` and
+  `cobre.io.validate` label every `SddpError::Stochastic` failure with
+  `scenarios/inflow_history.parquet` (`prep_phase_metadata`,
+  `crates/cobre-sddp/src/validate_phases.rs`), including a historical-library
+  build failure such as "no valid historical windows found", which is not a defect
+  of that file. **Owner.** The input-validation owner. **Trigger.** The next
+  change to the stochastic-phase labels.
+
+**Owner.** The owner named in each bullet.
+
+**Trigger.** The trigger named in each bullet.
 
 ## Audit-evidence
 

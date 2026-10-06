@@ -13,8 +13,10 @@ non-obvious inert surfaces:
   it is dead code to remove, not a seam to reserve. This operationalizes the
   project's "unwired config is reserved, not dead" rule — a claim is only
   trustworthy here if it is checkable, not merely asserted.
-- The **deferred-debt register**: a separate, broader class of architectural
-  debt (not limited to unwired seams) tracked alongside this one.
+- The **deferred-debt register**: known debt and deferred follow-ups, not
+  limited to unwired seams — architectural, numerical or operational (for
+  example log output repeated per process, or solver timing that decides
+  whether a run completes) — tracked alongside this one.
 
 For known **structural/algorithmic** limitations of the node-graph engine
 (as opposed to unwired config or code) — single-initial-node,
@@ -1656,6 +1658,544 @@ None — done.
 
 **Owner.** The `cobre-sddp`, `cobre-io` and `cobre-core` owners (as executed).
 **Trigger.** None — done.
+
+## Deferred-debt register — 2026-10 fix-wave follow-ups
+
+Follow-ups found during the 2026-10 fix wave and not scheduled in it. Each
+entry names an owner and a trigger, as the first deferred-debt section
+requires.
+
+### Setup warnings print once per process under MPI
+
+**What it is.** Setup runs on every rank, so a `tracing::warn!` emitted while
+a study is loaded, fitted and prepared prints once per rank under
+`mpiexec -n N`. Examples:
+
+- the zero-turbine-capacity warning and the FPHA fit-deviation warning, both in
+  `resolve_production_models_from_artifacts`
+  (`crates/cobre-sddp/src/production/hydro_models/production.rs`);
+- `warn_on_sub_stage_lead`;
+- `warn_on_boundary_absent_post_study_delivery` (both in
+  `crates/cobre-sddp/src/setup/mod.rs`).
+
+The search
+`rg -n 'tracing::warn!|\bwarn!\(' crates/cobre-sddp/src crates/cobre-io/src crates/cobre-stochastic/src`
+finds the sites, about 30 of them. The exception is the policy-load warnings:
+the warning callback that `check_policy_load` passes to `check_full_fcf_load`
+(`crates/cobre-cli/src/commands/run/policy.rs`) prints only on rank 0.
+`cobre-python` embeds no tracing subscriber, so a Python caller sees none of
+these warnings. There are two rework paths:
+
+- return the warning as data and print it on rank 0 at the call site, as the
+  policy-load warning callback does. The zero-turbine-capacity warning can then be built
+  from the `no_turbine_capacity` entries of the hydro-model summary
+  (`NoTurbineCapacityHydro`), the same data that
+  `training/hydro_models.json` records, so the file and the warning cannot
+  disagree;
+- a rank-aware tracing filter, which hides genuinely rank-local warnings unless
+  `RUST_LOG` asks for them.
+
+**Owner.** The setup / config owner.
+
+**Trigger.** A multi-rank log read by a person or a parser that expects each
+setup warning once, or a new setup warning being added (it should then take the
+rank-0 path from the start).
+
+### Solver retry wall-clock budgets decide whether a run completes
+
+**What it is.** When a HiGHS solve fails, the backend escalates through a fixed
+ladder of option levels (`retry_escalation` in
+`crates/cobre-solver/src/backends/highs/retry.rs`). Each level is bounded by
+iteration limits and by wall-clock budgets:
+
+- the first-solve threshold in `solve_inner` (`solver.rs`);
+- `phase1_wall_budget` and `phase2_wall_budget` per level;
+- `overall_budget` for the whole ladder.
+
+The budgets only decide whether a failed level is final or whether the ladder
+stops, and a run that completes reaches the same first optimal level whatever
+the timing. On an overloaded host, a level that would succeed can exceed its
+budget. So the same inputs can complete on one host and abort on another, but
+they never complete with different numbers.
+
+**Owner.** The solver-backend owner.
+
+**Trigger.** A run that aborts on a loaded or oversubscribed node and completes
+on a quiet one, or a requirement that whether a run completes must not depend
+on host load.
+
+### PAR fitting stays within one resolution group
+
+**What it is.** PAR fitting re-indexes seasons to cycle positions only on maps
+with one resolution group (`CyclePositions::new` in
+`crates/cobre-stochastic/src/par/fitting/cycle_positions.rs` returns `None`
+otherwise). On a map with more than one resolution group (`SeasonCycles`
+groups, for example monthly then quarterly), fitting keeps raw season ids.
+`aggregate_observations_to_season` resolves a date's season through the stage
+index first and the season map's `season_for_date` second, then keys the
+observation by `observation_occurrence_year`. That function falls back to the
+calendar year of the date when `season_for_date` resolves the date to another
+season, so a coarse season reached through the stage index whose window a finer
+season shadows keeps the calendar-year history key rather than the occurrence
+year. Fitting across resolution groups is not supported.
+
+**Owner.** The stochastic / temporal owner.
+
+**Trigger.** A multi-resolution study that needs its coarse seasons fitted as
+part of one cycle with the fine ones, or history for a coarse season that
+crosses a year boundary.
+
+### Simulation partition write failures do not withhold the phase marker
+
+**What it is.** When a scenario's result partition cannot be written, the simulation logs the error, counts the scenario in `scenarios.failed` in `simulation/metadata.json` (it is not in `scenarios.completed`), and still writes `simulation/_SUCCESS`. The marker therefore means the phase finished writing, not that every scenario's partitions exist. The rework: fail the phase on any partition write failure, reconciled across ranks with the existing outcome flag before the root writes, so that no marker is written. That changes the outcome of runs that complete today with `failed > 0`.
+
+**Owner.** The output-format owner.
+
+**Trigger.** A consumer that reads `simulation/_SUCCESS` as "every scenario partition exists", or a reported run with `scenarios.failed > 0` whose missing partitions went unnoticed.
+
+### Quarterly lag 1 differs between the downstream cascade and the cycle walk on single-resolution maps
+
+**What it is.** On a single-resolution map with monthly then quarterly stages
+(the ring fixtures), the two disagree:
+
+- the downstream quarterly cascade (`derive_downstream_par_order` and its
+  window in `crates/cobre-stochastic/src/par/lag_transition.rs`) gives the
+  quarterly lag 1 as the previous quarter's aggregate;
+- the season-cycle walk, PAR fitting and the in-study transition-lag statistics
+  take the previous cycle member (the last month).
+
+Both are deterministic. They define the quarter's predecessor differently.
+
+**Owner.** The stochastic / temporal owner.
+
+**Trigger.** A study on such a map whose quarterly lag-1 value must agree
+between scenario generation and the fitted model, or a request to give the
+quarter one predecessor definition.
+
+### `next_season_period_window` advances `Custom` maps in id order
+
+**What it is.** `next_season_period_window`
+(`crates/cobre-stochastic/src/season_cast/mod.rs`) steps a `Custom` season map
+to the next season id, not the next season in calendar order. Its callers are
+the spillover in `crates/cobre-stochastic/src/par/lag_transition.rs` and the
+history occurrence discovery in `crates/cobre-io/src/scenarios/estimation.rs`.
+Every other season consumer walks the cycle (`SeasonCycles`).
+
+**Owner.** The stochastic / temporal owner.
+
+**Trigger.** A `Custom` map whose ids are not in calendar order reaching either
+caller, or the next change to either caller.
+
+### Three rules pick "the statistics of season s"
+
+**What it is.** When several stages carry the same season with different
+statistics (year-varying user statistics), three sites choose by different
+deterministic rules:
+
+- fitting (`build_pacf_stage_lookups` in
+  `crates/cobre-stochastic/src/par/fitting/estimation.rs`, and
+  `build_season_lookups` in `par/fitting/ar_coefficients.rs`) keeps the last
+  entry in slice order;
+- `check_std_ratio_divergence` (`crates/cobre-io/src/scenarios/estimation.rs`)
+  keeps the first entry, and pairs consecutive seasons by ascending raw id, not
+  by cycle order;
+- the precompute lag fallback keeps the lowest stage id.
+
+The public building blocks `estimate_ar_coefficients_with_season_map` and
+`estimate_annual_seasonal_stats` still index by raw id when called directly.
+Production reaches them only through the wrapped entry point. The candidate
+rule is the lowest stage id, as precompute uses.
+
+**Owner.** The stochastic / temporal owner.
+
+**Trigger.** A study with year-varying seasonal statistics, or a request to make
+the choice uniform.
+
+### Month-length weights on sub-monthly history
+
+**What it is.** `aggregate_observations_to_season`
+(`crates/cobre-stochastic/src/par/aggregate.rs`) weights each entry of a
+multi-entry bucket by `days_in_month(date)`, the length of the calendar month
+containing the entry. For sub-monthly history in a bucket that spans two months
+of different length, the weighted value is therefore not the plain mean of its
+rows. For example, daily history of ISO week 2015-W09 weights six February days
+by 28 and the March day by 31. The candidate fix is to weight each row by its
+own span, which needs the row's end date in the observation tuple.
+
+**Owner.** The stochastic / temporal owner.
+
+**Trigger.** A study estimating from daily or other sub-monthly history.
+
+### The downstream cascade's window assumes calendar quarters
+
+**What it is.** The downstream cascade's window in
+`crates/cobre-stochastic/src/par/lag_transition.rs` still makes calendar-quarter
+assumptions. `compute_downstream_transitions` groups the window's months into
+calendar quarters from each season definition's `month_start`, weights each
+quarter by `quarter_hours`, and sizes the window as `downstream_par_order * 3`
+monthly stages. The cascade's activation rule follows season spans, but the
+window arithmetic is still calendar-quarter arithmetic.
+
+**Owner.** The stochastic / temporal owner.
+
+**Trigger.** A season map whose coarse seasons are not calendar quarters, or
+whose fine seasons are not calendar months, reaching the cascade.
+
+### Season grouping splits a level whose season lengths differ by more than the tolerance
+
+**What it is.** `SeasonCycles` (`cobre_core::temporal`) groups seasons into
+resolution levels, and seasons whose lengths differ by more than the 7-day
+tolerance (`SUB_PERIOD_TOLERANCE_DAYS`) fall into different groups. A layered
+map with unequal seasons in one intended level, for example monthly seasons plus
+wet and dry seasons, is therefore split into several cycles, and each season's
+predecessor is taken within its own group.
+
+**Owner.** The core data-model owner.
+
+**Trigger.** A layered season map whose unequal-length seasons must share one
+cycle.
+
+### `RankDistribution::new` recomputes the rank partition
+
+**What it is.** `RankDistribution::new`
+(`crates/cobre-sddp/src/training/session/rank_distribution.rs`) splits the
+forward passes across ranks with its own base/remainder arithmetic.
+`cobre_comm::per_rank_counts` is documented to own that partition. The two agree
+today, and the module's own tests compare them.
+
+**Owner.** The comm / HPC-distribution owner.
+
+**Trigger.** Any change to how work is split across ranks. Both copies must
+change together until `RankDistribution::new` calls `per_rank_counts`.
+
+### Remaining sources of output difference across node layouts
+
+**What it is.** Simulation outputs are required not to depend on node count,
+rank count or rank placement. Two known sources could still break that:
+
+- A build for a specific CPU. A build with `-C target-cpu` or `-march=native`,
+  for the Rust code or for the vendored solvers' C/C++ builds, can produce
+  different floating-point results on heterogeneous nodes. No such flag is set
+  today; `.cargo/config.toml` fixes the target features.
+- The CLP reset fallback. When allocating a fresh CLP model fails during a
+  reset, `reset_solver_state`
+  (`crates/cobre-solver/src/backends/clp/interface.rs`) keeps the old model,
+  whose stale pricing state can change later solves.
+
+**Owner.** The build / CI owner (build flags) and the solver-backend owner (the
+CLP reset).
+
+**Trigger.** Running one study across nodes with different CPUs, a build that
+sets a CPU-specific flag, or a reported CLP allocation failure during a reset.
+
+### Minor residues (2026-10 fix wave)
+
+- **D30's unread `recent_observations` window.**
+  `examples/deterministic/d30-multi-resolution-monthly-quarterly/initial_conditions.json`
+  keeps a `recent_observations` window that no lag reads, since lag seasons
+  follow the season cycle. **Owner.** The stochastic / temporal owner.
+  **Trigger.** The next edit to that case.
+- **Ring tests' assertion wording.** Assertion messages in
+  `crates/cobre-sddp/tests/forward_sampler_integration.rs`,
+  `crates/cobre-sddp/src/setup/stochastic_pipeline.rs` and
+  `crates/cobre-stochastic/src/par/lag_transition.rs` still say "crosses
+  season_id >= 12". The fixtures do cross id 12, so the messages are literally
+  true, but the cascade no longer activates on an id threshold. **Owner.** The
+  training / test owner. **Trigger.** The next edit to those tests.
+
+### The Python policy writer accepts a foreign checkpoint's identity
+
+**What it is.** The load gate (`validate_policy_load` in
+`crates/cobre-sddp/src/policy/policy_load.rs`) refuses any checkpoint whose
+recorded writer is not exactly `SoftwareIdentity::THIS_BUILD`. The Python
+binding has a two-call bypass. `cobre.results.load_policy` returns a foreign
+checkpoint's cuts and metadata as plain dicts, `metadata_to_py` carrying the
+`software` and `software_version` keys
+(`crates/cobre-python/src/results.rs`). `cobre.write_policy_checkpoint` then
+writes them back: `PyPolicyCheckpointMetadata`
+(`crates/cobre-python/src/policy.rs`) does not declare the identity keys, so
+extraction drops them, and `impl From<PyPolicyCheckpointMetadata> for CheckpointManifest`
+stamps this build's `SOFTWARE_NAME` and `SOFTWARE_VERSION`. The result passes
+the gate. The writer's docstring, the stub in
+`crates/cobre-python/python/cobre/__init__.pyi` and `.claude/rules/sddp.md` all
+state that identity keys are ignored.
+
+The rework: the metadata struct declares the three identity keys and its
+conversion becomes fallible; one shared check in `cobre-sddp`, called first by
+`validate_policy_load` and by the writer, refuses metadata that names a writer
+other than this build, surfacing as `PolicyIncompatibleError`. Metadata that
+names no writer keeps being stamped with this build, which is how an external
+tool authors a boundary policy. The three documents above change with it.
+
+**Owner.** The Python bindings owner.
+
+**Trigger.** A script that round-trips a policy through `load_policy` and
+`write_policy_checkpoint`, or the next change to the writer's metadata handling.
+
+### cobre-bridge accepts any cobre-python patch release
+
+**What it is.** A policy loads only in the exact software and version that wrote
+it. cobre-bridge's DECOMP conversion writes a terminal boundary policy through
+`cobre.write_policy_checkpoint`, and cobre loads it later, yet the bridge's
+`cobre-python` dependency in its `pyproject.toml` and `uv.lock` (a separate
+repository) is a range over one minor release. A resolver can therefore install
+a patch release whose checkpoints another patch release of cobre refuses. The
+bridge's minimum-version constant and its packaging tests treat the dependency
+as a floor. The rework is an exact `==` pin kept equal to that constant by the
+packaging tests, with the floor and lockstep wording in the bridge's
+`CONTRIBUTING.md` and `CLAUDE.md` and a changelog line updated to match. Every
+cobre patch release then needs a matching bridge release, by design.
+
+**Owner.** The build / CI owner.
+
+**Trigger.** A release that pairs cobre-bridge with a new cobre-python, or a
+report of a boundary policy refused for a software-version mismatch.
+
+### MPI load refusals do not exit with the refusal's own code
+
+**What it is.** When rank 0 refuses at load (a config refusal, a `policy.path`
+guard, a missing iteration limit, a stochastic refusal), the error reaches the
+other ranks through `broadcast_value`'s length-0 sentinel
+(`crates/cobre-cli/src/commands/broadcast.rs`), called from
+`broadcast_and_build_setup` (`crates/cobre-cli/src/commands/run/setup.rs`).
+Every peer turns the sentinel into `CliError::Internal` ("rank 0 signaled
+broadcast failure (length 0)", followed by the report-a-bug hint). `execute`
+aborts each rank with its own code, and the launcher reports the first abort it
+receives, which is a peer's. A refusal that exits 1 single-process therefore
+exits 4 under `mpiexec -n 2` with MPICH. Rank 0 renders its own error only in
+`execute`, after the collective, so its text also races the peers' aborts, both
+for a load refusal and for a failed rank-0 write after `agree_post_write`
+(`crates/cobre-cli/src/commands/run/graceful_stop.rs`).
+
+The rework: in the failure branch only, rank 0 sends its exit code in the
+length broadcast that already runs; peers return `CliError::for_peer_failure`
+with that code and a load-phase message (the constructor takes only the code
+today and its message names the write phase); rank 0 prints its diagnostic
+before the collective that carries its failure, and a flag stops `execute` from
+printing it again. The success path gains no collective. The entry
+"Split exit codes in the pre-training export and simulation-outcome
+reconciles" covers the two reconciles that still split exit codes.
+
+**Owner.** The cobre-cli run-orchestration owner.
+
+**Trigger.** A job script or scheduler that keys on the MPI launcher's exit code
+for a load refusal, or the next change to `broadcast_value` or the load
+broadcasts.
+
+### Python Ctrl-C and SIGTERM do not stop training at an iteration boundary
+
+**What it is.** Three linked gaps in `cobre-python`:
+
+- `Study.train` runs `train_native` under `py.detach`
+  (`crates/cobre-python/src/study.rs`). The streaming drain thread in
+  `crates/cobre-python/src/run.rs` calls `py.check_signals()`, but CPython runs
+  Python signal handlers only on the main thread, so that call never raises. A
+  Ctrl-C is recorded by CPython's C-level handler and surfaces as
+  `KeyboardInterrupt` only when the whole call returns, after every iteration
+  and the simulation.
+- `run_via_study` leaves on a captured callback error right after
+  `train_native` returns, before the skipped-simulation writes. A signal stop on
+  `cobre.run.run` with a configured simulation therefore writes no skipped
+  simulation metadata and marker, which the CLI's stop path writes.
+- No code in `crates/cobre-python` touches SIGTERM, so the process dies by the
+  default action wherever training is, and a scheduler's time-limit SIGTERM loses
+  every iteration since the last periodic checkpoint.
+
+The rework: the calling (main) thread services signals while training runs on a
+`std::thread::scope` worker, looping over the iteration channel and
+`check_signals()`; an exception from a Python signal handler, or a
+`KeyboardInterrupt` or `SystemExit` from `on_iteration`, raises the Signal level
+of the shared stop flag and is re-raised only after every artifact, the skipped
+simulation's partial metadata and marker included; a second SIGINT while a stop
+is pending restores the default handler and re-raises it. When SIGTERM is at its
+default on the main thread, a scoped guard installs a handler that raises the
+same level, stays through the skipped-simulation writes on a signal stop, drains
+`check_signals()` before it is removed, and re-delivers a pending SIGTERM after
+the artifacts. A user SIGTERM handler is left in place, and a call from a
+non-main thread installs nothing.
+
+**Owner.** The Python bindings owner.
+
+**Trigger.** A report that Ctrl-C or a scheduler SIGTERM does not stop a Python
+run at an iteration boundary, or the next change to the streaming drain,
+`train_native` or `run_via_study`.
+
+### External-library refusals name loop positions instead of ids
+
+**What it is.** `validate_external_library`
+(`crates/cobre-stochastic/src/sampling/external.rs`) has three refusals that
+print loop counters. V3.3 (a study stage with no rows) and V3.4 (a row count
+that is not a whole number of scenarios) print the 0-based study-stage
+position. V3.7 (a non-finite standardized value) prints the stage position, the
+scenario slot and the 0-based entity position. None of these appears in
+`scenarios/external_*_scenarios.parquet`: a study whose stage ids start at 1 and
+whose hydro ids are plant codes such as 66 or 156 gets `stage 2, scenario 4,
+entity 1`. The entity id is in reach (`entity_ids[entity_idx]`, already a
+parameter). The scenario slot is the file's `scenario_id` itself, so only its
+label changes. The stage id is not in reach, because the function receives only
+`n_stages: usize`; every production caller holds the study-stage slice it
+standardized against, so the fix replaces `n_stages` with that slice. V3.2 and
+V3.5 already print the entity id.
+
+**Owner.** The stochastic / temporal owner.
+
+**Trigger.** A report of a V3.3, V3.4 or V3.7 refusal whose position a user
+cannot map to their files, or the next change to `validate_external_library`.
+
+### Documentation corrections in rustdoc, release text and recordings
+
+Small corrections that change no behaviour, one bullet each.
+
+- **Anticipated-commitment ring sizing.** The `commit_out` field doc of
+  `StateSpace` (`crates/cobre-sddp/src/lp/indexer/state_space.rs`) calls a slot
+  `k >= k_i` padding. Slots are keyed ring-axis-modular, so the padding is a
+  slot no decision stage latches, and a plant with a short lead cycles through
+  every slot. The docs of `StateSpace::k_max` and `anticipated_lead_stages`
+  define the depth as the maximum `lead_stages`, but `k_max` comes from
+  `AnticipatedResolution::ring_size` (the larger of the anchored depth and the
+  longest `lead_stages`), and a `lead_time_hours` plant has no `lead_stages`.
+  The `k_max` formula in `docs/design/anticipated-thermals-and-water-travel-time.md`
+  and the "Ring depth sizing" contract in `.claude/rules/sddp.md` omit the
+  `ring_size` widening, and the doc comment and inline comment of
+  `state_to_lp_column_commit_out_identity_multi_plant_heterogeneous_k` in
+  `state_space.rs` repeat the padding idea.
+  **Trigger.** The next edit to the ring-sizing code or to any of those texts.
+- **Retired spec links in cobre-solver rustdoc.** `types.rs`, `trait_def.rs`
+  and `freeze.rs` under `crates/cobre-solver/src` link `src/specs/` pages of the
+  methodology repository that no longer exist and cite their sections in plain
+  text. One fact lives only on a retired page: the dual-sign normalization
+  convention stated on `LpSolution`, which the solver conformance tests already
+  pin. The replacement text is a solver-interface statement with no
+  algorithm-specific term, because the crate is infrastructure.
+  **Trigger.** The next edit to those three files.
+- **Retired spec links in cobre-core rustdoc.** `temporal.rs`, `scenario.rs`
+  and `horizon.rs` under `crates/cobre-core/src/model` link retired spec pages
+  through relative `.md` paths, carry section-number banners such as
+  `// Block (SS12.2)`, and `HorizonGraph::annual_discount_rate` cites a retired
+  "validation rule 7" (the cyclic-discount check in `cobre-io` is labelled "Rule
+  3"). A topic with a live page on the documentation site is linked once, from
+  the module doc or the type that owns it; the rest are deleted.
+  **Trigger.** The next edit to those three files.
+- **Release README launch command.** The README that the "Package archive" step
+  of `.github/workflows/release-mpi.yml` writes tells the user to launch with
+  `srun --mpi=pmi2`, then says in Troubleshooting that `srun --mpi=pmi2` fails
+  with "pmijobid missing in fullinit command" on SLURM 24.05. The binary links
+  against the MPICH ABI, so `srun --mpi=pmix` works only when Slurm has its PMIx
+  plugin and the cluster's MPI runtime was built with PMIx. The fix recommends
+  `srun --mpi=pmix` with that precondition, keeps `mpiexec` as the fallback and
+  mentions pmi2 only in Troubleshooting. `scripts/ci/check-no-plan-leaks.sh`
+  and `scripts/ci/check_doc_voice.py` do not scan the workflow, so the text is
+  checked by hand. **Trigger.** A cluster report of the pmi2 failure, or the next
+  edit to that README.
+- **Errata in the released `CHANGELOG.md` section.** The `[0.17.0]` entries
+  misstate CLI-observable points, to be amended in place:
+  - the historical opening-tree entries name a study that uses historical
+    sampling, but the trigger is a stage whose `sampling_method` is
+    `historical_residuals`, under any forward scheme;
+  - "no complete historical window" was already refused before that release, so
+    it does not belong in the list of newly refused cases;
+  - the single-season shift and the study stages' year offsets are described
+    imprecisely;
+  - the passthrough fix says "first operating plant", where the target is the
+    first plant below that is not `PreFilling`;
+  - the discount fix's wording of the future-cost cascade is imprecise, and it
+    omits post-study deliveries, the upper bound, simulation costs and
+    `anticipated_thermal_cost`;
+  - the stored-basis refusal omits that changing a stage's block mode or block
+    count changes the basis dimensions, so warm-start, resume and
+    simulation-only loads of an older policy are refused while a boundary-cut
+    load, which reads no stored basis, is unaffected.
+
+  Points visible only to Python callers are left out, since the changelog lists
+  what a `cobre` CLI user observes. **Trigger.** A user report that a released
+  entry misdescribes behaviour, or the next edit to the `[0.17.0]` section.
+
+- **Recording GIFs.** The tapes in `recordings/` now run against the current
+  config schema, but the committed GIFs in `recordings/` were rendered earlier
+  and show an older banner and earlier CLI output. `recordings/generate.sh`
+  regenerates them, and `recordings/setup.sh` installs its tools.
+  **Trigger.** A release, or a CLI text change that makes the GIFs visibly
+  stale.
+
+**Owner.** The doc / comment owner.
+
+**Trigger.** The next edit to any file a bullet names, or a bullet's own
+trigger, whichever comes first.
+
+### The Python bindings crate is not linted by CI
+
+**What it is.** `cobre-python` is excluded from the Cargo workspace (`exclude`
+in the root `Cargo.toml`), so the CI clippy job's `cargo clippy --workspace`
+never lints it, although the format check and the bindings crate's Rust tests
+run in CI. The missing step is
+`cargo clippy --manifest-path crates/cobre-python/Cargo.toml --all-targets -- -D warnings`
+in the `python` job of `.github/workflows/ci.yml`. That job's toolchain step
+installs no clippy component today, and PyO3's build script needs an
+interpreter on `PATH`, which the job's virtualenv provides. One matrix leg
+suffices, because the crate builds against the stable ABI.
+
+**Owner.** The build / CI owner.
+
+**Trigger.** A clippy regression in the bindings crate shipping unseen, or the
+next CI-configuration pass.
+
+### The output-file registry is not exported
+
+**What it is.** `OUTPUT_FILES` in
+`crates/cobre-io/src/output/file_registry.rs` owns each output file's path,
+layout, format, write phase and backing schema, and the module carries an
+`expect(dead_code)` because only tests read it. `schemas/` holds only input
+schemas, so documentation and tooling cannot read the output layout from the
+repository. The rework serializes the registry, with each backing schema's
+columns, into a committed `outputs.json` under `schemas/` that `export_schemas`
+(`crates/cobre-io/src/schema.rs`) writes, so `cobre schema export` and
+`cobre.schema.export` produce it with no new Python code. The file is
+deterministic (no timestamp and no version) and the CI `schemas` job's drift
+check covers it. `test_export_schemas_writes_all_files_as_valid_json` asserts
+that the written count equals the number of generated input schemas and changes
+with the new file.
+
+**Owner.** The output data-model owner.
+
+**Trigger.** A consumer, such as the documentation site or an external tool,
+needs the output layout in machine-readable form, or the registry gains a
+reader that makes its `expect(dead_code)` lapse.
+
+### Validation rules have no machine-readable registry
+
+**What it is.** `RULES` in `crates/cobre-io/src/validation/rules.rs` is a
+single-owner table that the loading layers' emitters reference, so a
+diagnostic's kind and severity cannot drift from it. The other validation
+checks have no such table. The historical-library checks V2.1 to V2.9 in
+`crates/cobre-stochastic/src/sampling/historical.rs` are split across two
+functions, each with its own hand-copied "Checks performed" rustdoc table:
+`check_historical_structure` holds V2.1 and V2.9, and
+`validate_historical_library` holds V2.3, V2.5 and V2.6, with V2.2, V2.4 and
+V2.7 as asserts. Only some of the messages carry their code. The preparation
+and policy-load checks of `cobre validate` take their kind from string
+literals in `prep_phase_metadata`
+(`crates/cobre-sddp/src/validate_phases.rs`), while the individual refusals
+are free-text `SddpError::Validation` messages with no id. Nothing aggregates
+the tables, and there is no `cobre validate --list-rules --json` or
+`cobre.schema.list_rules`.
+
+The rework gives `cobre-stochastic` and `cobre-sddp` each a rule table with an
+id, layer, kind, severity and summary, referenced by their emitters. An
+aggregator in `cobre-sddp`, the lowest crate that sees all three tables,
+normalizes them into `{format_version, rules: [{id, layer, kind, severity,
+summary}]}` and checks that the layer names agree across the tables. The CLI
+prints that object under `--list-rules --json`, following the `--list` flag of
+`cobre init`, and Python returns its `rules` member as a list of dicts, so the
+two outputs cannot diverge. Rule ids are opaque strings, never renumbered or
+reused, and the summaries in infrastructure crates carry no algorithm-specific
+term.
+
+**Owner.** The input-validation owner.
+
+**Trigger.** A consumer, such as the documentation site, an editor integration
+or a test, needs the rule list, or a validation rule is added in
+`cobre-stochastic` or `cobre-sddp` (it should then enter a table from the
+start).
 
 ## Audit-evidence
 

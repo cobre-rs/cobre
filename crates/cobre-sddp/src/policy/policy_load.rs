@@ -417,10 +417,7 @@ pub fn build_basis_cache_from_checkpoint(
 /// # Cut-slot reconstruction
 ///
 /// `base_row_count` is taken from `node_dims[pos]` — the STUDY's own template row
-/// count — never from the record's `row_status.len() - num_cut_rows`: the root
-/// node is captured in the last forward pass, before that iteration's backward
-/// pass appends cuts to its pool, so its recorded `num_cut_rows` (the pool's size
-/// at export) legitimately exceeds the cut rows the basis was captured with. The
+/// count — never from the record's `row_status.len() - num_cut_rows`. The
 /// trailing `k = row_status.len() - base_row_count` rows are matched to pool slot
 /// identity only when a node's OWN pool's [`StageCutsReadResult`]
 /// (`sc.stage_id == node_pools[node]`, never the record whose pool id happens to

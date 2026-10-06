@@ -124,13 +124,7 @@ mod simulation_only {
         );
 
         let (basis_col_u8, basis_row_u8) = convert_basis_cache(&training_result);
-        let stage_bases = build_stage_basis_records(
-            fcf,
-            &training_result,
-            &setup.inputs.node_graph,
-            &basis_col_u8,
-            &basis_row_u8,
-        );
+        let stage_bases = build_stage_basis_records(&training_result, &basis_col_u8, &basis_row_u8);
 
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
@@ -1046,13 +1040,7 @@ mod decomp_integration {
             stage_manifests,
         );
         let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases = build_stage_basis_records(
-            fcf,
-            result,
-            &setup.inputs.node_graph,
-            &basis_col,
-            &basis_row,
-        );
+        let stage_bases = build_stage_basis_records(result, &basis_col, &basis_row);
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,

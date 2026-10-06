@@ -1320,7 +1320,7 @@ pub fn load_simulation_arrow(
 /// ```python
 /// {
 ///     "metadata": {
-///         "format_version": 2,
+///         "format_version": 3,
 ///         "software": "cobre",
 ///         "software_version": "1.0.0",
 ///         "created_at": "2026-01-15T12:00:00Z",

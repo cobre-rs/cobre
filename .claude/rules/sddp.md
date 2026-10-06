@@ -451,6 +451,21 @@ warm start still invokes `reconstruct_basis`), plus
 `run_stage_solve_terminal_static_shape_mismatch_is_treated_as_cold` (the
 node-tag and shape guards each drop to cold), all in `solve/stage_solve.rs`.
 
+### A stored basis records its own cut-row count
+
+Each checkpoint `StageBasis` record carries `num_cut_rows =
+row_status.len() - base_row_count`, the trailing cut rows of the captured basis
+itself. Writing the node's pool count (`populated()`) instead is the
+wrong-but-compiling alternative: it overstates the basis's cut rows, because a
+forward-pass capture precedes that iteration's backward pass, which appends cuts
+to the pool afterwards. `FORMAT_VERSION` 3 marks this meaning. The loader still
+takes the template row count from the current LP (`node_dims`), never from the
+record. Read: `policy/policy_export.rs` (`build_stage_basis_records`). Pinned by
+`build_stage_basis_records_writes_each_basis_own_trailing_cut_row_count`
+(`policy/policy_export.rs`) and
+`exported_basis_records_count_the_cut_rows_each_basis_was_captured_with`
+(`tests/cut_basis.rs`).
+
 ## A stored basis warm-starts only at its own node (node-tag)
 
 A `CapturedBasis` carries the declared `node_id` it was captured at

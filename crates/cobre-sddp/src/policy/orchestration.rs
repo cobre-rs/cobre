@@ -297,13 +297,7 @@ pub fn write_checkpoint(
     );
 
     let (basis_col_u8, basis_row_u8) = convert_basis_cache(training_result);
-    let stage_bases = build_stage_basis_records(
-        fcf,
-        training_result,
-        &setup.inputs.node_graph,
-        &basis_col_u8,
-        &basis_row_u8,
-    );
+    let stage_bases = build_stage_basis_records(training_result, &basis_col_u8, &basis_row_u8);
 
     let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
 

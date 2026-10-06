@@ -85,13 +85,7 @@ mod boundary_cuts {
             &stage_manifests,
         );
         let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases = build_stage_basis_records(
-            fcf,
-            result,
-            &setup.inputs.node_graph,
-            &basis_col,
-            &basis_row,
-        );
+        let stage_bases = build_stage_basis_records(result, &basis_col, &basis_row);
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,
@@ -1629,13 +1623,7 @@ mod warm_start {
             &stage_manifests,
         );
         let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases = build_stage_basis_records(
-            fcf,
-            result,
-            &setup.inputs.node_graph,
-            &basis_col,
-            &basis_row,
-        );
+        let stage_bases = build_stage_basis_records(result, &basis_col, &basis_row);
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,
@@ -1759,6 +1747,57 @@ mod warm_start {
             "resumed LB ({}) must be >= phase-1 LB ({})",
             result_phase2.final_lb,
             lb_phase1
+        );
+    }
+
+    #[test]
+    fn exported_basis_records_count_the_cut_rows_each_basis_was_captured_with() {
+        use cobre_sddp::policy_export::{build_stage_basis_records, convert_basis_cache};
+
+        let case_dir = d01_case_dir();
+        let mut config =
+            cobre_io::parse_config(&case_dir.join("config.json")).expect("config must parse");
+        config.training.stopping_rules =
+            Some(vec![StoppingRuleConfig::IterationLimit { limit: 5 }]);
+
+        let mut setup = build_setup(&case_dir, &config);
+        let comm = StubComm;
+        let mut solver = ActiveSolver::new().expect("ActiveSolver");
+        let outcome = setup
+            .train(&mut solver, &comm, 1, ActiveSolver::new, None, None)
+            .expect("train");
+        assert!(outcome.error.is_none());
+        let result = outcome.result;
+
+        let (basis_col, basis_row) = convert_basis_cache(&result);
+        let records = build_stage_basis_records(&result, &basis_col, &basis_row);
+        assert!(
+            !records.is_empty(),
+            "training must capture at least one basis"
+        );
+
+        for rec in &records {
+            let cb = result.basis_cache[rec.stage_id as usize]
+                .as_ref()
+                .expect("every record comes from a captured basis");
+            assert_eq!(
+                rec.num_cut_rows as usize,
+                cb.basis.row_status.len() - cb.base_row_count,
+                "node {} must record the cut rows its basis was captured with",
+                rec.stage_id
+            );
+        }
+
+        let root = records
+            .iter()
+            .find(|rec| rec.stage_id == 0)
+            .expect("the root node's basis is exported");
+        let root_pool_populated = setup.fcf.pools[0].populated();
+        assert!(
+            (root.num_cut_rows as usize) < root_pool_populated,
+            "the root basis is captured before the last backward pass, so it must carry fewer \
+             cut rows ({}) than its pool holds at export ({root_pool_populated})",
+            root.num_cut_rows
         );
     }
 
@@ -2789,13 +2828,7 @@ mod range_warm_start_determinism {
             &stage_manifests,
         );
         let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases = build_stage_basis_records(
-            fcf,
-            result,
-            &setup.inputs.node_graph,
-            &basis_col,
-            &basis_row,
-        );
+        let stage_bases = build_stage_basis_records(result, &basis_col, &basis_row);
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,

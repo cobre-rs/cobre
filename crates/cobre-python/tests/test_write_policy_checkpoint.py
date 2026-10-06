@@ -87,7 +87,7 @@ def test_write_policy_checkpoint_round_trip(tmp_path: pathlib.Path) -> None:
 
     loaded = cobre.results.load_policy(str(tmp_path))
 
-    assert loaded["metadata"]["format_version"] == 2
+    assert loaded["metadata"]["format_version"] == 3
     assert loaded["metadata"]["producer"]["cost_scale_factor"] == pytest.approx(
         2_500_000.0
     )

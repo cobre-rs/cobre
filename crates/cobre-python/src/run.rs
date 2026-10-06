@@ -2374,23 +2374,6 @@ mod tests {
     /// `reconstruct_policy_from_checkpoint` and feeds the unchanged
     /// `run_simulation_phase_py`, so `cost.mean_cost` and
     /// `solve_stats.total_lp_solves` must match exactly.
-    ///
-    /// IGNORED (pre-existing blocker, not a regression of this change): the
-    /// checkpoint basis-reconstruction path trips a `debug_assert!` in
-    /// `cobre_sddp::basis_reconstruct::reconstruct_basis`
-    /// (`row_status.len() != base_row_count + cut_row_slots.len()`) in debug
-    /// builds. `build_basis_cache_from_checkpoint` rebuilds a `CapturedBasis`
-    /// with `base_row_count = 0` and empty `cut_row_slots` but a non-empty
-    /// `row_status`, which violates that invariant. The identical panic occurs in
-    /// the unchanged monolithic `cobre.run.run` simulation-only path
-    /// (`config.training.enabled = false`) — this is faithfully preserved here,
-    /// not introduced. In release builds the `debug_assert!` is a no-op and the
-    /// path succeeds. Re-enable once the upstream `CapturedBasis`
-    /// reconstruction-from-checkpoint defect is fixed.
-    #[cfg_attr(
-        debug_assertions,
-        ignore = "pre-existing CapturedBasis debug_assert! in reconstruct_basis; re-enable once the upstream reconstruction-from-checkpoint defect is fixed"
-    )]
     #[test]
     fn python_simulation_only_metadata_matches_train_then_simulate() {
         let case_dir = example_case_dir("examples/1dtoy");

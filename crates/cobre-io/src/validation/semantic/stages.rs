@@ -10,7 +10,7 @@ use cobre_core::temporal::{Node, PolicyGraphType, Transition};
 use crate::StageIdResolver;
 use crate::config::{ForwardPassesResolution, Openings};
 
-use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::super::{ValidationContext, rules, schema::ParsedData};
 use super::PROB_TOLERANCE;
 
 /// Rules 1-3: validates policy graph transitions, outgoing transition
@@ -28,8 +28,8 @@ pub(super) fn check_stage_structure(data: &ParsedData, ctx: &mut ValidationConte
     if graph.nodes.is_empty() {
         for transition in &graph.transitions {
             if !stage_ids.contains(&transition.source_id) {
-                ctx.add_error(
-                    ErrorKind::InvalidValue,
+                ctx.emit(
+                    &rules::SEMANTIC_TRANSITION_ENDPOINT_NOT_A_STAGE,
                     "stages.json",
                     None::<&str>,
                     format!(
@@ -39,8 +39,8 @@ pub(super) fn check_stage_structure(data: &ParsedData, ctx: &mut ValidationConte
                 );
             }
             if !stage_ids.contains(&transition.target_id) {
-                ctx.add_error(
-                    ErrorKind::InvalidValue,
+                ctx.emit(
+                    &rules::SEMANTIC_TRANSITION_ENDPOINT_NOT_A_STAGE,
                     "stages.json",
                     None::<&str>,
                     format!(
@@ -61,8 +61,8 @@ pub(super) fn check_stage_structure(data: &ParsedData, ctx: &mut ValidationConte
     for source_id in sorted_sources {
         let total = prob_sums[&source_id];
         if (total - 1.0).abs() > PROB_TOLERANCE {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_TRANSITION_PROBABILITY_SUM,
                 "stages.json",
                 None::<&str>,
                 format!(
@@ -74,8 +74,8 @@ pub(super) fn check_stage_structure(data: &ParsedData, ctx: &mut ValidationConte
     }
 
     if graph.graph_type == PolicyGraphType::Cyclic && graph.annual_discount_rate <= 0.0 {
-        ctx.add_error(
-            ErrorKind::InvalidValue,
+        ctx.emit(
+            &rules::SEMANTIC_CYCLIC_GRAPH_DISCOUNT_RATE,
             "stages.json",
             None::<&str>,
             format!(
@@ -113,8 +113,8 @@ pub(super) fn check_inflow_lags_vs_par_order(data: &ParsedData, ctx: &mut Valida
         return;
     }
 
-    ctx.add_warning(
-        ErrorKind::ModelQuality,
+    ctx.emit(
+        &rules::SEMANTIC_INFLOW_LAGS_DISABLED_UNDER_AR_MODEL,
         "stages.json",
         None::<&str>,
         format!(
@@ -150,8 +150,8 @@ pub(super) fn check_node_graph(data: &ParsedData, ctx: &mut ValidationContext) {
         .map(|n| {
             let idx = resolver.resolve(n.stage_id);
             if idx.is_none() {
-                ctx.add_error(
-                    ErrorKind::InvalidValue,
+                ctx.emit(
+                    &rules::SEMANTIC_NODE_GRAPH_MALFORMED,
                     "stages.json",
                     Some(format!("node {}", n.id)),
                     format!(
@@ -170,8 +170,8 @@ pub(super) fn check_node_graph(data: &ParsedData, ctx: &mut ValidationContext) {
     for (pos, n) in nodes.iter().enumerate() {
         if id_to_pos.insert(n.id, pos).is_some() {
             dup = true;
-            ctx.add_error(
-                ErrorKind::DuplicateId,
+            ctx.emit(
+                &rules::SEMANTIC_NODE_ID_DUPLICATE,
                 "stages.json",
                 Some(format!("node {}", n.id)),
                 format!("duplicate policy-graph node id {}", n.id),
@@ -187,8 +187,8 @@ pub(super) fn check_node_graph(data: &ParsedData, ctx: &mut ValidationContext) {
             (s, t) => {
                 endpoints_ok = false;
                 if s.is_none() {
-                    ctx.add_error(
-                        ErrorKind::InvalidValue,
+                    ctx.emit(
+                        &rules::SEMANTIC_NODE_GRAPH_MALFORMED,
                         "stages.json",
                         None::<&str>,
                         format!(
@@ -198,8 +198,8 @@ pub(super) fn check_node_graph(data: &ParsedData, ctx: &mut ValidationContext) {
                     );
                 }
                 if t.is_none() {
-                    ctx.add_error(
-                        ErrorKind::InvalidValue,
+                    ctx.emit(
+                        &rules::SEMANTIC_NODE_GRAPH_MALFORMED,
                         "stages.json",
                         None::<&str>,
                         format!(
@@ -269,8 +269,8 @@ fn check_realization_rules(
         let classes = &occupancy[idx];
 
         match (classes.is_empty(), node.scenario_id) {
-            (false, None) => ctx.add_error(
-                ErrorKind::InvalidValue,
+            (false, None) => ctx.emit(
+                &rules::SEMANTIC_NODE_SCENARIO_ID_DECLARATION,
                 "stages.json",
                 Some(format!("node {}", node.id)),
                 format!(
@@ -279,8 +279,8 @@ fn check_realization_rules(
                     node.id, node.stage_id
                 ),
             ),
-            (true, Some(k)) => ctx.add_error(
-                ErrorKind::InvalidValue,
+            (true, Some(k)) => ctx.emit(
+                &rules::SEMANTIC_NODE_SCENARIO_ID_DECLARATION,
                 "stages.json",
                 Some(format!("node {}", node.id)),
                 format!(
@@ -295,8 +295,8 @@ fn check_realization_rules(
         if let Some(k) = node.scenario_id {
             for (class_name, raw_c) in classes {
                 if usize::try_from(k).map_or(true, |ku| ku >= *raw_c) {
-                    ctx.add_error(
-                        ErrorKind::InvalidValue,
+                    ctx.emit(
+                        &rules::SEMANTIC_NODE_SCENARIO_ID_RANGE,
                         "stages.json",
                         Some(format!("node {}", node.id)),
                         format!(
@@ -393,8 +393,8 @@ fn check_empty_stages(
     for (t, &occ) in occupied.iter().enumerate() {
         if !occ {
             let sid = study_ids[t];
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_NODE_GRAPH_MALFORMED,
                 "stages.json",
                 Some(format!("stage {sid}")),
                 format!(
@@ -425,8 +425,8 @@ fn check_edges_t_plus_1(
         };
         if ti != si + 1 {
             ok = false;
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_NODE_EDGE_SKIPS_STAGE,
                 "stages.json",
                 None::<&str>,
                 format!(
@@ -473,8 +473,8 @@ fn check_no_cycle(nodes: &[Node], children: &[Vec<usize>], ctx: &mut ValidationC
         }
     }
     if found {
-        ctx.add_error(
-            ErrorKind::CycleDetected,
+        ctx.emit(
+            &rules::SEMANTIC_NODE_GRAPH_CYCLE,
             "stages.json",
             None::<&str>,
             "policy-graph nodes contain a cycle; the node graph must be acyclic".to_string(),
@@ -511,8 +511,8 @@ fn check_reachable_nodes(
     }
     for (pos, node) in nodes.iter().enumerate() {
         if !reachable[pos] {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_NODE_GRAPH_MALFORMED,
                 "stages.json",
                 Some(format!("node {}", node.id)),
                 format!(
@@ -538,8 +538,8 @@ fn check_no_mid_horizon_leaf(
             && let Some(idx) = stage_index[pos]
             && idx + 1 < n_stages
         {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_NODE_GRAPH_MALFORMED,
                 "stages.json",
                 Some(format!("node {}", node.id)),
                 format!(
@@ -589,8 +589,8 @@ fn check_recombinable_signature(
             *count += 1;
             if *count == 2 && !warned {
                 warned = true;
-                ctx.add_warning(
-                    ErrorKind::ModelQuality,
+                ctx.emit(
+                    &rules::SEMANTIC_NODE_RECOMBINABLE_SUBTREES,
                     "stages.json",
                     Some(format!("stage {sid}")),
                     format!(
@@ -641,8 +641,8 @@ pub(super) fn check_num_openings_declaration(data: &ParsedData, ctx: &mut Valida
         let generated = occupancy[idx].is_empty();
         let declared = data.stages.openings_declared.contains(&stage_id);
         match (generated, declared) {
-            (true, false) => ctx.add_error(
-                ErrorKind::InvalidValue,
+            (true, false) => ctx.emit(
+                &rules::SEMANTIC_NUM_OPENINGS_DECLARATION,
                 "stages.json",
                 Some(format!("stage {stage_id}")),
                 format!(
@@ -650,8 +650,8 @@ pub(super) fn check_num_openings_declaration(data: &ParsedData, ctx: &mut Valida
                      num_openings is required there"
                 ),
             ),
-            (false, true) => ctx.add_error(
-                ErrorKind::InvalidValue,
+            (false, true) => ctx.emit(
+                &rules::SEMANTIC_NUM_OPENINGS_DECLARATION,
                 "stages.json",
                 Some(format!("stage {stage_id}")),
                 format!(
@@ -681,8 +681,8 @@ pub(super) fn check_edge_discount_override_under_nodes(
     }
     for tr in &graph.transitions {
         if tr.annual_discount_rate_override.is_some() {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_EDGE_DISCOUNT_OVERRIDE_UNDER_NODES,
                 "stages.json",
                 None::<&str>,
                 format!(
@@ -708,8 +708,8 @@ pub(super) fn check_nodes_and_noise_openings(data: &ParsedData, ctx: &mut Valida
     }
 
     if !data.stages.policy_graph.nodes.is_empty() {
-        ctx.add_error(
-            ErrorKind::InvalidValue,
+        ctx.emit(
+            &rules::SEMANTIC_FILE_OPENINGS_CONFLICT,
             "config.json",
             None::<&str>,
             "openings = {source: file} supplies a user opening tree, which conflicts with a \
@@ -723,8 +723,8 @@ pub(super) fn check_nodes_and_noise_openings(data: &ParsedData, ctx: &mut Valida
         data.config.resolve_forward_passes(),
         Some(ForwardPassesResolution::Enumerated)
     ) {
-        ctx.add_error(
-            ErrorKind::InvalidValue,
+        ctx.emit(
+            &rules::SEMANTIC_FILE_OPENINGS_CONFLICT,
             "config.json",
             None::<&str>,
             "openings = {source: file} supplies a generated backward opening tree, which is not \
@@ -768,8 +768,8 @@ pub(super) fn check_sampling_method_meaningfulness(data: &ParsedData, ctx: &mut 
                 .is_some_and(|idx| !occ[idx].is_empty())
         });
         if multi_node || external {
-            ctx.add_warning(
-                ErrorKind::ModelQuality,
+            ctx.emit(
+                &rules::SEMANTIC_SAMPLING_METHOD_INERT,
                 "stages.json",
                 Some(format!("stage {stage_id}")),
                 format!(
@@ -787,8 +787,8 @@ pub(super) fn check_sampling_method_meaningfulness(data: &ParsedData, ctx: &mut 
 pub(super) fn check_study_stage_blocks(data: &ParsedData, ctx: &mut ValidationContext) {
     for stage in data.stages.stages.iter().filter(|s| s.id >= 0) {
         if stage.blocks.is_empty() {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_STAGE_BLOCKS,
                 "stages.json",
                 None::<&str>,
                 format!(
@@ -801,8 +801,8 @@ pub(super) fn check_study_stage_blocks(data: &ParsedData, ctx: &mut ValidationCo
         }
         for block in &stage.blocks {
             if !block.duration_hours.is_finite() || block.duration_hours <= 0.0 {
-                ctx.add_error(
-                    ErrorKind::InvalidValue,
+                ctx.emit(
+                    &rules::SEMANTIC_STAGE_BLOCKS,
                     "stages.json",
                     None::<&str>,
                     format!(
@@ -1658,6 +1658,32 @@ mod tests {
             "unknown endpoint must be rejected: {:?}",
             ctx.errors()
         );
+    }
+
+    /// A transition source that is not a declared node is rejected.
+    #[test]
+    fn test_node_graph_unknown_source_endpoint_rejected() {
+        let data = node_graph_data(
+            2,
+            vec![node(0, 0, None), node(1, 1, None)],
+            vec![edge(99, 1, 1.0)],
+        );
+        let ctx = run(&data);
+        let matching: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.message
+                    .contains("source_id 99 does not refer to a declared node")
+            })
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "unknown source endpoint must be rejected once: {:?}",
+            ctx.errors()
+        );
+        assert_eq!(matching[0].kind, ErrorKind::InvalidValue);
     }
 
     /// A node whose `stage_id` names no declared study stage is rejected.

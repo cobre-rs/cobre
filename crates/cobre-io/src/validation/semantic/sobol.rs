@@ -3,15 +3,15 @@
 //! Verifies that stages declaring the Sobol noise method have a
 //! `branching_factor` that is a power of 2.
 
-use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::super::{ValidationContext, rules, schema::ParsedData};
 
 /// Rule 25: warns when a stage uses `QmcSobol` with a non-power-of-2 `branching_factor`.
 ///
 /// Sobol sequences achieve optimal low-discrepancy uniformity only when the
 /// number of sample points is a power of 2. A non-power-of-2 value produces
 /// valid noise but loses the stratification guarantee of the Gray-code
-/// recurrence. This emits a `ModelQuality` warning (not an error) because the
-/// configuration is valid but suboptimal.
+/// recurrence. It warns rather than rejects, because the configuration is valid
+/// but suboptimal.
 pub(super) fn check_sobol_power_of_2(data: &ParsedData, ctx: &mut ValidationContext) {
     use cobre_core::temporal::NoiseMethod;
 
@@ -30,8 +30,8 @@ pub(super) fn check_sobol_power_of_2(data: &ParsedData, ctx: &mut ValidationCont
             } else {
                 "consider a positive power of 2".to_string()
             };
-            ctx.add_warning(
-                ErrorKind::ModelQuality,
+            ctx.emit(
+                &rules::SEMANTIC_SOBOL_OPENING_COUNT,
                 "stages.json",
                 Some(format!("Stage {}", stage.id)),
                 format!(

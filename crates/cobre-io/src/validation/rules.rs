@@ -22,6 +22,13 @@
 //! next free number in its namespace, past every number the namespace has listed or retired.
 //! A listed id is never renamed, split or renumbered, and a retired id is never reused.
 //!
+//! When the table was first built, a numbered row whose sites emitted more than one kind and
+//! severity pair got one entry per pair, labelled `<row>.<k>`, with `k` counted once from 1 in
+//! that build's source order, and its bare number is not an id.
+//! Sub-labels are assigned only then. A pair added later to a listed rule, sub-labelled or not,
+//! takes the next free number in its namespace, and no listed id is renamed, split or
+//! renumbered to make room for it.
+//!
 //! # Granularity
 //!
 //! One entry per distinct check. Sites that report the same condition with the same kind
@@ -288,6 +295,75 @@ declare_rules! {
     TRAVEL_TIME_DOWNSTREAM_NOT_OPERATING = "travel_time.12",
         Semantic, BusinessRuleViolation, Error,
         "A travel-time arc releases at a stage where its downstream hydro is not yet operating";
+    SEMANTIC_TRANSITION_ENDPOINT_NOT_A_STAGE = "semantic.5b.1",
+        Semantic, InvalidValue, Error,
+        "A policy-graph transition source_id or target_id is not a declared stage id";
+    SEMANTIC_TRANSITION_PROBABILITY_SUM = "semantic.5b.2",
+        Semantic, InvalidValue, Error,
+        "The outgoing transition probabilities of a policy-graph source do not sum to 1 within tolerance";
+    SEMANTIC_CYCLIC_GRAPH_DISCOUNT_RATE = "semantic.5b.3",
+        Semantic, InvalidValue, Error,
+        "A cyclic policy graph has an annual_discount_rate that is not positive";
+    SEMANTIC_SOBOL_OPENING_COUNT = "semantic.5b.25",
+        Semantic, ModelQuality, Warning,
+        "A stage using the qmc_sobol noise method has a num_openings that is not a power of 2";
+    SEMANTIC_STAGE_SEASON_UNDEFINED = "semantic.5b.27",
+        Semantic, BusinessRuleViolation, Error,
+        "A stage season_id is not defined in season_definitions";
+    SEMANTIC_SEASON_WITHOUT_OBSERVATIONS = "semantic.5b.28",
+        Semantic, ModelQuality, Warning,
+        "A defined season has no inflow history observation while estimation is active and the training inflow scheme is not external";
+    SEMANTIC_SEASON_DURATION_SPREAD = "semantic.5b.29",
+        Semantic, BusinessRuleViolation, Error,
+        "Stages that share a season_id differ in duration by more than the sub-period tolerance";
+    SEMANTIC_SEASON_UNREFERENCED = "semantic.5b.30",
+        Semantic, ModelQuality, Warning,
+        "A season defined in season_definitions is referenced by no stage";
+    SEMANTIC_HISTORY_FINER_THAN_SEASON = "semantic.5b.31.1",
+        Semantic, BusinessRuleViolation, Warning,
+        "A hydro has several inflow history observations for one season in one year; estimation aggregates them to the season";
+    SEMANTIC_HISTORY_COARSER_THAN_SEASON = "semantic.5b.31.2",
+        Semantic, BusinessRuleViolation, Error,
+        "A hydro's inflow history misses a defined season in an interior year, which indicates coarser-than-season observations that cannot be disaggregated";
+    SEMANTIC_INFLOW_LAGS_DISABLED_UNDER_AR_MODEL = "semantic.5b.34",
+        Semantic, ModelQuality, Warning,
+        "Every study stage disables inflow_lags although the inflow model has an autoregressive order above zero";
+    SEMANTIC_NODE_SCENARIO_ID_DECLARATION = "semantic.5b.36",
+        Semantic, InvalidValue, Error,
+        "Under enumerated forward selection, a node has no scenario_id at a stage carrying a slot-occupying external class, or declares one at a stage carrying none";
+    SEMANTIC_NODE_SCENARIO_ID_RANGE = "semantic.5b.37",
+        Semantic, InvalidValue, Error,
+        "A node scenario_id is outside the column range of a slot-occupying external class at its stage";
+    SEMANTIC_NODE_GRAPH_MALFORMED = "semantic.5b.38.1",
+        Semantic, InvalidValue, Error,
+        "A declared node graph is malformed: a node names an undeclared study stage, a transition endpoint is not a declared node, a study stage has no node, a node is unreachable from the first stage, or a non-final node has no successor";
+    SEMANTIC_NODE_ID_DUPLICATE = "semantic.5b.38.2",
+        Semantic, DuplicateId, Error,
+        "Two policy-graph nodes share an id";
+    SEMANTIC_NODE_GRAPH_CYCLE = "semantic.5b.38.3",
+        Semantic, CycleDetected, Error,
+        "The declared node graph contains a cycle";
+    SEMANTIC_NODE_EDGE_SKIPS_STAGE = "semantic.5b.39",
+        Semantic, InvalidValue, Error,
+        "A node-graph transition does not advance exactly one stage";
+    SEMANTIC_NODE_RECOMBINABLE_SUBTREES = "semantic.5b.40",
+        Semantic, ModelQuality, Warning,
+        "A stage carries several nodes with structurally identical subtrees";
+    SEMANTIC_NUM_OPENINGS_DECLARATION = "semantic.5b.41",
+        Semantic, InvalidValue, Error,
+        "Under a node graph, a stage with generated openings declares no num_openings, or a stage with only external openings declares one";
+    SEMANTIC_EDGE_DISCOUNT_OVERRIDE_UNDER_NODES = "semantic.5b.42",
+        Semantic, InvalidValue, Error,
+        "A transition declares annual_discount_rate_override under a node graph, where the override belongs on its stage";
+    SEMANTIC_FILE_OPENINGS_CONFLICT = "semantic.5b.43",
+        Semantic, InvalidValue, Error,
+        "A file-sourced backward opening tree is configured together with a declared node graph or under enumerated forward selection";
+    SEMANTIC_SAMPLING_METHOD_INERT = "semantic.5b.44",
+        Semantic, ModelQuality, Warning,
+        "Under a node graph, a stage's sampling_method has no effect because the stage carries external openings or several nodes";
+    SEMANTIC_STAGE_BLOCKS = "semantic.5b.52",
+        Semantic, InvalidValue, Error,
+        "A study stage declares no block, or a block whose duration_hours is not finite and positive";
     PRODUCTIVITY_SUPPLIED_TWICE = "productivity_resolution.1",
         ProductivityResolution, SchemaViolation, Error,
         "A hydro's stage productivity is supplied by both hydro_production_models.json and hydro_energy_productivity.parquet";
@@ -374,6 +450,23 @@ mod tests {
                     "{}: layer token '{token}' is not snake_case",
                     rule.id
                 ));
+            }
+        }
+
+        for shorter in RULES {
+            for longer in RULES {
+                if longer
+                    .id
+                    .strip_prefix(shorter.id)
+                    .is_some_and(|rest| rest.starts_with('.'))
+                {
+                    problems.push(format!(
+                        "{} and {} are both listed: a kind and severity pair added to a listed \
+                         rule takes the next free number in its namespace, and a sub-labelled \
+                         row's bare number is not an id",
+                        shorter.id, longer.id
+                    ));
+                }
             }
         }
 

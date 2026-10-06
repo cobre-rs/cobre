@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::super::{ValidationContext, rules, schema::ParsedData};
 
 use cobre_core::SeasonMap;
 use cobre_core::temporal::SUB_PERIOD_TOLERANCE_DAYS;
@@ -25,8 +25,8 @@ pub(super) fn check_season_id_consistency(data: &ParsedData, ctx: &mut Validatio
             continue;
         };
         if !valid_ids.contains(&sid) {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_STAGE_SEASON_UNDEFINED,
                 "stages.json",
                 Some(format!("Stage {}", stage.id)),
                 format!(
@@ -72,8 +72,8 @@ pub(super) fn check_season_id_consistency(data: &ParsedData, ctx: &mut Validatio
             } else {
                 ""
             };
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_SEASON_DURATION_SPREAD,
                 "stages.json",
                 Some(format!("Season {sid}")),
                 format!(
@@ -163,8 +163,8 @@ pub(super) fn check_observation_season_alignment(data: &ParsedData, ctx: &mut Va
         .collect();
     finer_violations.sort_unstable();
     for (hid, sid, yr, count) in finer_violations {
-        ctx.add_warning(
-            ErrorKind::BusinessRuleViolation,
+        ctx.emit(
+            &rules::SEMANTIC_HISTORY_FINER_THAN_SEASON,
             "scenarios/inflow_history.parquet",
             Some(format!("Hydro {hid}")),
             format!(
@@ -203,8 +203,8 @@ pub(super) fn check_observation_season_alignment(data: &ParsedData, ctx: &mut Va
     }
     coarser_violations.sort_unstable();
     for (hid, sid, yr) in coarser_violations {
-        ctx.add_error(
-            ErrorKind::BusinessRuleViolation,
+        ctx.emit(
+            &rules::SEMANTIC_HISTORY_COARSER_THAN_SEASON,
             "scenarios/inflow_history.parquet",
             Some(format!("Hydro {hid}")),
             format!(
@@ -254,8 +254,8 @@ pub(super) fn check_season_observation_coverage(
         .iter()
         .filter(|s| season_obs_count.get(&s.id).copied().unwrap_or(0) == 0)
     {
-        ctx.add_warning(
-            ErrorKind::ModelQuality,
+        ctx.emit(
+            &rules::SEMANTIC_SEASON_WITHOUT_OBSERVATIONS,
             "stages.json",
             Some(format!("Season {}", season.id)),
             format!(
@@ -284,8 +284,8 @@ pub(super) fn check_season_contiguity(
     let mut unreferenced: Vec<usize> = defined_ids.difference(&referenced_ids).copied().collect();
     unreferenced.sort_unstable();
     for sid in unreferenced {
-        ctx.add_warning(
-            ErrorKind::ModelQuality,
+        ctx.emit(
+            &rules::SEMANTIC_SEASON_UNREFERENCED,
             "stages.json",
             Some(format!("Season {sid}")),
             format!(

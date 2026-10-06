@@ -85,8 +85,8 @@ water-value _function_, not a single water-value _number_. For the supported
 single-boundary-policy input this is the correct representation, not a limitation: one
 shared static terminal template, baked once and evaluated at each leaf's own state,
 with the terminal boundary future cost booked in the reported cost
-(`terminal_has_boundary_cuts`; see the "Terminal boundary FCF" contract in
-`.claude/rules/sddp.md`).
+(`CutPool::has_warm_start_cuts` on the terminal stage's pool; see the "Terminal boundary
+FCF" contract in `.claude/rules/sddp.md`).
 
 A distinct future-cost _function_ per leaf — different `α/β`, say one water-value
 function for a wet-basin ending and another for a dry-basin ending — is a different

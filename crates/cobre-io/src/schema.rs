@@ -334,6 +334,44 @@ mod tests {
     }
 
     #[test]
+    fn config_schema_requires_training_selection_and_stopping_rules() {
+        let schemas = generate_schemas().unwrap();
+        let (_, config_schema) = schemas
+            .iter()
+            .find(|(name, _)| name == "config.schema.json")
+            .unwrap_or_else(|| panic!("config.schema.json not found in schemas"));
+
+        let required = config_schema
+            .pointer("/$defs/TrainingConfig/required")
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("TrainingConfig has no required list"));
+        for key in ["selection", "stopping_rules"] {
+            assert!(
+                required.iter().any(|entry| entry == key),
+                "TrainingConfig should require '{key}', got: {required:?}"
+            );
+        }
+
+        assert_eq!(
+            config_schema.pointer("/$defs/TrainingConfig/properties/stopping_rules/type"),
+            Some(&Value::String("array".to_string()))
+        );
+
+        let selection = config_schema
+            .pointer("/$defs/TrainingConfig/properties/selection")
+            .unwrap_or_else(|| panic!("TrainingConfig has no selection property"));
+        assert_eq!(selection.get("anyOf"), None);
+        assert_eq!(selection.get("default"), None);
+        assert_eq!(
+            selection
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+    }
+
+    #[test]
     fn test_all_expected_schema_filenames_present() {
         let schemas = generate_schemas().unwrap();
         let names: Vec<&str> = schemas.iter().map(|(n, _)| n.as_str()).collect();

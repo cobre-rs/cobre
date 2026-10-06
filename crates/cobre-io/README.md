@@ -60,7 +60,7 @@ and calls `SystemBuilder::build()` to construct the immutable `System`.
 | -------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `IoError`            | `path`, `source: std::io::Error`                                                    | Layer 1/2 — file exists in the manifest but cannot be read from disk                                                                                                                    |
 | `ParseError`         | `path`, `message`                                                                   | Layer 2 — file is readable but malformed (invalid JSON/Parquet)                                                                                                                         |
-| `SchemaError`        | `path`, `field` (dot-separated, e.g. `"hydros[3].bus_id"`), `message`               | Layer 2 — required field missing or a value violates a schema constraint; also returned by `parse_config` when `training.forward_passes` or `training.stopping_rules` is absent         |
+| `SchemaError`        | `path`, `field` (dot-separated, e.g. `"hydros[3].bus_id"`), `message`               | Layer 2 — required field missing or a value violates a schema constraint; also returned by `parse_config` when `training.selection` or `training.stopping_rules` is absent              |
 | `ConstraintError`    | `description` (all collected messages, newline-joined, each `[ErrorKind]`-prefixed) | Layers 4/5, or a final `SystemBuilder::build()` rejection (duplicate IDs, cascade cycle)                                                                                                |
 | `PolicyIncompatible` | `check`, `policy_value`, `system_value`                                             | After all layers pass, when `policy.mode` is `warm_start`/`resume` and the stored policy fails a compatibility check (hydro count, stage count, cut dimension, or entity identity hash) |
 
@@ -81,9 +81,9 @@ impl — the latter would lose the path context every diagnostic needs.
 | `exports`                | `ExportsConfig`              | all on     | Flags controlling which output files are written       |
 | `estimation`             | `EstimationConfig`           | `{}`       | AR model fitting settings for history-based estimation |
 
-`training.forward_passes` and `training.stopping_rules` (must include at least
-one `iteration_limit` rule) have no defaults; `parse_config` returns
-`LoadError::SchemaError` if either is absent.
+`training.selection` and `training.stopping_rules` (must include at least one
+`iteration_limit` rule) have no defaults; `parse_config` returns
+`LoadError::SchemaError` if either is absent or `null`.
 
 `training.stopping_rules` accepts four internally-tagged (`"type"`) rule
 variants — `iteration_limit { limit }`, `time_limit { seconds }`,

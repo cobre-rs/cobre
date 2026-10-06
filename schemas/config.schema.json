@@ -1165,16 +1165,44 @@
           "description": "Scenario source configuration for the training forward pass.\nWhen absent, all classes default to `in_sample`."
         },
         "selection": {
-          "anyOf": [
+          "description": "Phase-level scenario selection. The forward-pass count lives in the\n`sampled` arm; absent is a missing-count load error.",
+          "oneOf": [
             {
-              "$ref": "#/$defs/TrainingSelection"
+              "additionalProperties": false,
+              "description": "Sampled forward passes: `forward_passes` trajectories per iteration.",
+              "properties": {
+                "forward_passes": {
+                  "description": "Number of forward-pass trajectories per iteration.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "method": {
+                  "const": "sampled",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "method",
+                "forward_passes"
+              ],
+              "type": "object"
             },
             {
-              "type": "null"
+              "additionalProperties": false,
+              "description": "Exhaustive enumeration of the scenario openings.",
+              "properties": {
+                "method": {
+                  "const": "enumerated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "method"
+              ],
+              "type": "object"
             }
-          ],
-          "default": null,
-          "description": "Phase-level scenario selection. The forward-pass count lives in the\n`sampled` arm; absent is a missing-count load error."
+          ]
         },
         "solver": {
           "$ref": "#/$defs/TrainingSolverConfig",
@@ -1196,10 +1224,7 @@
           "items": {
             "$ref": "#/$defs/StoppingRuleConfig"
           },
-          "type": [
-            "array",
-            "null"
-          ]
+          "type": "array"
         },
         "tree_seed": {
           "default": null,
@@ -1211,47 +1236,11 @@
           ]
         }
       },
+      "required": [
+        "stopping_rules",
+        "selection"
+      ],
       "type": "object"
-    },
-    "TrainingSelection": {
-      "description": "Training-phase scenario selection and its method-specific parameters\n(`config.json → training.selection`).\n\nThe `method` key selects how scenarios are chosen: `sampled` runs\n`forward_passes` trajectories per iteration; `enumerated` walks the scenario\nopenings exhaustively. Each method accepts only its own parameters, so\npairing a count with `enumerated` is a parse error.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "description": "Sampled forward passes: `forward_passes` trajectories per iteration.",
-          "properties": {
-            "forward_passes": {
-              "description": "Number of forward-pass trajectories per iteration.",
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "method": {
-              "const": "sampled",
-              "type": "string"
-            }
-          },
-          "required": [
-            "method",
-            "forward_passes"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Exhaustive enumeration of the scenario openings.",
-          "properties": {
-            "method": {
-              "const": "enumerated",
-              "type": "string"
-            }
-          },
-          "required": [
-            "method"
-          ],
-          "type": "object"
-        }
-      ]
     },
     "TrainingSolverConfig": {
       "additionalProperties": false,

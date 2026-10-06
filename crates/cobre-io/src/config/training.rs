@@ -26,6 +26,7 @@ pub struct TrainingConfig {
     /// List of stopping rule configurations.
     ///
     /// **Mandatory** — no default. Must contain at least one `iteration_limit` rule.
+    #[cfg_attr(feature = "schema", schemars(required))]
     pub stopping_rules: Option<Vec<StoppingRuleConfig>>,
 
     /// How multiple stopping rules combine: `any` (OR) or `all` (AND).
@@ -55,7 +56,7 @@ pub struct TrainingConfig {
 
     /// Phase-level scenario selection. The forward-pass count lives in the
     /// `sampled` arm; absent is a missing-count load error.
-    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(required))]
     pub selection: Option<TrainingSelection>,
 }
 

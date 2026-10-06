@@ -665,6 +665,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn null_selection_or_stopping_rules_is_rejected_at_load() {
+        for (training, expected_field) in [
+            (
+                r#"{"selection": null, "stopping_rules": [{"type": "iteration_limit", "limit": 1}]}"#,
+                "training.selection",
+            ),
+            (
+                r#"{"selection": {"method": "sampled", "forward_passes": 1}, "stopping_rules": null}"#,
+                "training.stopping_rules",
+            ),
+        ] {
+            let f = write_config(&format!(r#"{{"training": {training}}}"#));
+            let err = parse_config(f.path()).unwrap_err();
+            match &err {
+                LoadError::SchemaError { field, .. } => {
+                    assert_eq!(field, expected_field, "training: {training}");
+                }
+                other => panic!("expected SchemaError for training {training}, got: {other:?}"),
+            }
+        }
+    }
+
     /// Nonexistent file → IoError with matching path.
     #[test]
     fn test_nonexistent_file() {

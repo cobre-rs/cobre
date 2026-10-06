@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 /// Errors that can occur during case loading.
 ///
 /// Variants are ordered by the pipeline phase in which they typically occur:
-/// I/O read → parse → schema validation → semantic constraint validation →
-/// warm-start policy compatibility.
+/// I/O read → parse → schema validation → semantic constraint validation.
 ///
 /// # Examples
 ///
@@ -62,22 +61,6 @@ pub enum LoadError {
     ConstraintError {
         /// Human-readable description of the violated constraint.
         description: String,
-    },
-
-    /// Warm-start policy is structurally incompatible with the current system.
-    ///
-    /// See SS7.1 in `input-loading-pipeline.md` for the four compatibility checks.
-    #[error(
-        "policy incompatible: {check} mismatch — policy has {policy_value}, \
-         system has {system_value}"
-    )]
-    PolicyIncompatible {
-        /// Name of the failing compatibility check (e.g., `"hydro count"`).
-        check: String,
-        /// Value recorded in the policy file.
-        policy_value: String,
-        /// Value present in the current system.
-        system_value: String,
     },
 }
 
@@ -131,7 +114,6 @@ impl LoadError {
             Self::ParseError { .. } => "ParseError",
             Self::SchemaError { .. } => "SchemaError",
             Self::ConstraintError { .. } => "ConstraintError",
-            Self::PolicyIncompatible { .. } => "PolicyIncompatible",
         }
     }
 }
@@ -194,32 +176,6 @@ mod tests {
     }
 
     #[test]
-    fn test_load_error_policy_incompatible_display() {
-        let err = LoadError::PolicyIncompatible {
-            check: "hydro count".to_string(),
-            policy_value: "12".to_string(),
-            system_value: "15".to_string(),
-        };
-        let display = err.to_string();
-        assert!(
-            display.contains("policy incompatible"),
-            "display should contain policy incompatible, got: {display}"
-        );
-        assert!(
-            display.contains("hydro count"),
-            "display should contain check, got: {display}"
-        );
-        assert!(
-            display.contains("12"),
-            "display should contain policy_value, got: {display}"
-        );
-        assert!(
-            display.contains("15"),
-            "display should contain system_value, got: {display}"
-        );
-    }
-
-    #[test]
     fn test_load_error_is_std_error() {
         let err = LoadError::ConstraintError {
             description: "hydro cascade contains a cycle".to_string(),
@@ -255,15 +211,6 @@ mod tests {
             }
             .kind(),
             "ConstraintError"
-        );
-        assert_eq!(
-            LoadError::PolicyIncompatible {
-                check: "x".to_string(),
-                policy_value: "x".to_string(),
-                system_value: "x".to_string(),
-            }
-            .kind(),
-            "PolicyIncompatible"
         );
     }
 

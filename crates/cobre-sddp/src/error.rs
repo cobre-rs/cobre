@@ -173,8 +173,7 @@ impl SddpError {
                 source: OutputError::ForeignEntry { .. },
                 ..
             } => ErrorClass::InvalidInput,
-            Self::Io(LoadError::PolicyIncompatible { .. })
-            | Self::PolicySoftwareMismatch { .. } => ErrorClass::IncompatiblePolicy,
+            Self::PolicySoftwareMismatch { .. } => ErrorClass::IncompatiblePolicy,
             Self::Io(LoadError::IoError { .. })
             | Self::CheckpointWrite {
                 source: OutputError::IoError { .. },
@@ -516,14 +515,6 @@ mod tests {
                     description: "cycle".to_string(),
                 }),
                 ErrorClass::InvalidInput,
-            ),
-            (
-                SddpError::Io(LoadError::PolicyIncompatible {
-                    check: "hydro count".to_string(),
-                    policy_value: "3".to_string(),
-                    system_value: "4".to_string(),
-                }),
-                ErrorClass::IncompatiblePolicy,
             ),
             (
                 SddpError::PolicySoftwareMismatch {

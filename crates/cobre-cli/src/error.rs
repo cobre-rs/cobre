@@ -674,11 +674,6 @@ mod tests {
             Io(LoadError::ConstraintError {
                 description: "cycle".to_string(),
             }),
-            Io(LoadError::PolicyIncompatible {
-                check: "hydro count".to_string(),
-                policy_value: "3".to_string(),
-                system_value: "4".to_string(),
-            }),
             PolicySoftwareMismatch {
                 policy_software: None,
                 policy_version: "0.0.1".to_string(),
@@ -924,19 +919,6 @@ mod tests {
         assert!(
             matches!(cli_err, CliError::Internal { .. }),
             "SimulationError::IoError must map to CliError::Internal, got: {cli_err:?}"
-        );
-        assert_eq!(cli_err.exit_code(), 4);
-    }
-
-    #[test]
-    fn from_simulation_error_policy_incompatible_maps_to_internal() {
-        let sim_err = SimulationError::PolicyIncompatible {
-            message: "hydro count mismatch".to_string(),
-        };
-        let cli_err = CliError::from(sim_err);
-        assert!(
-            matches!(cli_err, CliError::Internal { .. }),
-            "SimulationError::PolicyIncompatible must map to CliError::Internal, got: {cli_err:?}"
         );
         assert_eq!(cli_err.exit_code(), 4);
     }

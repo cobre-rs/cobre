@@ -43,15 +43,6 @@ pub enum SimulationError {
         message: String,
     },
 
-    /// Policy compatibility validation failed (simulation-architecture.md
-    /// SS2). The trained policy is incompatible with the current system
-    /// configuration.
-    #[error("policy incompatible with current system: {message}")]
-    PolicyIncompatible {
-        /// Description of the compatibility mismatch.
-        message: String,
-    },
-
     /// Channel send failure — the receiving end (I/O thread) has dropped
     /// unexpectedly. Indicates a panic or crash in the output writer.
     #[error("simulation output channel closed unexpectedly")]
@@ -121,15 +112,6 @@ mod tests {
     }
 
     #[test]
-    fn simulation_error_policy_incompatible_display() {
-        let err = SimulationError::PolicyIncompatible {
-            message: "hydro count mismatch: expected 5, got 6".to_string(),
-        };
-        let msg = err.to_string();
-        assert!(msg.contains("hydro count mismatch"), "{msg}");
-    }
-
-    #[test]
     fn simulation_error_channel_closed_display() {
         let err = SimulationError::ChannelClosed;
         let msg = err.to_string();
@@ -156,9 +138,6 @@ mod tests {
             SimulationError::IoError {
                 message: "disk full".to_string(),
             },
-            SimulationError::PolicyIncompatible {
-                message: "mismatch".to_string(),
-            },
             SimulationError::ChannelClosed,
         ];
         for err in &variants {
@@ -181,9 +160,6 @@ mod tests {
             },
             SimulationError::IoError {
                 message: "write failed".to_string(),
-            },
-            SimulationError::PolicyIncompatible {
-                message: "bus count mismatch".to_string(),
             },
             SimulationError::ChannelClosed,
         ];

@@ -194,9 +194,9 @@ fn map_load_error(err: &LoadError, relative_path: &str, ctx: &mut ValidationCont
                 format!("field {field}: {message}"),
             );
         }
-        _ => {
-            // Layer-2 parsers should not produce these variants; map conservatively.
-            // Unlike the arms above, these do not embed `relative_path`, so their full
+        LoadError::ConstraintError { .. } => {
+            // Layer-2 parsers should not produce this variant; map conservatively.
+            // Unlike the arms above, it does not embed `relative_path`, so its full
             // Display is safe (no path duplication).
             ctx.emit(
                 &rules::SCHEMA_FILE_NONCONFORMING,

@@ -227,9 +227,6 @@ fn convert_error_with(py: Python<'_>, source: ErrorSource<'_>) -> PyErr {
             LoadError::ParseError { .. }
             | LoadError::SchemaError { .. }
             | LoadError::ConstraintError { .. } => validation_error(py, &err.to_string()),
-            LoadError::PolicyIncompatible { .. } => {
-                new_leaf_err(py, &POLICY_INCOMPATIBLE_ERROR, &err.to_string())
-            }
         },
         ErrorSource::Output(err) => output_error(py, err, &err.to_string()),
         ErrorSource::Sddp { error, message } => match error {

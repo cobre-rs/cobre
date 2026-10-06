@@ -17,7 +17,6 @@
 //! | `LoadError::ParseError`             | `ValidationError` (`ValueError`) |
 //! | `LoadError::SchemaError`            | `ValidationError` (`ValueError`) |
 //! | `LoadError::ConstraintError`        | `ValidationError` (`ValueError`) |
-//! | `LoadError::PolicyIncompatible`     | `PolicyIncompatibleError` (`ValueError`) |
 //!
 //! [`validate`] returns case-validation failures as data; a malformed
 //! `config_overrides` dict raises `ValueError` at call time.

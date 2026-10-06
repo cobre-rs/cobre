@@ -757,6 +757,23 @@ rule the two agree; with several they can differ.
 a consumer of `training/metadata.json` reads `max_iterations` as the run's
 iteration budget.
 
+### Slurm srun --mpi=pmix signal forwarding is unverified
+
+**What it is.** Slurm `srun --mpi=pmix` signal forwarding is unverified; only
+MPICH Hydra was probed. The MPI release README, written by the
+`Package archive` step of `.github/workflows/release-mpi.yml`, tells users to
+launch the ranks with `srun --mpi=pmix` so that `#SBATCH --signal=TERM@<lead>`
+reaches them, but the graceful stop was reproduced only under `mpiexec`
+(MPICH Hydra) with every rank signalled directly. No CI job launches ranks
+with `srun`: the Slurm harness (`tests/slurm/run-tests.sh`) runs `mpiexec`,
+inside `sbatch` jobs for its cluster cases, and has no `--signal` case.
+
+**Owner.** The HPC build / deployment owner.
+
+**Trigger.** A Slurm-launched graceful stop that behaves differently from the
+local `mpiexec` reproduction, or the first CI job that launches ranks with
+`srun`.
+
 ## Deferred-debt register — whole-lifecycle audit findings
 
 Findings of the full `cobre run` lifecycle read, described by behavior. Each

@@ -142,6 +142,87 @@ jobs:
           For the single-process variant (no MPI dependency), download
           the standard 'cobre' binary from the same GitHub release.
 
+          Stopping before a SLURM time limit
+          ----------------------------------
+
+          A SIGTERM during training makes cobre-mpi stop at the next iteration
+          boundary on every rank, write the training outputs and the policy
+          checkpoint, and exit with code 5. The configured simulation is then
+          skipped: simulation/metadata.json is written with status "partial" and
+          0 completed scenarios. This also holds when the signal arrives in the
+          iteration where a stopping rule ends training, or while the training
+          outputs are being written. To continue training, set
+          "policy": {"mode": "resume"} in config.json and run again with the same
+          output directory.
+
+          To have SLURM send that SIGTERM before the time limit, request it in the
+          batch script and launch the ranks with srun, so that the signal reaches
+          them:
+
+            #SBATCH --time=<walltime>
+            #SBATCH --signal=TERM@<lead>
+
+            srun --mpi=pmix -n <nprocs> ./cobre-mpi run <case-dir>
+
+          Do not use the B: prefix (--signal=B:TERM@<lead>): it signals only the
+          batch shell, not the ranks.
+
+          <lead> is in seconds. It must cover, from the moment the signal arrives:
+            - one periodic checkpoint write, because a signal that arrives during
+              one takes effect only at the end of the following iteration;
+            - the longest training iteration;
+            - the final write of the training outputs and the checkpoint;
+            - a margin.
+          Measure these on an earlier run of the same case, with a similar number
+          of iterations, on the same file system. The time_total_ms column of
+          training/convergence.parquet holds each iteration's time. Without
+          --quiet, the "Output written to" line ends with the time of the final
+          write, which includes a checkpoint write; use that time for the periodic
+          write as well. Each checkpoint write syncs every policy file to storage,
+          so its time grows with the size of the policy and with the file
+          system's sync latency. The lead does not need to cover the simulation,
+          because a signal stop skips it.
+
+          SLURM may send the signal up to 60 seconds earlier than requested. At
+          the time limit SLURM sends SIGTERM again, which only repeats the stop
+          request, and SIGKILL follows after the cluster's KillWait interval (30
+          seconds by default; set by the site). A run that SIGKILL ends keeps only
+          its last periodic checkpoint, so enable periodic checkpoints:
+          "policy": {"checkpointing": {"enabled": true, "interval_iterations": N}}.
+          Each periodic write adds its time to the training, so a larger N spends
+          less time writing and loses more iterations when SIGKILL ends the run.
+
+          A training time_limit stopping rule below the walltime can be the main
+          stop, with the signal as the backup. A time_limit stop exits 0 and runs
+          the configured simulation, and a SIGTERM that arrives while the
+          simulation runs terminates the job without a graceful stop. Choose the
+          time_limit so that setup, training up to the time_limit plus one more
+          iteration, the final writes and the whole simulation finish before SLURM
+          sends the signal. The time_limit counts the training time of each run,
+          so it applies again after a resume.
+
+          Use one writer per policy directory: never point a run at a policy
+          directory that another job is writing (for example, a simulation-only
+          run beside a training run that writes periodic checkpoints), because
+          its ranks may read a copy that changes during the read. On an
+          NFS-backed output directory (including EFS), start the reading job only
+          after the writer has finished and the client's attribute cache (the
+          acdirmax mount option) has expired; a parallel file system such as
+          Lustre or FSx for Lustre has no such delay.
+
+          To stop a running job early and keep its checkpoint, send the signal
+          yourself: scancel --signal=TERM <jobid> (verify on your site that it
+          reaches the job's srun tasks). A plain scancel <jobid> sends SIGTERM and
+          then SIGKILL after KillWait, so the stop has to finish within KillWait.
+
+          In a job script, check training/_SUCCESS as well as the exit code. A
+          run that trains deletes that marker before training starts and writes
+          it after the training outputs and the checkpoint; simulation/_SUCCESS
+          likewise follows the simulation outputs, or the "partial" metadata of
+          a skipped simulation. After a forced abort, such as SIGKILL or a
+          second Ctrl-C to mpiexec, the launcher's exit code does not show
+          whether any outputs were written: MPICH's mpiexec can then exit 0.
+
           Troubleshooting
           ---------------
 

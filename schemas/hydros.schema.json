@@ -97,7 +97,7 @@
       "type": "object"
     },
     "RawGeneration": {
-      "description": "Tagged-union intermediate type for the `generation` sub-object.\n\nUses `#[serde(tag = \"model\")]` (internally-tagged) to dispatch on the\n`\"model\"` field value. Each variant carries only the fields relevant to\nthat model. The `productivity_mw_per_m3s` field is NOT accepted here —\nproductivity coefficients are read from `system/hydro_production_models.json`\nand are associated per `(hydro, stage)` outside this file.\nA `hydros.json` input that includes `productivity_mw_per_m3s` in its\n`generation` block will be rejected with a parse error.",
+      "description": "The `generation` sub-object.\n\nThe `model` key selects the production model, and each model accepts only\nits own fields. The `productivity_mw_per_m3s` field is NOT accepted here —\nproductivity coefficients are read from `system/hydro_production_models.json`\nand are associated per `(hydro, stage)` outside this file.\nA `hydros.json` input that includes `productivity_mw_per_m3s` in its\n`generation` block will be rejected with a parse error.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -429,7 +429,7 @@
     },
     "RawHydroPenaltyOverrides": {
       "additionalProperties": false,
-      "description": "Intermediate type for entity-level hydro penalty overrides.\n\nAll 11 fields are `Option<f64>`. Absent fields default to `None`,\nmeaning the global default for that penalty is used.\n\nJSON field names mirror `HydroPenalties` and `HydroPenaltyOverrides` field names.",
+      "description": "Entity-level hydro penalty overrides.\n\nEvery field is optional; an absent field uses the global default for that\npenalty.\n\nJSON field names mirror `HydroPenalties` and `HydroPenaltyOverrides` field names.",
       "properties": {
         "diversion_cost": {
           "default": null,
@@ -575,7 +575,7 @@
       "type": "object"
     },
     "RawTailrace": {
-      "description": "Tagged-union intermediate type for the `tailrace` sub-object.\n\nUses `#[serde(tag = \"type\")]` internally-tagged on the `\"type\"` field.",
+      "description": "The `tailrace` sub-object. The `type` key selects the tailrace model.",
       "oneOf": [
         {
           "description": "Polynomial tailrace curve.",
@@ -696,7 +696,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Top-level intermediate type for `hydros.json`.\n\nPrivate — only used during deserialization. Not re-exported.",
+  "description": "Root object of `hydros.json`.",
   "properties": {
     "$schema": {
       "description": "`$schema` field — informational, not validated.",

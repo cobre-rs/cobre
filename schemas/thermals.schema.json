@@ -7,7 +7,7 @@
           "description": "Stage-count lead; the calendar is never consulted. Must be ≥ 1.",
           "properties": {
             "lead_stages": {
-              "description": "Number of stages of dispatch anticipation. Must be ≥ 1.\n\nUsing `u32` here causes serde to reject negative JSON literals with a\n`ParseError` before validation runs.",
+              "description": "Number of stages of dispatch anticipation. Must be ≥ 1; a negative value\nis a parse error.",
               "format": "uint32",
               "minimum": 0,
               "type": "integer"
@@ -34,7 +34,7 @@
           "type": "object"
         }
       ],
-      "description": "Intermediate type for anticipated dispatch configuration.\n\nUntagged with per-variant `deny_unknown_fields`: the `{\"lead_stages\": N}` /\n`{\"lead_time_hours\": H}` object shapes and the structural mutual-exclusion\nbetween them live here; `cobre_core::AnticipatedConfig` keeps a plain\n(non-`untagged`) derive so it stays postcard-broadcast-safe."
+      "description": "Anticipated dispatch configuration: `{\"lead_stages\": N}` or\n`{\"lead_time_hours\": H}`, never both."
     },
     "RawThermal": {
       "additionalProperties": false,
@@ -131,7 +131,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Top-level intermediate type for `thermals.json` (serde only, not re-exported).",
+  "description": "Root object of `thermals.json`.",
   "properties": {
     "$schema": {
       "description": "`$schema` field — informational, not validated.",

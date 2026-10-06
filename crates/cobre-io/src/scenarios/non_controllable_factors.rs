@@ -12,7 +12,7 @@ use crate::scenarios::BlockFactor;
 
 // ── Intermediate serde types ──────────────────────────────────────────────────
 
-/// Top-level intermediate type for `non_controllable_factors.json`.
+/// Root object of `non_controllable_factors.json`.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

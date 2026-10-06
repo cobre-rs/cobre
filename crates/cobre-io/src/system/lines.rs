@@ -56,7 +56,7 @@ use std::path::Path;
 use super::parse_operational_start_date;
 use crate::LoadError;
 
-/// Top-level intermediate type for `lines.json` (serde only, not re-exported).
+/// Root object of `lines.json`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

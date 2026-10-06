@@ -99,11 +99,11 @@ use crate::LoadError;
 // deserialized directly because the JSON places payload fields flat alongside
 // `id`/`name`, and `#[serde(flatten)]` does not cooperate with `tag = "kind"`.
 
-/// Top-level JSON wrapper.
+// No deny_unknown_fields here: editor keys such as `$schema` must load.
+/// Root object of `generic_parameters.json`.
 ///
-/// `#[serde(deny_unknown_fields)]` is intentionally omitted at this level so that
-/// `"$schema"` and similar JSON schema tooling keys are tolerated.  Unknown fields
-/// are only rejected at the per-entry level via [`ScalarParameterJsonEntry`].
+/// Top-level keys other than `scalar_parameters`, such as `$schema`, are
+/// ignored; an unknown key inside an entry is an error.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct ScalarParametersFile {
@@ -114,11 +114,10 @@ pub(crate) struct ScalarParametersFile {
     scalar_parameters: Vec<ScalarParameterJsonEntry>,
 }
 
-/// Per-entry intermediate representation.
+/// One parameter entry.
 ///
-/// `#[serde(deny_unknown_fields)]` ensures that any unknown field (e.g. a
-/// stale `"values_source"`) causes an immediate parse error with the field name
-/// in the message, rather than being silently ignored.
+/// An unknown key, such as the retired `values_source`, is a parse error that
+/// names the key.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

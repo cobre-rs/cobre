@@ -1,7 +1,7 @@
 {
   "$defs": {
     "BackwardScheduler": {
-      "description": "Backward-pass scheduler and its scheduler-specific parameters\n(`config.json → training.parallelism.backward_scheduler`).\n\nInternally tagged on `method`; each variant carries only the fields it\nuses, so supplying a parameter that does not belong to the chosen method is\na load-time error under `deny_unknown_fields`.",
+      "description": "Backward-pass scheduler and its scheduler-specific parameters\n(`config.json → training.parallelism.backward_scheduler`).\n\nThe `method` key selects the scheduler, and each scheduler accepts only its\nown parameters: a parameter of another scheduler is a load-time error.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -139,7 +139,7 @@
       "properties": {
         "max_coefficient_magnitude": {
           "default": null,
-          "description": "Maximum allowed absolute magnitude for any AR coefficient.\n\nWhen set, any (entity, season) pair with `|coefficient| > threshold`\nis immediately reduced to order 0 before the contribution analysis\nruns. This acts as a fast-path safety net for the most extreme\nexplosive models. Defaults to `None` (disabled; contribution analysis\nis the primary guard).",
+          "description": "Maximum allowed absolute magnitude for any AR coefficient.\n\nWhen set, any (entity, season) pair with `|coefficient| > threshold`\nis immediately reduced to order 0 before the contribution analysis\nruns. This acts as a fast-path safety net for the most extreme\nexplosive models. Absent by default (disabled; contribution analysis\nis the primary guard).",
           "format": "double",
           "type": [
             "number",
@@ -347,7 +347,7 @@
         },
         {
           "const": "pacf_annual",
-          "description": "Periodic Yule-Walker order selection augmented with an annual component.\n\nWhen selected, the estimation pipeline performs four steps beyond the\nclassical [`Self::Pacf`] path:\n\n1. **Extended Yule-Walker fitting** — the system is augmented with a\n   cross-correlation term between the current-season inflow and the\n   rolling 12-month average, yielding the annual coefficient ψ\n   alongside the classical AR coefficients.\n2. **Annual-stats computation** — per-season sample mean μ^A and\n   Bessel-corrected standard deviation σ^A of the rolling 12-month\n   average are computed for each hydro plant.\n3. **Parquet emission** — the triple (ψ, μ^A, σ^A) is written to\n   `inflow_annual_component.parquet` in the output directory.\n4. **Widened LP lag stride** — the noise-column layout in the LP is\n   extended to accommodate the annual term alongside the classical lags.",
+          "description": "Periodic Yule-Walker order selection augmented with an annual component.\n\nWhen selected, the estimation pipeline performs four steps beyond the\nclassical `pacf` path:\n\n1. **Extended Yule-Walker fitting** — the system is augmented with a\n   cross-correlation term between the current-season inflow and the\n   rolling 12-month average, yielding the annual coefficient ψ\n   alongside the classical AR coefficients.\n2. **Annual-stats computation** — per-season sample mean μ^A and\n   Bessel-corrected standard deviation σ^A of the rolling 12-month\n   average are computed for each hydro plant.\n3. **Parquet emission** — the triple (ψ, μ^A, σ^A) is written to\n   `inflow_annual_component.parquet` in the output directory.\n4. **Widened LP lag stride** — the noise-column layout in the LP is\n   extended to accommodate the annual term alongside the classical lags.",
           "type": "string"
         }
       ]
@@ -590,7 +590,7 @@
     },
     "RawClassConfigEntry": {
       "additionalProperties": false,
-      "description": "Intermediate serde type for a single per-class scenario scheme in `config.json`.",
+      "description": "A single per-class scenario scheme in `config.json`.",
       "properties": {
         "scheme": {
           "$ref": "#/$defs/RawSamplingScheme",
@@ -617,7 +617,7 @@
           "description": "Inclusive range shorthand."
         }
       ],
-      "description": "Intermediate serde type for `historical_years` in `config.json`.\n\nHandles two JSON representations via `#[serde(untagged)]`:\n- Array: `[1940, 1953, 1971]` → [`RawHistoricalYearsConfig::List`]\n- Object: `{\"from\": 1940, \"to\": 2010}` → [`RawHistoricalYearsConfig::Range`]\n\nThe `List` variant must be declared first so serde tries it before `Range`\n(an integer array is tried before an object)."
+      "description": "`historical_years` in `config.json`: an array of years, such as\n`[1940, 1953, 1971]`, or an inclusive range, such as\n`{\"from\": 1940, \"to\": 2010}`."
     },
     "RawSamplingScheme": {
       "description": "Per-class forward-pass scenario scheme (`config.json` scenario-source `scheme`).",
@@ -646,7 +646,7 @@
     },
     "RawScenarioSourceConfig": {
       "additionalProperties": false,
-      "description": "Intermediate serde type for per-class scenario source configuration in `config.json`.\n\nScoped to `config.json` fields (`training.scenario_source` /\n`simulation.scenario_source`).",
+      "description": "Per-class scenario source configuration in `config.json`.\n\nUsed by `training.scenario_source` and `simulation.scenario_source`.",
       "properties": {
         "historical_years": {
           "anyOf": [
@@ -658,7 +658,7 @@
             }
           ],
           "default": null,
-          "description": "Historical year pool. Absent means `None` (auto-discover at validation time)."
+          "description": "Historical year pool. Absent: the years are discovered at validation time."
         },
         "inflow": {
           "anyOf": [
@@ -726,7 +726,7 @@
       "properties": {
         "max_active_per_stage": {
           "default": null,
-          "description": "Hard cap on active rows per stage LP, enforced after the selection\nmethod runs. Rows are evicted least-recently-active first, tie-broken by\nleast-frequently-active; rows added in the current iteration are never\nevicted. `None` (default) = no cap.",
+          "description": "Hard cap on active rows per stage LP, enforced after the selection\nmethod runs. Rows are evicted least-recently-active first, tie-broken by\nleast-frequently-active; rows added in the current iteration are never\nevicted. Absent (default): no cap.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -774,7 +774,7 @@
       ]
     },
     "SelectionMethod": {
-      "description": "Row-selection method and its method-specific parameters.\n\nInternally tagged on `method`; each variant carries only the fields it uses,\nso supplying a parameter that does not belong to the chosen method is a\nload-time error under `deny_unknown_fields`, and a misspelled `method` is an\n`unknown variant` error at parse time.",
+      "description": "Row-selection method and its method-specific parameters.\n\nThe `method` key selects the method, and each method accepts only its own\nparameters: a parameter of another method is a load-time error, and a\nmisspelled `method` is an `unknown variant` error at parse time.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -863,7 +863,7 @@
           "properties": {
             "candidate_recency": {
               "default": null,
-              "description": "Only rows generated within the last `candidate_recency` iterations are\nscored. `None` (default) = unbounded: every pool row is a candidate,\nwhich preserves exactness. `Some(n)` (must be `>= 1`) makes the loop\ndeliberately inexact — rows older than the window are never added.",
+              "description": "Only rows generated within the last `candidate_recency` iterations are\nscored. Absent (default): unbounded, so every pool row is a candidate,\nwhich preserves exactness. A value `n` (must be `>= 1`) makes the loop\ndeliberately inexact — rows older than the window are never added.",
               "format": "uint32",
               "minimum": 0,
               "type": [
@@ -948,7 +948,7 @@
             }
           ],
           "default": null,
-          "description": "Phase-level scenario selection. Absent resolves to the default sampled\ncount ([`DEFAULT_NUM_SCENARIOS`])."
+          "description": "Phase-level scenario selection. Absent resolves to the default sampled\ncount."
         },
         "solver": {
           "anyOf": [
@@ -966,7 +966,7 @@
       "type": "object"
     },
     "SimulationSelection": {
-      "description": "Post-training scenario selection and its method-specific parameters\n(`config.json → simulation.selection`).\n\nInternally tagged on `method`; the tag is the semantic selection word, never\na mechanism name. `sampled` draws `num_scenarios` trajectories; `enumerated`\nwalks the scenario set exhaustively. Each variant carries only its own\nparameters, so pairing a count with `enumerated` is a parse error under\n`deny_unknown_fields` rather than a runtime-gated combination.",
+      "description": "Post-training scenario selection and its method-specific parameters\n(`config.json → simulation.selection`).\n\nThe `method` key selects how scenarios are chosen: `sampled` draws\n`num_scenarios` trajectories; `enumerated` walks the scenario set\nexhaustively. Each method accepts only its own parameters, so pairing a\ncount with `enumerated` is a parse error.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -1021,14 +1021,14 @@
       ]
     },
     "StoppingRuleConfig": {
-      "description": "Deserialized configuration for one entry in `training.stopping_rules[]`.\n\nUses a `\"type\"` discriminator field (internally tagged) with `snake_case`\nvariant names matching the JSON schema. `deny_unknown_fields` makes a\nparameter belonging to a different rule type a load-time error rather\nthan a silently ignored key.\n\nThe `GracefulShutdown` rule has no JSON representation — it is injected at\nruntime by `StoppingRuleSet` construction and is never deserialized.\n\n# Examples\n\n```\nuse cobre_io::config::StoppingRuleConfig;\n\nlet json = r#\"{\"type\": \"iteration_limit\", \"limit\": 100}\"#;\nlet rule: StoppingRuleConfig = serde_json::from_str(json).unwrap();\nassert!(matches!(rule, StoppingRuleConfig::IterationLimit { limit: 100 }));\n```",
+      "description": "One entry of `training.stopping_rules`. The `type` key selects the rule; a key that belongs to another rule type is a load-time error.",
       "oneOf": [
         {
           "additionalProperties": false,
           "description": "Stop after a fixed number of iterations. **Mandatory** — every rule set must\ncontain at least one `iteration_limit` rule.",
           "properties": {
             "limit": {
-              "description": "Maximum iteration count $k_{max}$.",
+              "description": "Maximum iteration count.",
               "format": "uint32",
               "minimum": 0,
               "type": "integer"
@@ -1069,7 +1069,7 @@
           "description": "Stop when the lower bound stalls (relative improvement falls below tolerance).",
           "properties": {
             "iterations": {
-              "description": "Window size $\\tau$ (number of past iterations to compare).",
+              "description": "Window size (number of past iterations to compare).",
               "format": "uint32",
               "minimum": 0,
               "type": "integer"
@@ -1127,7 +1127,7 @@
     },
     "TrainingConfig": {
       "additionalProperties": false,
-      "description": "Training parameters (`config.json → training`).\n\nA forward-pass count (via `selection`) and `stopping_rules` are mandatory —\nthe loader returns [`crate::LoadError::SchemaError`] if either is absent.",
+      "description": "Training parameters (`config.json → training`).\n\n`selection` and `stopping_rules` are required; the loader rejects a\nconfiguration that omits either.",
       "properties": {
         "cut_selection": {
           "$ref": "#/$defs/RowSelectionConfig",
@@ -1214,7 +1214,7 @@
       "type": "object"
     },
     "TrainingSelection": {
-      "description": "Training-phase scenario selection and its method-specific parameters\n(`config.json → training.selection`).\n\nInternally tagged on `method`; the tag is the semantic selection word, never\na mechanism name. `sampled` runs `forward_passes` trajectories per iteration;\n`enumerated` walks the scenario openings exhaustively. Each variant carries\nonly its own parameters, so pairing a count with `enumerated` is a parse\nerror under `deny_unknown_fields` rather than a runtime-gated combination.",
+      "description": "Training-phase scenario selection and its method-specific parameters\n(`config.json → training.selection`).\n\nThe `method` key selects how scenarios are chosen: `sampled` runs\n`forward_passes` trajectories per iteration; `enumerated` walks the scenario\nopenings exhaustively. Each method accepts only its own parameters, so\npairing a count with `enumerated` is a parse error.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -1344,7 +1344,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Top-level deserialized representation of `config.json`.\n\nAll sections except `training` are optional; their defaults are applied by\nserde when the section is absent from the JSON.",
+  "description": "Root object of `config.json`.\n\nEvery section except `training` is optional; an absent section takes its defaults.",
   "properties": {
     "$schema": {
       "description": "JSON schema URI — informational, not validated.",

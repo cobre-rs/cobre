@@ -569,6 +569,20 @@ key like the one the bound-override files have.
 **Trigger.** A case is found with duplicate penalty override rows, or the
 validation rule table next gains an input-uniqueness rule.
 
+### Exported schema titles and `$defs` names are Rust type names
+
+**What it is.** `cobre schema export` takes each schema's root `title` and
+every `$defs` key from the Rust type that reads the file (`RawHydroFile`,
+`RawHydro`, `TrainingConfig`), because `generate_schemas`
+(`crates/cobre-io/src/schema.rs`) calls `schemars::schema_for!` on the
+deserialization types. The descriptions are written for case authors; the
+titles and `$ref` targets are not.
+
+**Owner.** The cobre-io input-schema owner.
+
+**Trigger.** An editor integration or schema consumer shows `title` or `$ref`
+names to case authors.
+
 ## Deferred-debt register — whole-lifecycle audit findings
 
 Findings of the full `cobre run` lifecycle read, described by behavior. Each

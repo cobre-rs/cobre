@@ -70,9 +70,7 @@ use crate::LoadError;
 
 // ── Intermediate serde types ──────────────────────────────────────────────────
 
-/// Top-level intermediate type for `hydros.json`.
-///
-/// Private — only used during deserialization. Not re-exported.
+/// Root object of `hydros.json`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -179,11 +177,10 @@ pub(crate) struct RawOutflow {
     max_outflow_m3s: Option<f64>,
 }
 
-/// Tagged-union intermediate type for the `generation` sub-object.
+/// The `generation` sub-object.
 ///
-/// Uses `#[serde(tag = "model")]` (internally-tagged) to dispatch on the
-/// `"model"` field value. Each variant carries only the fields relevant to
-/// that model. The `productivity_mw_per_m3s` field is NOT accepted here —
+/// The `model` key selects the production model, and each model accepts only
+/// its own fields. The `productivity_mw_per_m3s` field is NOT accepted here —
 /// productivity coefficients are read from `system/hydro_production_models.json`
 /// and are associated per `(hydro, stage)` outside this file.
 /// A `hydros.json` input that includes `productivity_mw_per_m3s` in its
@@ -272,9 +269,7 @@ impl RawGeneration {
     }
 }
 
-/// Tagged-union intermediate type for the `tailrace` sub-object.
-///
-/// Uses `#[serde(tag = "type")]` internally-tagged on the `"type"` field.
+/// The `tailrace` sub-object. The `type` key selects the tailrace model.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -393,10 +388,10 @@ pub(crate) struct RawUnitGroup {
     max_turbined_m3s: f64,
 }
 
-/// Intermediate type for entity-level hydro penalty overrides.
+/// Entity-level hydro penalty overrides.
 ///
-/// All 11 fields are `Option<f64>`. Absent fields default to `None`,
-/// meaning the global default for that penalty is used.
+/// Every field is optional; an absent field uses the global default for that
+/// penalty.
 ///
 /// JSON field names mirror `HydroPenalties` and `HydroPenaltyOverrides` field names.
 #[allow(clippy::struct_field_names)]

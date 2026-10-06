@@ -33,7 +33,7 @@
     },
     "RawHydroPastDefluence": {
       "additionalProperties": false,
-      "description": "Past defluence (release) for the arc fed by a single upstream hydro over a\nspecific date range.\n\nMirrors [`RawRecentObservation`]: a self-describing `[start_date, end_date)`\nwindow (ISO 8601, `end_date` exclusive and after `start_date`) carrying the\naverage release rate over the window. Multiple windows per hydro are allowed;\ndate ranges for the same hydro must not overlap, though adjacent ranges\n(`start_date == previous end_date`) are accepted.",
+      "description": "Past defluence (release) for the arc fed by a single upstream hydro over a\nspecific date range.\n\nSame window form as a `recent_observations` entry: a self-describing\n`[start_date, end_date)`\nwindow (ISO 8601, `end_date` exclusive and after `start_date`) carrying the\naverage release rate over the window. Multiple windows per hydro are allowed;\ndate ranges for the same hydro must not overlap, though adjacent ranges\n(`start_date == previous end_date`) are accepted.",
       "properties": {
         "end_date": {
           "description": "End of the release window (exclusive), as an ISO 8601 date (YYYY-MM-DD).\nMust be after `start_date`.",
@@ -117,7 +117,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Intermediate serde type for `initial_conditions.json`, deserialized then\nvalidated before conversion to [`InitialConditions`].",
+  "description": "Root object of `initial_conditions.json`.",
   "properties": {
     "$schema": {
       "description": "JSON schema URI — informational, not validated.",

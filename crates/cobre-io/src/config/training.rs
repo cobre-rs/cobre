@@ -9,8 +9,8 @@ use super::scenario_source::RawScenarioSourceConfig;
 
 /// Training parameters (`config.json → training`).
 ///
-/// A forward-pass count (via `selection`) and `stopping_rules` are mandatory —
-/// the loader returns [`crate::LoadError::SchemaError`] if either is absent.
+/// `selection` and `stopping_rules` are required; the loader rejects a
+/// configuration that omits either.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -62,11 +62,10 @@ pub struct TrainingConfig {
 /// Training-phase scenario selection and its method-specific parameters
 /// (`config.json → training.selection`).
 ///
-/// Internally tagged on `method`; the tag is the semantic selection word, never
-/// a mechanism name. `sampled` runs `forward_passes` trajectories per iteration;
-/// `enumerated` walks the scenario openings exhaustively. Each variant carries
-/// only its own parameters, so pairing a count with `enumerated` is a parse
-/// error under `deny_unknown_fields` rather than a runtime-gated combination.
+/// The `method` key selects how scenarios are chosen: `sampled` runs
+/// `forward_passes` trajectories per iteration; `enumerated` walks the scenario
+/// openings exhaustively. Each method accepts only its own parameters, so
+/// pairing a count with `enumerated` is a parse error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -153,7 +152,7 @@ pub struct RowSelectionConfig {
     /// Hard cap on active rows per stage LP, enforced after the selection
     /// method runs. Rows are evicted least-recently-active first, tie-broken by
     /// least-frequently-active; rows added in the current iteration are never
-    /// evicted. `None` (default) = no cap.
+    /// evicted. Absent (default): no cap.
     #[serde(default)]
     pub max_active_per_stage: Option<u32>,
 
@@ -165,10 +164,9 @@ pub struct RowSelectionConfig {
 
 /// Row-selection method and its method-specific parameters.
 ///
-/// Internally tagged on `method`; each variant carries only the fields it uses,
-/// so supplying a parameter that does not belong to the chosen method is a
-/// load-time error under `deny_unknown_fields`, and a misspelled `method` is an
-/// `unknown variant` error at parse time.
+/// The `method` key selects the method, and each method accepts only its own
+/// parameters: a parameter of another method is a load-time error, and a
+/// misspelled `method` is an `unknown variant` error at parse time.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -215,8 +213,8 @@ pub enum SelectionMethod {
         #[serde(default = "default_seed_window")]
         seed_window: u32,
         /// Only rows generated within the last `candidate_recency` iterations are
-        /// scored. `None` (default) = unbounded: every pool row is a candidate,
-        /// which preserves exactness. `Some(n)` (must be `>= 1`) makes the loop
+        /// scored. Absent (default): unbounded, so every pool row is a candidate,
+        /// which preserves exactness. A value `n` (must be `>= 1`) makes the loop
         /// deliberately inexact — rows older than the window are never added.
         #[serde(default)]
         candidate_recency: Option<u32>,
@@ -378,9 +376,8 @@ pub struct ParallelismConfig {
 /// Backward-pass scheduler and its scheduler-specific parameters
 /// (`config.json → training.parallelism.backward_scheduler`).
 ///
-/// Internally tagged on `method`; each variant carries only the fields it
-/// uses, so supplying a parameter that does not belong to the chosen method is
-/// a load-time error under `deny_unknown_fields`.
+/// The `method` key selects the scheduler, and each scheduler accepts only its
+/// own parameters: a parameter of another scheduler is a load-time error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -466,11 +463,17 @@ pub enum PriceStrategy {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schema",
+    schemars(
+        description = "One entry of `training.stopping_rules`. The `type` key selects the rule; a key that belongs to another rule type is a load-time error."
+    )
+)]
 pub enum StoppingRuleConfig {
     /// Stop after a fixed number of iterations. **Mandatory** — every rule set must
     /// contain at least one `iteration_limit` rule.
     IterationLimit {
-        /// Maximum iteration count $k_{max}$.
+        /// Maximum iteration count.
         limit: u32,
     },
     /// Stop after a wall-clock time limit.
@@ -480,7 +483,7 @@ pub enum StoppingRuleConfig {
     },
     /// Stop when the lower bound stalls (relative improvement falls below tolerance).
     BoundStalling {
-        /// Window size $\tau$ (number of past iterations to compare).
+        /// Window size (number of past iterations to compare).
         iterations: u32,
         /// Relative improvement threshold.
         tolerance: f64,

@@ -65,7 +65,7 @@ use std::path::Path;
 use super::parse_operational_start_date;
 use crate::LoadError;
 
-/// Top-level intermediate type for `energy_contracts.json` (serde only, not re-exported).
+/// Root object of `energy_contracts.json`.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -90,8 +90,7 @@ pub(crate) struct RawContract {
     operational_start_date: String,
     /// Bus at which the contracted power is injected or withdrawn.
     bus_id: i32,
-    /// Direction of energy flow. Uses `#[serde(rename = "type")]` since `type`
-    /// is a Rust keyword.
+    /// Direction of energy flow.
     #[serde(rename = "type")]
     contract_type: RawContractType,
     /// Stage index when the contract enters service. Absent or null = always active.
@@ -106,11 +105,8 @@ pub(crate) struct RawContract {
     limits: RawContractLimits,
 }
 
-/// Raw intermediate enum for contract direction.
-///
-/// Uses `#[serde(rename_all = "snake_case")]` to map JSON `"import"`/`"export"`
-/// to Rust `Import`/`Export` variants. The core `ContractType` enum does not
-/// carry `rename_all`, so we use this intermediate.
+// cobre_core::ContractType has no snake_case rename, so the input needs its own enum.
+/// Direction of energy flow of a contract.
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

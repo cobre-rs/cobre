@@ -382,15 +382,13 @@ struct RawFphaColumnLayout {
     fitting_window: Option<RawFittingWindow>,
 }
 
-/// File-level FPHA plane-reduction block, discriminated by the `method` JSON
-/// field.
+/// File-level FPHA plane-reduction block, selected by the `method` key.
 ///
-/// An internally-tagged union: `{ "method": "angle", "tolerance_deg": <f64> }`
-/// merges planes whose normals are within `tolerance_deg` degrees, while
-/// `{ "method": "distance", "tolerance_pct": <f64>, "n_samples": <u32> }` merges
-/// planes whose sampled mean-squared distance stays within `tolerance_pct`. The
-/// tag selects exactly one method; `deny_unknown_fields` rejects a tolerance
-/// field belonging to the other method.
+/// `{ "method": "angle", "tolerance_deg": <number> }` merges planes whose
+/// normals are within `tolerance_deg` degrees, while
+/// `{ "method": "distance", "tolerance_pct": <number>, "n_samples": <integer> }`
+/// merges planes whose sampled mean-squared distance stays within
+/// `tolerance_pct`. A tolerance key that belongs to the other method is rejected.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]

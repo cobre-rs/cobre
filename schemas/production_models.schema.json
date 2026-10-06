@@ -97,7 +97,7 @@
       "type": "object"
     },
     "RawPlaneReductionConfig": {
-      "description": "File-level FPHA plane-reduction block, discriminated by the `method` JSON\nfield.\n\nAn internally-tagged union: `{ \"method\": \"angle\", \"tolerance_deg\": <f64> }`\nmerges planes whose normals are within `tolerance_deg` degrees, while\n`{ \"method\": \"distance\", \"tolerance_pct\": <f64>, \"n_samples\": <u32> }` merges\nplanes whose sampled mean-squared distance stays within `tolerance_pct`. The\ntag selects exactly one method; `deny_unknown_fields` rejects a tolerance\nfield belonging to the other method.",
+      "description": "File-level FPHA plane-reduction block, selected by the `method` key.\n\n`{ \"method\": \"angle\", \"tolerance_deg\": <number> }` merges planes whose\nnormals are within `tolerance_deg` degrees, while\n`{ \"method\": \"distance\", \"tolerance_pct\": <number>, \"n_samples\": <integer> }`\nmerges planes whose sampled mean-squared distance stays within\n`tolerance_pct`. A tolerance key that belongs to the other method is rejected.",
       "oneOf": [
         {
           "additionalProperties": false,

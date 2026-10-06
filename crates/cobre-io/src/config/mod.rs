@@ -60,10 +60,9 @@ use serde::{Deserialize, Serialize};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
-/// Top-level deserialized representation of `config.json`.
+/// Root object of `config.json`.
 ///
-/// All sections except `training` are optional; their defaults are applied by
-/// serde when the section is absent from the JSON.
+/// Every section except `training` is optional; an absent section takes its defaults.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

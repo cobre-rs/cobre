@@ -30,6 +30,10 @@ use core::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schema",
+    schemars(description = "Entity identifier: the integer `id` of the entity it refers to.")
+)]
 pub struct EntityId(pub i32);
 
 impl fmt::Display for EntityId {

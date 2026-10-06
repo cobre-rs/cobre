@@ -379,6 +379,102 @@ mod tests {
         found
     }
 
+    const IMPLEMENTATION_MARKERS_ANY_CASE: [&str; 6] = [
+        "serde",
+        "deserializ",
+        "re-export",
+        "untagged",
+        "internally tagged",
+        "internally-tagged",
+    ];
+    const IMPLEMENTATION_MARKERS: [&str; 16] = [
+        "#[",
+        "deny_unknown_fields",
+        "::",
+        "`None`",
+        "`Some(",
+        "Option<",
+        "Vec<",
+        "HashMap<",
+        "<f64>",
+        "<u32>",
+        "`f64`",
+        "`u32`",
+        "`i32`",
+        "`usize`",
+        "```\n",
+        "```rust",
+    ];
+
+    fn rustdoc_links(text: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut rest = text;
+        while let Some(open) = rest.find("[`") {
+            let Some(close) = rest[open + 2..].find("`]") else {
+                break;
+            };
+            let end = open + 2 + close + 2;
+            if !matches!(rest[end..].chars().next(), Some('(' | '[')) {
+                found.push(rest[open..end].to_owned());
+            }
+            rest = &rest[end..];
+        }
+        found
+    }
+
+    fn raw_latex(text: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\'
+                && let Some(letter) = chars.next_if(char::is_ascii_alphabetic)
+            {
+                found.push(format!("\\{letter}"));
+            }
+        }
+        let mut rest = text;
+        while let Some(open) = rest.find('$') {
+            let Some(close) = rest[open + 1..].find('$') else {
+                break;
+            };
+            let inner = &rest[open + 1..open + 1 + close];
+            let is_latex = inner
+                .chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic() || first == '\\')
+                && !inner.contains(char::is_whitespace)
+                && inner.contains(['_', '^', '{', '\\']);
+            if is_latex {
+                found.push(format!("${inner}$"));
+                rest = &rest[open + close + 2..];
+            } else {
+                rest = &rest[open + 1 + close..];
+            }
+        }
+        found
+    }
+
+    fn implementation_wording(text: &str) -> Vec<&'static str> {
+        let lower = text.to_lowercase();
+        IMPLEMENTATION_MARKERS_ANY_CASE
+            .into_iter()
+            .filter(|marker| lower.contains(marker))
+            .chain(
+                IMPLEMENTATION_MARKERS
+                    .into_iter()
+                    .filter(|marker| text.contains(marker)),
+            )
+            .collect()
+    }
+
+    fn case_author_artifacts(text: &str) -> Vec<String> {
+        let mut found = rustdoc_escapes(text);
+        found.extend(rustdoc_links(text));
+        found.extend(raw_latex(text));
+        found.extend(implementation_wording(text).into_iter().map(str::to_owned));
+        found
+    }
+
     fn collect_descriptions(value: &Value, pointer: &str, out: &mut Vec<(String, String)>) {
         match value {
             Value::Object(map) => {
@@ -399,21 +495,21 @@ mod tests {
     }
 
     #[test]
-    fn exported_schema_descriptions_carry_no_rustdoc_escapes() {
+    fn exported_schema_descriptions_are_written_for_case_authors() {
         let mut offences = Vec::new();
         for (name, schema) in generate_schemas().unwrap() {
             let mut descriptions = Vec::new();
             collect_descriptions(&schema, "", &mut descriptions);
             for (pointer, text) in descriptions {
-                let escapes = rustdoc_escapes(&text);
-                if !escapes.is_empty() {
-                    offences.push(format!("{name} {pointer}: {}", escapes.join(" ")));
+                let artifacts = case_author_artifacts(&text);
+                if !artifacts.is_empty() {
+                    offences.push(format!("{name} {pointer}: {}", artifacts.join(" ")));
                 }
             }
         }
         assert!(
             offences.is_empty(),
-            "schema descriptions carry rustdoc escape artifacts:\n{}",
+            "schema descriptions carry artifacts not written for case authors:\n{}",
             offences.join("\n")
         );
     }
@@ -429,6 +525,73 @@ mod tests {
             "in [-1.0, 1.0]",
         ] {
             assert!(rustdoc_escapes(clean).is_empty(), "{clean:?} was flagged");
+        }
+    }
+
+    #[test]
+    fn case_author_scan_flags_rust_artifacts_and_spares_author_text() {
+        assert_eq!(rustdoc_links("see [`Self::Pacf`] path"), ["[`Self::Pacf`]"]);
+        assert!(rustdoc_links("a [`x`](https://example.org) link").is_empty());
+        assert_eq!(raw_latex(r"Window size $\tau$."), [r"\t", r"$\tau$"]);
+        assert_eq!(raw_latex("Maximum count $k_{max}$."), ["$k_{max}$"]);
+
+        let flagged: [(&str, &[&str]); 12] = [
+            (
+                "Private — only used during deserialization. Not re-exported.",
+                &["deserializ", "re-export"],
+            ),
+            (
+                "Untagged with per-variant `deny_unknown_fields`.",
+                &["untagged", "deny_unknown_fields"],
+            ),
+            ("Internally tagged on `method`.", &["internally tagged"]),
+            ("An internally-tagged union.", &["internally-tagged"]),
+            ("Uses `#[serde(tag = \"model\")]`.", &["serde", "#["]),
+            (
+                "`cobre_core::AnticipatedConfig` keeps a plain derive.",
+                &["::"],
+            ),
+            (
+                "Defaults to `None`; `Some(n)` caps it.",
+                &["`None`", "`Some("],
+            ),
+            (
+                "Fields are `Option<f64>` in a `Vec<i32>` keyed by `HashMap<K, V>`.",
+                &["Option<", "Vec<", "HashMap<"],
+            ),
+            (
+                "Shape `{ \"tolerance_deg\": <f64>, \"n_samples\": <u32> }`.",
+                &["<f64>", "<u32>"],
+            ),
+            (
+                "Wraps the `i32` id, not a `usize` index; `f64` and `u32` fields.",
+                &["`i32`", "`usize`", "`f64`", "`u32`"],
+            ),
+            ("# Examples\n\n```\nlet x = 1;\n```", &["```\n"]),
+            ("```rust\nlet x = 1;\n```", &["```rust"]),
+        ];
+        for (text, markers) in flagged {
+            let found = implementation_wording(text);
+            for marker in markers {
+                assert!(found.contains(marker), "{text:?} missed {marker:?}");
+            }
+        }
+
+        let spared = [
+            "Power (MW).",
+            "Cost ($/`MWh`) and ($/hm³).",
+            "Penalty ($/(m³/s·h)).",
+            "in [-1.0, 1.0]",
+            "Method: `\"none\"` or `\"truncation\"`.",
+            "An array such as `[1940, 1953, 1971]`.",
+            "Must be symmetric: `|m[i][j] - m[j][i]| <= 1e-10`.",
+            "```json\n{}\n```",
+            "Between $10 and $20.",
+            "The `method` key selects the scheduler.",
+        ];
+        for text in spared {
+            let artifacts = case_author_artifacts(text);
+            assert!(artifacts.is_empty(), "{text:?} was flagged: {artifacts:?}");
         }
     }
 }

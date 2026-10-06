@@ -22,7 +22,7 @@ pub enum OrderSelectionMethod {
     /// Periodic Yule-Walker order selection augmented with an annual component.
     ///
     /// When selected, the estimation pipeline performs four steps beyond the
-    /// classical [`Self::Pacf`] path:
+    /// classical `pacf` path:
     ///
     /// 1. **Extended Yule-Walker fitting** — the system is augmented with a
     ///    cross-correlation term between the current-season inflow and the
@@ -76,7 +76,7 @@ pub struct EstimationConfig {
     /// When set, any (entity, season) pair with `|coefficient| > threshold`
     /// is immediately reduced to order 0 before the contribution analysis
     /// runs. This acts as a fast-path safety net for the most extreme
-    /// explosive models. Defaults to `None` (disabled; contribution analysis
+    /// explosive models. Absent by default (disabled; contribution analysis
     /// is the primary guard).
     #[serde(default)]
     pub max_coefficient_magnitude: Option<f64>,

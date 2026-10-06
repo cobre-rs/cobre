@@ -106,8 +106,7 @@ use crate::windowed_history::{WindowedRecord, parse_iso_date, validate_windowed_
 
 // ── Intermediate serde types ──────────────────────────────────────────────────
 
-/// Intermediate serde type for `initial_conditions.json`, deserialized then
-/// validated before conversion to [`InitialConditions`].
+/// Root object of `initial_conditions.json`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -162,7 +161,8 @@ struct RawHydroStorage {
 /// Past defluence (release) for the arc fed by a single upstream hydro over a
 /// specific date range.
 ///
-/// Mirrors [`RawRecentObservation`]: a self-describing `[start_date, end_date)`
+/// Same window form as a `recent_observations` entry: a self-describing
+/// `[start_date, end_date)`
 /// window (ISO 8601, `end_date` exclusive and after `start_date`) carrying the
 /// average release rate over the window. Multiple windows per hydro are allowed;
 /// date ranges for the same hydro must not overlap, though adjacent ranges

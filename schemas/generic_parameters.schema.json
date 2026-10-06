@@ -1,7 +1,7 @@
 {
   "$defs": {
     "ComputedParameter": {
-      "description": "A Cobre-computed quantity indexed by hydro plant.\n\nEach variant names a scalar quantity that the resolver derives from hydro\ngeometry and operational data. All variants carry a single `hydro_id` field\nidentifying the hydro plant.\n\n# Examples\n\n```\nuse cobre_core::{ComputedParameter, EntityId};\n\nlet param = ComputedParameter::EquivalentProductivity {\n    hydro_id: EntityId(1),\n};\n\n// ComputedParameter is Copy:\nlet copy = param;\nassert_eq!(param, copy);\n```",
+      "description": "A quantity computed from hydro data for the plant `hydro_id`.",
       "oneOf": [
         {
           "description": "Equivalent productivity coefficient (`ρ_eq`).",
@@ -186,13 +186,13 @@
       ]
     },
     "EntityId": {
-      "description": "Strongly-typed entity identifier.\n\nWraps the `i32` identifier from JSON input files. The newtype pattern prevents\naccidental confusion between entity IDs and collection indices (`usize`), which\nis a common source of bugs in systems with both ID-based lookup and index-based\naccess. `EntityId` is used as the key in `HashMap<EntityId, usize>` lookup tables\nand as the value in cross-reference fields (e.g., `Hydro::bus_id`, `Line::source_bus_id`).\n\nWhy `i32` and not `String`: All JSON entity schemas use integer IDs (`i32`). Integer\nkeys are cheaper to hash, compare, and copy than strings — important because\n`EntityId` appears in every lookup table and cross-reference field. If a future\ninput format requires string IDs, the newtype boundary isolates the change to\n`EntityId`'s internal representation and its `From`/`Into` impls.\n\n# Examples\n\n```\nuse cobre_core::EntityId;\n\nlet id: EntityId = EntityId::from(42);\nassert_eq!(id.to_string(), \"42\");\n\nlet raw: i32 = i32::from(id);\nassert_eq!(raw, 42);\n```",
+      "description": "Entity identifier: the integer `id` of the entity it refers to.",
       "format": "int32",
       "type": "integer"
     },
     "ScalarParameterJsonEntry": {
       "additionalProperties": false,
-      "description": "Per-entry intermediate representation.\n\n`#[serde(deny_unknown_fields)]` ensures that any unknown field (e.g. a\nstale `\"values_source\"`) causes an immediate parse error with the field name\nin the message, rather than being silently ignored.",
+      "description": "One parameter entry.\n\nAn unknown key, such as the retired `values_source`, is a parse error that\nnames the key.",
       "properties": {
         "block_values": {
           "description": "`[[stage_id, block_id, value], ...]` triples. Required when\n`kind == \"per_stage_block\"` (each `(stage_id, block_id)` pair unique);\nmust be absent for all other kinds.",
@@ -284,7 +284,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Top-level JSON wrapper.\n\n`#[serde(deny_unknown_fields)]` is intentionally omitted at this level so that\n`\"$schema\"` and similar JSON schema tooling keys are tolerated.  Unknown fields\nare only rejected at the per-entry level via [`ScalarParameterJsonEntry`].",
+  "description": "Root object of `generic_parameters.json`.\n\nTop-level keys other than `scalar_parameters`, such as `$schema`, are\nignored; an unknown key inside an entry is an error.",
   "properties": {
     "$schema": {
       "default": null,

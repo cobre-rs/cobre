@@ -31,7 +31,7 @@ pub struct SimulationConfig {
     pub solver: Option<PhaseSolverProfileConfig>,
 
     /// Phase-level scenario selection. Absent resolves to the default sampled
-    /// count ([`DEFAULT_NUM_SCENARIOS`]).
+    /// count.
     #[serde(default)]
     pub selection: Option<SimulationSelection>,
 }
@@ -51,11 +51,10 @@ impl Default for SimulationConfig {
 /// Post-training scenario selection and its method-specific parameters
 /// (`config.json → simulation.selection`).
 ///
-/// Internally tagged on `method`; the tag is the semantic selection word, never
-/// a mechanism name. `sampled` draws `num_scenarios` trajectories; `enumerated`
-/// walks the scenario set exhaustively. Each variant carries only its own
-/// parameters, so pairing a count with `enumerated` is a parse error under
-/// `deny_unknown_fields` rather than a runtime-gated combination.
+/// The `method` key selects how scenarios are chosen: `sampled` draws
+/// `num_scenarios` trajectories; `enumerated` walks the scenario set
+/// exhaustively. Each method accepts only its own parameters, so pairing a
+/// count with `enumerated` is a parse error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

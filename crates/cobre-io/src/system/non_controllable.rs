@@ -61,7 +61,7 @@ fn default_allow_curtailment() -> bool {
     true
 }
 
-/// Top-level intermediate type for `non_controllable_sources.json` (serde only, not re-exported).
+/// Root object of `non_controllable_sources.json`.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

@@ -63,7 +63,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Intermediate serde type for `post_study_stages.json`, deserialized then\nvalidated before conversion to [`PostStudyStages`].",
+  "description": "Root object of `post_study_stages.json`.",
   "properties": {
     "$schema": {
       "description": "JSON schema URI — informational, not validated.",

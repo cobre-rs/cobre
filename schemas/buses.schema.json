@@ -61,7 +61,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Top-level intermediate type for `buses.json` (serde only, not re-exported).",
+  "description": "Root object of `buses.json`.",
   "properties": {
     "$schema": {
       "description": "`$schema` field — informational, not validated.",

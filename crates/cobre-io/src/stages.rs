@@ -58,9 +58,7 @@ use crate::LoadError;
 
 // ── Intermediate serde types ──────────────────────────────────────────────────
 
-/// Top-level intermediate type for `stages.json`.
-///
-/// Private — only used during deserialization. Not re-exported.
+/// Root object of `stages.json`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -218,11 +216,11 @@ pub(crate) struct RawStage {
     annual_discount_rate_override: Option<f64>,
 }
 
+// Both variants parse, so conversion rejects `cyclic` with the reserved message
+// instead of serde's unknown-variant error.
 /// Horizon type discriminator (`stages.json` `policy_graph.type`).
 ///
-/// Both variants parse; `cyclic` is rejected as reserved during conversion
-/// (see [`convert_policy_graph_type`]), never at parse, so the reserved message
-/// fires rather than a generic unknown-variant error.
+/// `cyclic` is reserved: the loader rejects it with a message that says so.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -361,19 +359,14 @@ pub(crate) struct RawStateVariables {
     inflow_lags: bool,
 }
 
-/// Intermediate untagged union for the `risk_measure` field.
-///
-/// The JSON value can be:
-/// - A string: `"expectation"`
-/// - An object: `{"cvar": {"alpha": 0.95, "lambda": 0.5}}`
-///
-/// `#[serde(untagged)]` tries each variant in declaration order.
-/// The `Expectation` string variant must come first so it is tried before
-/// the `CVaR` object variant.
+/// The `risk_measure` value, one of:
+/// - the string `"expectation"`;
+/// - an object such as `{"cvar": {"alpha": 0.95, "lambda": 0.5}}`.
 #[derive(Deserialize)]
 #[serde(untagged)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) enum RawRiskMeasure {
+    // Untagged: variants are tried in declaration order; the string form stays first.
     /// String variant: any string (canonically `"expectation"`).
     // Rationale: serde's `#[serde(untagged)]` matches this variant by attempting to deserialize
     // the JSON value as a `String`; the inner field is structurally required for that match to

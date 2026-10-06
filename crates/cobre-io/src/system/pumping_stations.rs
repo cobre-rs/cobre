@@ -48,7 +48,7 @@ use std::path::Path;
 use super::parse_operational_start_date;
 use crate::LoadError;
 
-/// Top-level intermediate type for `pumping_stations.json` (serde only, not re-exported).
+/// Root object of `pumping_stations.json`.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

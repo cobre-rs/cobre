@@ -17,9 +17,7 @@ use std::path::Path;
 
 use crate::LoadError;
 
-/// Top-level intermediate type for `penalties.json`.
-///
-/// Private — only used during deserialization. Not re-exported.
+/// Root object of `penalties.json`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -72,11 +70,7 @@ pub(crate) struct RawLinePenalties {
     exchange_cost: f64,
 }
 
-/// Intermediate type for the `hydro` section.
-///
-/// All fields end with `_cost` because these are penalty cost values. The
-/// shared postfix is intentional and mirrors both the JSON schema and the
-/// [`HydroPenalties`] struct field names.
+/// The `hydro` section: the default penalty costs of every hydro plant.
 #[allow(clippy::struct_field_names)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

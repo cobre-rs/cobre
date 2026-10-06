@@ -129,9 +129,7 @@ use cobre_core::AffineBound;
 
 // ── Intermediate serde types ──────────────────────────────────────────────────
 
-/// Top-level intermediate type for `generic_constraints.json`.
-///
-/// Private — only used during deserialization. Not re-exported.
+/// Root object of `generic_constraints.json`.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

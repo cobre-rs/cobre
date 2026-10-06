@@ -6,10 +6,9 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// Intermediate serde type for per-class scenario source configuration in `config.json`.
+/// Per-class scenario source configuration in `config.json`.
 ///
-/// Scoped to `config.json` fields (`training.scenario_source` /
-/// `simulation.scenario_source`).
+/// Used by `training.scenario_source` and `simulation.scenario_source`.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default, deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -18,7 +17,7 @@ pub struct RawScenarioSourceConfig {
     #[serde(default)]
     pub seed: Option<i64>,
 
-    /// Historical year pool. Absent means `None` (auto-discover at validation time).
+    /// Historical year pool. Absent: the years are discovered at validation time.
     #[serde(default)]
     pub historical_years: Option<RawHistoricalYearsConfig>,
 
@@ -57,7 +56,7 @@ pub enum Openings {
     File {},
 }
 
-/// Intermediate serde type for a single per-class scenario scheme in `config.json`.
+/// A single per-class scenario scheme in `config.json`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -97,18 +96,14 @@ impl<'de> Deserialize<'de> for RawSamplingScheme {
     }
 }
 
-/// Intermediate serde type for `historical_years` in `config.json`.
-///
-/// Handles two JSON representations via `#[serde(untagged)]`:
-/// - Array: `[1940, 1953, 1971]` → [`RawHistoricalYearsConfig::List`]
-/// - Object: `{"from": 1940, "to": 2010}` → [`RawHistoricalYearsConfig::Range`]
-///
-/// The `List` variant must be declared first so serde tries it before `Range`
-/// (an integer array is tried before an object).
+/// `historical_years` in `config.json`: an array of years, such as
+/// `[1940, 1953, 1971]`, or an inclusive range, such as
+/// `{"from": 1940, "to": 2010}`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RawHistoricalYearsConfig {
+    // Untagged: `List` stays first, or a two-year array would load as a range.
     /// Explicit list of year integers.
     List(Vec<i32>),
     /// Inclusive range shorthand.

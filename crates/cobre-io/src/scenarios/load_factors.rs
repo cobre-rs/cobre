@@ -13,9 +13,7 @@ use crate::LoadError;
 
 // ── Intermediate serde types ──────────────────────────────────────────────────
 
-/// Top-level intermediate type for `load_factors.json`.
-///
-/// Private — only used during deserialization. Not re-exported.
+/// Root object of `load_factors.json`.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

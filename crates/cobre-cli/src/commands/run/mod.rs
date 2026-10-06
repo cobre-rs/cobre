@@ -52,7 +52,7 @@ impl From<CommBackendArg> for BackendKind {
     }
 }
 
-use graceful_stop::SignalWindow;
+use graceful_stop::{SignalWindow, agree_post_write, failure_code, into_agreed_result};
 use outputs::{WriteTrainingArgs, write_training_outputs};
 use policy::{apply_training_policy, load_policy_for_simulation};
 use setup::{LoadBroadcastResult, broadcast_and_build_setup, run_pre_training, setup_communicator};
@@ -163,39 +163,60 @@ fn execute_inner<C: Communicator>(
             let training = run_training_phase(ctx, &mut setup, signals.shutdown_flag())?;
             let training_completed_at = now_iso8601();
 
-            if ctx.is_root {
-                let config = root_config.take().ok_or_else(|| CliError::Internal {
-                    message: "root_config was None on rank 0 — internal invariant violated"
-                        .to_string(),
-                })?;
-                let training_ctx = OutputContext {
-                    hostname: hostname.clone(),
-                    solver: active_solver_metadata_id().to_string(),
-                    solver_version: Some(ctx.solver_version.clone()),
-                    started_at: training_started_at,
-                    completed_at: training_completed_at,
-                    distribution: build_distribution_info(
-                        &ctx.topology,
-                        ctx.n_threads,
-                        mpi_world_size,
-                    ),
-                    setup: setup_timings,
-                    production_fit_deviation: build_deviation_summary(
-                        &setup.hydro_models.fpha_fit_deviations,
-                    ),
-                };
-                write_training_outputs(&WriteTrainingArgs {
-                    output_dir: &ctx.output_dir,
-                    system: &system,
-                    config: &config,
-                    training_output: &training.output,
-                    setup: &setup,
-                    training_result: &training.result,
-                    output_ctx: &training_ctx,
-                    quiet: ctx.quiet,
-                    stderr: &ctx.stderr,
-                })?;
+            let decision = &training.result.stop_decision;
+            let n_scenarios = setup.simulation_config.n_scenarios;
+            let decided_skip = training.error.is_none()
+                && PostTrainingSimulation::resolve(n_scenarios > 0, decision, 0)
+                    == PostTrainingSimulation::SkipAfterSignalStop;
+
+            let mut local = if ctx.is_root {
+                root_config
+                    .take()
+                    .ok_or_else(|| CliError::Internal {
+                        message: "root_config was None on rank 0 — internal invariant violated"
+                            .to_string(),
+                    })
+                    .and_then(|config| {
+                        let training_ctx = OutputContext {
+                            hostname: hostname.clone(),
+                            solver: active_solver_metadata_id().to_string(),
+                            solver_version: Some(ctx.solver_version.clone()),
+                            started_at: training_started_at,
+                            completed_at: training_completed_at,
+                            distribution: build_distribution_info(
+                                &ctx.topology,
+                                ctx.n_threads,
+                                mpi_world_size,
+                            ),
+                            setup: setup_timings,
+                            production_fit_deviation: build_deviation_summary(
+                                &setup.hydro_models.fpha_fit_deviations,
+                            ),
+                        };
+                        write_training_outputs(&WriteTrainingArgs {
+                            output_dir: &ctx.output_dir,
+                            system: &system,
+                            config: &config,
+                            training_output: &training.output,
+                            setup: &setup,
+                            training_result: &training.result,
+                            output_ctx: &training_ctx,
+                            quiet: ctx.quiet,
+                            stderr: &ctx.stderr,
+                        })
+                    })
+            } else {
+                Ok(())
+            };
+            let level = signals.sample_level();
+            // Every rank-0 write of the stop path precedes the agreement, with no
+            // early return: a peer would otherwise wait in the allreduce, or exit
+            // while rank 0 still writes.
+            if decided_skip && ctx.is_root && local.is_ok() {
+                local = skip_simulation_phase(ctx, &hostname, n_scenarios);
             }
+            let agreed = agree_post_write(&ctx.comm, failure_code(&local), level)?;
+            into_agreed_result(local, &agreed)?;
 
             if let Some(training_error) = training.error {
                 if ctx.is_root {
@@ -214,25 +235,26 @@ fn execute_inner<C: Communicator>(
                 return Err(CliError::from(training_error));
             }
 
-            if !signal_stop_requested(&training.result.stop_decision, 0) {
+            let signal_stop = signal_stop_requested(decision, agreed.level);
+            if !signal_stop {
                 signals.close()?;
             }
 
-            let n_scenarios = setup.simulation_config.n_scenarios;
-            match PostTrainingSimulation::resolve(
-                n_scenarios > 0,
-                &training.result.stop_decision,
-                0,
-            ) {
+            match PostTrainingSimulation::resolve(n_scenarios > 0, decision, agreed.level) {
                 PostTrainingSimulation::Run => {
                     run_simulation_phase(ctx, &system, &mut setup, &training.result, &hostname)?;
                 }
-                PostTrainingSimulation::SkipAfterSignalStop => {
-                    if ctx.is_root {
-                        skip_simulation_phase(ctx, &hostname, n_scenarios)?;
-                    }
+                PostTrainingSimulation::SkipAfterSignalStop if !decided_skip => {
+                    let local = if ctx.is_root {
+                        skip_simulation_phase(ctx, &hostname, n_scenarios)
+                    } else {
+                        Ok(())
+                    };
+                    let late = agree_post_write(&ctx.comm, failure_code(&local), agreed.level)?;
+                    into_agreed_result(local, &late)?;
                 }
-                PostTrainingSimulation::NotRequested => {}
+                PostTrainingSimulation::SkipAfterSignalStop
+                | PostTrainingSimulation::NotRequested => {}
             }
         }
         RunPhasePlan::SimulateFromPolicy => {

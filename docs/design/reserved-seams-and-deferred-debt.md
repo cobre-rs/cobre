@@ -700,6 +700,28 @@ dropping the context's stored seed touches every `TrainingContext` literal and e
 **Trigger.** A change adds another per-phase sampler input, or groups `TrainingContext`'s
 per-phase fields; the two seeds then move with them.
 
+### Split exit codes in the pre-training export and simulation-outcome reconciles
+
+**What it is.** `run_pre_training` (`crates/cobre-cli/src/commands/run/setup.rs`)
+and `run_simulation_phase` (`crates/cobre-cli/src/commands/run/simulation.rs`)
+reconcile a bool through `cobre_sddp::reconcile_global_ok`. The failing rank
+returns its own `CliError`, while every peer returns `CliError::Internal`
+(exit 4). Under MPI each rank then aborts with its own code, and the launcher
+reports whichever abort lands first. The post-training reconcile already
+agrees the failing rank's code (`agree_post_write` in
+`crates/cobre-cli/src/commands/run/graceful_stop.rs`, and
+`CliError::for_peer_failure`). The fix is a code-carrying `Max` reduction for
+both, with a peer error built from the agreed code and a message naming the
+phase. The simulation outcome can fail on any subset of ranks, and its local
+result combines the drain thread and `simulate()`, so it needs its own peer
+message, and its peer-failure test changes with it.
+
+**Owner.** The cobre-cli run-orchestration owner.
+
+**Trigger.** The next change to either reconcile, or a job script or scheduler
+that keys on the MPI launcher's exit code for a pre-training export or
+simulation failure.
+
 ## Deferred-debt register — whole-lifecycle audit findings
 
 Findings of the full `cobre run` lifecycle read, described by behavior. Each

@@ -116,6 +116,29 @@ impl CliError {
         }
     }
 
+    /// The error a rank returns for a failure code agreed from rank 0's writes;
+    /// the inverse of [`CliError::exit_code`], so every rank exits with that code.
+    pub(crate) fn for_peer_failure(exit_code: i32) -> Self {
+        const MESSAGE: &str =
+            "rank 0 failed to write the run outputs; failing on every rank in lockstep";
+        match exit_code {
+            1 => Self::Validation {
+                report: MESSAGE.to_string(),
+                already_rendered: false,
+            },
+            2 => Self::Io {
+                source: Error::other(MESSAGE),
+                context: "rank 0".into(),
+            },
+            3 => Self::Solver {
+                message: MESSAGE.to_string(),
+            },
+            _ => Self::Internal {
+                message: MESSAGE.to_string(),
+            },
+        }
+    }
+
     fn prefixed(self, prefix: &str) -> Self {
         match self {
             Self::Validation {
@@ -414,6 +437,13 @@ mod tests {
             message: "channel closed unexpectedly".to_string(),
         };
         assert_eq!(err.exit_code(), 4);
+    }
+
+    #[test]
+    fn peer_failure_keeps_the_agreed_exit_code() {
+        for code in 1..=4 {
+            assert_eq!(CliError::for_peer_failure(code).exit_code(), code);
+        }
     }
 
     #[test]

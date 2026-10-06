@@ -1,6 +1,7 @@
-//! Integration tests for how `cobre run` handles SIGTERM and SIGINT: each test
-//! spawns the binary, waits for a progress line on stderr, signals the process,
-//! and checks its exit status and outputs.
+//! Integration tests for how `cobre run` handles SIGTERM and SIGINT, in one
+//! process and under `mpiexec -n 2`, and for the exit code every rank takes when
+//! rank 0's final writes fail. The tests spawn the binary, signal a process at a
+//! stderr readiness line, and check the exit status and outputs.
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -68,6 +69,21 @@ const LONG_SIMULATION_CONFIG: &str = r#"{
   "modeling": { "inflow_non_negativity": { "method": "none" } }
 }"#;
 
+const THREE_ITERATION_CONFIG: &str = r#"{
+  "training": {
+    "selection": { "method": "sampled", "forward_passes": 1 },
+    "stopping_rules": [{ "type": "iteration_limit", "limit": 3 }],
+    "scenario_source": {
+      "seed": 42,
+      "inflow": { "scheme": "in_sample" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" }
+    }
+  },
+  "simulation": { "enabled": true, "selection": { "method": "sampled", "num_scenarios": 100 } },
+  "modeling": { "inflow_non_negativity": { "method": "none" } }
+}"#;
+
 fn case_with_config(config_json: &str) -> TempDir {
     let case = TempDir::new().unwrap();
     copy_dir_recursive(&case_dir("1dtoy"), case.path());
@@ -117,16 +133,24 @@ fn spawn_run(launcher: Option<&Path>, case: &Path, out: &Path) -> (Child, Receiv
     (child, rx)
 }
 
-fn wait_for_line(rx: &Receiver<String>, pred: impl Fn(&str) -> bool, deadline: Instant) -> String {
+fn wait_for_line(
+    child: &mut Child,
+    rx: &Receiver<String>,
+    pred: impl Fn(&str) -> bool,
+    deadline: Instant,
+) -> String {
     loop {
-        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        let failure = match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(line) if pred(&line) => return line,
-            Ok(_) => {}
-            Err(RecvTimeoutError::Timeout) => panic!("no matching stderr line within {TIMEOUT:?}"),
+            Ok(_) => continue,
+            Err(RecvTimeoutError::Timeout) => format!("no matching stderr line within {TIMEOUT:?}"),
             Err(RecvTimeoutError::Disconnected) => {
-                panic!("the run closed stderr before printing the expected line")
+                "the run closed stderr before printing the expected line".to_string()
             }
-        }
+        };
+        let _ = child.kill();
+        let status = child.wait();
+        panic!("{failure}; the run ended with {status:?}");
     }
 }
 
@@ -145,11 +169,19 @@ fn send(child: &mut Child, sig: &str) {
     if let Some(status) = child.try_wait().expect("try_wait must succeed") {
         panic!("the run exited before the signal {sig}: {status}");
     }
+    signal_pids(&[child.id()], sig);
+}
+
+fn signal_pids(pids: &[u32], sig: &str) {
     let status = Command::new("kill")
-        .args(["-s", sig, &child.id().to_string()])
+        .args(["-s", sig])
+        .args(pids.iter().map(u32::to_string))
         .status()
         .expect("kill must spawn");
-    assert!(status.success(), "the run exited before the signal {sig}");
+    assert!(
+        status.success(),
+        "a process in {pids:?} exited before the signal {sig}"
+    );
 }
 
 fn wait_until(child: &mut Child, deadline: Instant) -> ExitStatus {
@@ -208,7 +240,7 @@ fn assert_one_signal_stops_gracefully(sig: &str) {
     let deadline = Instant::now() + TIMEOUT;
     let (mut child, rx) = spawn_run(None, case.path(), out.path());
 
-    wait_for_line(&rx, is_progress_line, deadline);
+    wait_for_line(&mut child, &rx, is_progress_line, deadline);
     send(&mut child, sig);
     let status = wait_until(&mut child, deadline);
 
@@ -237,9 +269,14 @@ fn repeated_sigterm_stays_graceful_through_the_final_writes() {
     let deadline = Instant::now() + TIMEOUT;
     let (mut child, rx) = spawn_run(None, case.path(), out.path());
 
-    wait_for_line(&rx, is_progress_line, deadline);
+    wait_for_line(&mut child, &rx, is_progress_line, deadline);
     send(&mut child, "TERM");
-    wait_for_line(&rx, |line| line == "Writing training outputs...", deadline);
+    wait_for_line(
+        &mut child,
+        &rx,
+        |line| line == "Writing training outputs...",
+        deadline,
+    );
     send(&mut child, "TERM");
     let status = wait_until(&mut child, deadline);
 
@@ -259,7 +296,7 @@ fn second_sigint_terminates_a_single_process_run_by_sigint() {
     let deadline = Instant::now() + TIMEOUT;
     let (mut child, rx) = spawn_run(None, case.path(), out.path());
 
-    wait_for_line(&rx, is_progress_line, deadline);
+    wait_for_line(&mut child, &rx, is_progress_line, deadline);
     send(&mut child, "INT");
     thread::sleep(Duration::from_millis(20));
     send(&mut child, "INT");
@@ -276,6 +313,7 @@ fn sigterm_during_the_simulation_terminates_by_the_signal() {
     let (mut child, rx) = spawn_run(None, case.path(), out.path());
 
     wait_for_line(
+        &mut child,
         &rx,
         |line| line.starts_with("Simulation starting..."),
         deadline,
@@ -285,4 +323,187 @@ fn sigterm_during_the_simulation_terminates_by_the_signal() {
 
     assert_eq!(status.signal(), Some(SIGTERM), "{status}");
     assert!(!out.path().join("simulation/_SUCCESS").exists());
+}
+
+#[test]
+fn sigterm_during_the_training_writes_never_completes_the_simulation() {
+    let case = case_with_config(THREE_ITERATION_CONFIG);
+    let out = TempDir::new().unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    let (mut child, rx) = spawn_run(None, case.path(), out.path());
+
+    wait_for_line(
+        &mut child,
+        &rx,
+        |line| line == "Writing training outputs...",
+        deadline,
+    );
+    send(&mut child, "TERM");
+    let status = wait_until(&mut child, deadline);
+
+    let out = out.path();
+    if status.signal().is_none() {
+        println!("branch a");
+        let training = read_json(&out.join("training/metadata.json"));
+        assert_eq!(training["status"], "complete");
+        assert_eq!(
+            training["convergence"]["termination_reason"],
+            "iteration_limit"
+        );
+        let simulation = read_json(&out.join("simulation/metadata.json"));
+        assert_eq!(simulation["status"], "partial");
+        assert_eq!(simulation["scenarios"]["completed"], 0);
+        assert!(out.join("simulation/_SUCCESS").is_file());
+    } else {
+        println!("branch b");
+        assert_eq!(status.signal(), Some(SIGTERM), "{status}");
+        assert!(!out.join("simulation/_SUCCESS").exists());
+    }
+}
+
+#[cfg(feature = "mpi")]
+mod mpi {
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::PathBuf;
+
+    use super::*;
+
+    /// The PID of the `rank` process launched with `--output out`.
+    fn rank_pid(out: &Path, rank: u32) -> u32 {
+        let out_arg = out.as_os_str().as_bytes();
+        let rank_var = format!("PMI_RANK={rank}");
+        for entry in fs::read_dir("/proc").unwrap().flatten() {
+            let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse().ok()) else {
+                continue;
+            };
+            let (Ok(cmdline), Ok(environ)) = (
+                fs::read(entry.path().join("cmdline")),
+                fs::read(entry.path().join("environ")),
+            ) else {
+                continue;
+            };
+            if cmdline.split(|&b| b == 0).any(|arg| arg == out_arg)
+                && environ
+                    .split(|&b| b == 0)
+                    .any(|var| var == rank_var.as_bytes())
+            {
+                return pid;
+            }
+        }
+        panic!("no rank {rank} process writes to {}", out.display());
+    }
+
+    fn mpiexec() -> PathBuf {
+        let mpich = PathBuf::from("/opt/mpich/bin/mpiexec");
+        if mpich.is_file() {
+            return mpich;
+        }
+        let on_path = Command::new("mpiexec")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        assert!(
+            on_path.is_ok_and(|status| status.success()),
+            "the MPI signal tests need /opt/mpich/bin/mpiexec or an mpiexec on PATH"
+        );
+        PathBuf::from("mpiexec")
+    }
+
+    fn assert_graceful_launcher_exit(status: ExitStatus) {
+        assert!(
+            status.code().is_some(),
+            "the launcher must exit, not die by a signal: {status}"
+        );
+    }
+
+    #[test]
+    fn mpi_sigterm_to_one_rank_stops_both_ranks_at_the_same_iteration() {
+        let case = case_with_config(STOP_CONFIG);
+        let out = output_with_a_stale_simulation_partition();
+        let deadline = Instant::now() + TIMEOUT;
+        let (mut child, rx) = spawn_run(Some(&mpiexec()), case.path(), out.path());
+
+        wait_for_line(&mut child, &rx, is_progress_line, deadline);
+        signal_pids(&[rank_pid(out.path(), 1)], "TERM");
+        let status = wait_until(&mut child, deadline);
+
+        assert_graceful_launcher_exit(status);
+        assert_signal_stop_outputs(out.path());
+    }
+
+    #[test]
+    fn mpi_repeated_sigint_to_one_rank_stays_graceful() {
+        let case = case_with_config(SLOW_ITERATION_CONFIG);
+        let out = output_with_a_stale_simulation_partition();
+        let deadline = Instant::now() + TIMEOUT;
+        let (mut child, rx) = spawn_run(Some(&mpiexec()), case.path(), out.path());
+
+        wait_for_line(&mut child, &rx, is_progress_line, deadline);
+        let rank_1 = rank_pid(out.path(), 1);
+        signal_pids(&[rank_1], "INT");
+        thread::sleep(Duration::from_millis(20));
+        signal_pids(&[rank_1], "INT");
+        let status = wait_until(&mut child, deadline);
+
+        assert_graceful_launcher_exit(status);
+        assert_signal_stop_outputs(out.path());
+    }
+
+    #[test]
+    fn mpi_sigterm_during_the_final_write_keeps_every_artifact() {
+        let case = case_with_config(STOP_CONFIG);
+        let out = output_with_a_stale_simulation_partition();
+        let deadline = Instant::now() + TIMEOUT;
+        let (mut child, rx) = spawn_run(Some(&mpiexec()), case.path(), out.path());
+
+        wait_for_line(&mut child, &rx, is_progress_line, deadline);
+        let ranks = [rank_pid(out.path(), 0), rank_pid(out.path(), 1)];
+        signal_pids(&ranks[1..], "TERM");
+        wait_for_line(
+            &mut child,
+            &rx,
+            |line| line == "Writing training outputs...",
+            deadline,
+        );
+        signal_pids(&ranks, "TERM");
+        let status = wait_until(&mut child, deadline);
+
+        assert_graceful_launcher_exit(status);
+        assert_signal_stop_outputs(out.path());
+        assert!(out.path().join("training/_SUCCESS").is_file());
+    }
+
+    #[test]
+    fn mpi_training_write_failure_gives_every_rank_its_exit_code() {
+        let case = case_with_config(THREE_ITERATION_CONFIG);
+        let out = TempDir::new().unwrap();
+        fs::create_dir_all(out.path().join("training/metadata.json.tmp")).unwrap();
+        let deadline = Instant::now() + TIMEOUT;
+        let (mut child, _rx) = spawn_run(Some(&mpiexec()), case.path(), out.path());
+
+        let status = wait_until(&mut child, deadline);
+
+        println!("launcher exit: {status}");
+        assert_eq!(status.code(), Some(2), "{status}");
+        assert!(!out.path().join("training/_SUCCESS").exists());
+        assert!(!out.path().join("simulation/_SUCCESS").exists());
+    }
+
+    #[test]
+    fn mpi_skipped_simulation_write_failure_gives_every_rank_its_exit_code() {
+        let case = case_with_config(STOP_CONFIG);
+        let out = TempDir::new().unwrap();
+        fs::create_dir_all(out.path().join("simulation/metadata.json.tmp")).unwrap();
+        let deadline = Instant::now() + TIMEOUT;
+        let (mut child, rx) = spawn_run(Some(&mpiexec()), case.path(), out.path());
+
+        wait_for_line(&mut child, &rx, is_progress_line, deadline);
+        signal_pids(&[rank_pid(out.path(), 1)], "TERM");
+        let status = wait_until(&mut child, deadline);
+
+        assert_eq!(status.code(), Some(2), "{status}");
+        assert!(out.path().join("training/_SUCCESS").is_file());
+        assert!(!out.path().join("simulation/_SUCCESS").exists());
+    }
 }

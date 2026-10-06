@@ -47,7 +47,7 @@ use crate::{
     forward_pass_state::{ForwardPassInputs, ForwardPassState},
     lower_bound::LbEvalScratchBundle,
     lower_bound::evaluate_lower_bound,
-    rank_reconcile::{reconcile_error_flag, reconcile_result},
+    rank_reconcile::{StopInputs, agree_stop_inputs, reconcile_error_flag, reconcile_result},
     risk_measure::{RiskMeasure, uniform_effective_measure},
     setup::NodeGraph,
     setup::node_graph::{NodePos, StageIdx, Traversal, enumerated_requires_state_exchange},
@@ -482,10 +482,17 @@ where
 
         let (lb, lb_lp_solves, lb_wall_ms, lb_solve_time_ms) = self.run_lower_bound(iteration)?;
 
-        if let Some(source) = self.runtime.shutdown_requested() {
+        let local = StopInputs {
+            shutdown: self.runtime.shutdown_requested(),
+            wall_time_seconds: self.results.start_time.elapsed().as_secs_f64(),
+        };
+        let agreed = agree_stop_inputs(local, self.comm).map_err(SddpError::Communication)?;
+        if let Some(source) = agreed.shutdown {
             self.convergence_monitor.set_shutdown(source);
         }
-        let decision = self.convergence_monitor.update(lb, &sync_result);
+        let decision = self
+            .convergence_monitor
+            .update(lb, &sync_result, agreed.wall_time_seconds);
 
         self.results.final_lb = self.convergence_monitor.lower_bound();
         self.results.final_ub = self.convergence_monitor.upper_bound();

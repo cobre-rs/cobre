@@ -666,7 +666,7 @@ mod convergence_conformance {
                 // gap = (UB - LB) / max(1, |LB|).
                 0 | 1 => {
                     let mut monitor = make_monitor(100);
-                    monitor.update(lb, &make_sync_result(ub));
+                    monitor.update(lb, &make_sync_result(ub), 0.0);
                     let got = monitor.gap();
                     assert!(
                         (got - expected_gap).abs() < 1e-10,
@@ -679,7 +679,7 @@ mod convergence_conformance {
                     let sync = make_sync_result(110.0);
                     let mut monitor = make_monitor(100);
                     for &v in &lb_values {
-                        monitor.update(v, &sync);
+                        monitor.update(v, &sync, 0.0);
                     }
                     assert_eq!(
                         monitor.iteration_count(),
@@ -703,9 +703,9 @@ mod convergence_conformance {
                     };
                     let mut monitor2 = ConvergenceMonitor::new(rule_set);
                     for &v in &lb_values {
-                        monitor2.update(v, &make_sync_result(110.0));
+                        monitor2.update(v, &make_sync_result(110.0), 0.0);
                     }
-                    let decision = monitor2.update(50.0, &make_sync_result(110.0));
+                    let decision = monitor2.update(50.0, &make_sync_result(110.0), 0.0);
                     assert!(
                         decision.should_stop()
                             && decision.mask().contains(StopMask::BOUND_STALLING),
@@ -721,7 +721,7 @@ mod convergence_conformance {
                     let mut monitor = ConvergenceMonitor::new(rule_set);
                     let sync = make_sync_result(110.0);
                     for i in 1..10 {
-                        let decision = monitor.update(100.0, &sync);
+                        let decision = monitor.update(100.0, &sync, 0.0);
                         assert!(
                             !decision.should_stop(),
                             "case_index = {idx}, desc = {desc}: IterationLimit(10) must not \
@@ -733,7 +733,7 @@ mod convergence_conformance {
                              triggered at iteration {i}"
                         );
                     }
-                    let decision = monitor.update(100.0, &sync);
+                    let decision = monitor.update(100.0, &sync, 0.0);
                     assert!(
                         decision.should_stop(),
                         "case_index = {idx}, desc = {desc}: IterationLimit(10) must trigger at \

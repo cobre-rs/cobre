@@ -90,7 +90,7 @@ fn stop_decision_and_convergence_update_allocate_nothing() {
     for i in 0..50 {
         black_box(any_set.evaluate(black_box(&state)));
         black_box(all_set.evaluate(black_box(&state)));
-        black_box(monitor.update(100.0 + f64::from(i), &sync));
+        black_box(monitor.update(100.0 + f64::from(i), &sync, 0.0));
     }
 
     assert_eq!(alloc_count(), 0, "the stop decision must not allocate");

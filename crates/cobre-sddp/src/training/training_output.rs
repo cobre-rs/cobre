@@ -13,7 +13,7 @@ use cobre_io::{
     TrainingOutput,
 };
 
-use crate::stopping_rule::RULE_BOUND_STALLING;
+use crate::stopping_rule::StopMask;
 use crate::{FutureCostFunction, TrainingResult};
 
 /// Per-iteration accumulator filled by [`accumulate_partial_records`] from
@@ -331,7 +331,9 @@ pub fn build_training_output(
         total_loaded: fcf.total_warm_start_cuts() as u64,
     };
 
-    let converged = result.reason == RULE_BOUND_STALLING;
+    let mask = result.stop_decision.mask();
+    let converged = result.stop_decision.configured_stop()
+        && (mask.contains(StopMask::GAP) || mask.contains(StopMask::BOUND_STALLING));
 
     // None for non-positive lower bound: the gap percentage is undefined
     // (final_lb == 0) or sign-inverted (final_lb < 0).
@@ -547,6 +549,9 @@ mod tests {
 
     use super::{PhaseTimingTotals, build_training_output, sum_phase_timing_ms};
     use crate::setup::NodeId;
+    use crate::stopping_rule::{
+        MonitorState, StopDecision, StoppingMode, StoppingRule, StoppingRuleSet,
+    };
     use crate::{FutureCostFunction, TrainingResult};
 
     fn make_result(reason: &str, lb: f64, ub: f64, gap: f64, iterations: u64) -> TrainingResult {
@@ -604,28 +609,6 @@ mod tests {
         let output = build_training_output(&result, &events, &fcf, false);
 
         assert_eq!(output.convergence_records.len(), 3);
-    }
-
-    #[test]
-    fn converged_true_for_bound_stalling() {
-        let result = make_result("bound_stalling", 100.0, 101.0, 0.01, 5);
-        let events = vec![make_iteration_summary(1, 100.0, 101.0, 0.01)];
-        let fcf = make_empty_fcf();
-
-        let output = build_training_output(&result, &events, &fcf, false);
-
-        assert!(output.converged);
-    }
-
-    #[test]
-    fn converged_false_for_iteration_limit() {
-        let result = make_result("iteration_limit", 90.0, 110.0, 0.2, 100);
-        let events = vec![make_iteration_summary(1, 90.0, 110.0, 0.2)];
-        let fcf = make_empty_fcf();
-
-        let output = build_training_output(&result, &events, &fcf, false);
-
-        assert!(!output.converged);
     }
 
     #[test]
@@ -700,23 +683,108 @@ mod tests {
         );
     }
 
-    #[test]
-    fn converged_false_for_all_other_reasons() {
-        let reasons = [
-            "iteration_limit",
-            "time_limit",
-            "graceful_shutdown",
-            "unknown",
-        ];
-        let fcf = make_empty_fcf();
-        for reason in reasons {
-            let result = make_result(reason, 100.0, 110.0, 0.1, 1);
-            let output = build_training_output(&result, &[], &fcf, false);
-            assert!(
-                !output.converged,
-                "converged must be false for reason = {reason}"
-            );
+    const KIND_ITERATION_LIMIT: u8 = 1 << 0;
+    const KIND_TIME_LIMIT: u8 = 1 << 1;
+    const KIND_BOUND_STALLING: u8 = 1 << 2;
+    const KIND_GAP: u8 = 1 << 3;
+
+    /// Evaluate one rule per kind in `configured`, in declared order, at a state
+    /// where exactly the kinds in `triggered` hold.
+    fn stop_case(
+        configured: u8,
+        triggered: u8,
+        mode: StoppingMode,
+        shutdown: bool,
+    ) -> StopDecision {
+        let lb = 100.0;
+        let mut rules = Vec::new();
+        if configured & KIND_ITERATION_LIMIT != 0 {
+            rules.push(StoppingRule::IterationLimit { limit: 5 });
         }
+        if configured & KIND_TIME_LIMIT != 0 {
+            rules.push(StoppingRule::TimeLimit { seconds: 10.0 });
+        }
+        if configured & KIND_BOUND_STALLING != 0 {
+            rules.push(StoppingRule::BoundStalling {
+                tolerance: 1e-3,
+                iterations: 1,
+            });
+        }
+        if configured & KIND_GAP != 0 {
+            rules.push(StoppingRule::Gap {
+                tolerance: Some(1.0),
+                relative_tolerance: None,
+            });
+        }
+        let holds = |kind: u8| triggered & kind != 0;
+        let state = MonitorState {
+            iteration: if holds(KIND_ITERATION_LIMIT) { 5 } else { 1 },
+            wall_time_seconds: if holds(KIND_TIME_LIMIT) { 20.0 } else { 0.0 },
+            lower_bound: lb,
+            upper_bound: if holds(KIND_GAP) {
+                lb + 0.5
+            } else {
+                lb + 100.0
+            },
+            lower_bound_history: if holds(KIND_BOUND_STALLING) {
+                vec![lb]
+            } else {
+                vec![]
+            },
+            shutdown_requested: shutdown,
+        };
+        StoppingRuleSet { rules, mode }.evaluate(&state)
+    }
+
+    fn converged_for(stop_decision: StopDecision) -> bool {
+        let mut result = make_result("iteration_limit", 100.0, 110.0, 0.1, 1);
+        result.stop_decision = stop_decision;
+        build_training_output(&result, &[], &make_empty_fcf(), false).converged
+    }
+
+    #[test]
+    fn converged_matches_the_stop_mask_truth_table() {
+        let mut cases = 0;
+        for configured in 1..16_u8 {
+            for triggered in (0..16_u8).filter(|t| t & !configured == 0) {
+                for mode in [StoppingMode::Any, StoppingMode::All] {
+                    for shutdown in [false, true] {
+                        let conjuncts = configured & !KIND_ITERATION_LIMIT;
+                        let stopped_by_rules = match mode {
+                            StoppingMode::Any => triggered != 0,
+                            StoppingMode::All => conjuncts != 0 && conjuncts & !triggered == 0,
+                        };
+                        let expected =
+                            stopped_by_rules && triggered & (KIND_GAP | KIND_BOUND_STALLING) != 0;
+                        assert_eq!(
+                            converged_for(stop_case(configured, triggered, mode, shutdown)),
+                            expected,
+                            "C={configured:04b} T={triggered:04b} {mode:?} shutdown={shutdown}"
+                        );
+                        cases += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(cases, 320);
+    }
+
+    #[test]
+    fn converged_is_false_when_only_part_of_an_all_mode_set_triggered() {
+        let decision = stop_case(
+            KIND_ITERATION_LIMIT | KIND_TIME_LIMIT | KIND_GAP,
+            KIND_GAP,
+            StoppingMode::All,
+            true,
+        );
+        assert!(!converged_for(decision));
+    }
+
+    #[test]
+    fn converged_is_false_for_a_result_without_a_stop_decision() {
+        let result = make_result("bound_stalling", 100.0, 101.0, 0.01, 5);
+        let output = build_training_output(&result, &[], &make_empty_fcf(), false);
+        assert!(!output.converged);
     }
 
     #[test]

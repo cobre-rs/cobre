@@ -160,7 +160,12 @@ pub struct MetadataIterations {
 /// Convergence summary embedded in [`TrainingMetadata`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetadataConvergence {
-    /// Whether a convergence-oriented stopping rule triggered termination.
+    /// `true` when training stopped because its configured stopping rules were
+    /// met and a `gap` or `bound_stalling` rule was among the rules triggered at
+    /// that iteration. `false` when only `iteration_limit` or `time_limit`
+    /// triggered, and when the iteration limit ran out, a shutdown request ended
+    /// training, or training ended on an error before the configured rules were
+    /// met.
     pub achieved: bool,
     /// Final optimality gap in percent (`null` when upper bound evaluation is disabled).
     pub final_gap_percent: Option<f64>,

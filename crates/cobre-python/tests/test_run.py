@@ -55,8 +55,8 @@ def test_run_d56_external_authoritative_converges(tmp_path: pathlib.Path) -> Non
     (`d56_external_authoritative_loads_and_converges`).
 
     d56's config declares only an `iteration_limit` stopping rule, so the
-    returned `converged` flag (tied to the distinct `bound_stalling` stop
-    reason) stays False even at a 0% gap — this asserts the numeric
+    returned `converged` flag stays False even at a 0% gap (no `gap` or
+    `bound_stalling` rule can trigger) — this asserts the numeric
     convergence the deck actually demonstrates instead.
     """
     import cobre.run  # noqa: PLC0415

@@ -22,6 +22,7 @@ use crate::{
     cut::fcf::FutureCostFunction,
     setup::NodePos,
     solver_stats::SolverStatsLogEntry,
+    stopping_rule::StopDecision,
     training_session::{IterationOutcome, TrainingSession},
     workspace::CapturedBasis,
 };
@@ -68,6 +69,11 @@ pub struct TrainingResult {
 
     /// Human-readable termination reason (e.g., `"iteration_limit"`, `"graceful_shutdown"`).
     pub reason: String,
+
+    /// The stop decision of the iteration where training stopped; the default
+    /// (nothing triggered) when training ended otherwise or the result was not
+    /// produced by a training loop.
+    pub stop_decision: StopDecision,
 
     /// Total wall-clock time for the training run, in milliseconds.
     pub total_time_ms: u64,
@@ -121,6 +127,7 @@ impl TrainingResult {
             final_gap,
             iterations,
             reason,
+            stop_decision: StopDecision::default(),
             total_time_ms,
             basis_cache,
             solver_stats_log,

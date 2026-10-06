@@ -555,6 +555,7 @@ where
         self.results.completed_iterations = iteration;
 
         if decision.should_stop() {
+            self.results.stop_decision = decision;
             self.results.termination_reason = decision
                 .first_triggered()
                 .map_or_else(|| "unknown".to_string(), str::to_string);
@@ -596,6 +597,7 @@ where
             final_gap,
             completed_iterations,
             termination_reason,
+            stop_decision,
             solver_stats_log,
             ..
         } = self.results;
@@ -615,20 +617,23 @@ where
 
         let basis_cache = broadcast_basis_cache(&self.basis_store, self.comm)?;
 
+        let mut result = TrainingResult::new(
+            final_lb,
+            final_ub,
+            final_ub_std,
+            final_gap,
+            completed_iterations,
+            termination_reason,
+            total_time_ms,
+            basis_cache,
+            solver_stats_log,
+            visited_archive,
+            Some(frozen_templates),
+        );
+        result.stop_decision = stop_decision;
+
         Ok(TrainingOutcome {
-            result: TrainingResult::new(
-                final_lb,
-                final_ub,
-                final_ub_std,
-                final_gap,
-                completed_iterations,
-                termination_reason,
-                total_time_ms,
-                basis_cache,
-                solver_stats_log,
-                visited_archive,
-                Some(frozen_templates),
-            ),
+            result,
             error: None,
         })
     }

@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use crate::solver_stats::SolverStatsLogEntry;
-use crate::stopping_rule::RULE_ITERATION_LIMIT;
+use crate::stopping_rule::{RULE_ITERATION_LIMIT, StopDecision};
 
 /// Accumulates per-iteration results for one training run.
 pub(crate) struct TrainingResults {
@@ -13,6 +13,7 @@ pub(crate) struct TrainingResults {
     pub final_gap: f64,
     pub completed_iterations: u64,
     pub termination_reason: String,
+    pub stop_decision: StopDecision,
     pub solver_stats_log: Vec<SolverStatsLogEntry>,
     pub start_time: Instant,
 }
@@ -29,6 +30,7 @@ impl TrainingResults {
             final_gap: 0.0,
             completed_iterations: start_iteration,
             termination_reason: RULE_ITERATION_LIMIT.to_string(),
+            stop_decision: StopDecision::default(),
             solver_stats_log: Vec::new(),
         }
     }
@@ -49,7 +51,7 @@ mod tests {
     use std::time::Duration;
 
     use super::TrainingResults;
-    use crate::stopping_rule::RULE_ITERATION_LIMIT;
+    use crate::stopping_rule::{RULE_ITERATION_LIMIT, StopDecision};
 
     #[test]
     fn training_results_new_initialises_all_fields() {
@@ -60,6 +62,7 @@ mod tests {
         assert_eq!(r.final_gap, 0.0);
         assert_eq!(r.completed_iterations, 0);
         assert_eq!(r.termination_reason, RULE_ITERATION_LIMIT);
+        assert_eq!(r.stop_decision, StopDecision::default());
         assert!(r.solver_stats_log.is_empty());
     }
 

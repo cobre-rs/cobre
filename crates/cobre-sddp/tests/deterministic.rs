@@ -6253,8 +6253,9 @@ mod chronological_telescoping {
     }
 
     /// Train the parallel-block system under `config` (built deterministically),
-    /// panicking on any training error.
-    fn train_result(config: &Config) -> cobre_sddp::TrainingResult {
+    /// panicking on any training error, and return the trained setup with the
+    /// result.
+    fn train_setup(config: &Config) -> (cobre_sddp::StudySetup, cobre_sddp::TrainingResult) {
         let mut setup = build_setup_in_code(build_system(BlockMode::Parallel), config);
         let comm = StubComm;
         let mut solver = ActiveSolver::new().expect("ActiveSolver::new");
@@ -6266,7 +6267,11 @@ mod chronological_telescoping {
             "training error: {:?}",
             outcome.error
         );
-        outcome.result
+        (setup, outcome.result)
+    }
+
+    fn train_result(config: &Config) -> cobre_sddp::TrainingResult {
+        train_setup(config).1
     }
 
     fn enumerated_config_with_rules(rules: Vec<StoppingRuleConfig>) -> Config {
@@ -6277,12 +6282,9 @@ mod chronological_telescoping {
         config
     }
 
-    /// An enumerated + expectation study with a `Gap { tolerance }` rule stops via
-    /// the gap rule — before the iteration cap — once the clamped canonical-R$
-    /// `UB_exact − LB` first drops to within the tolerance.
-    #[test]
-    fn enumerated_gap_rule_stops_when_exact_gap_within_tolerance() {
-        // Reference run: iteration limit only → converged exact bounds set the scale.
+    /// The enumerated `[IterationLimit{20}, Gap{tolerance}]` config and its
+    /// absolute tolerance, scaled from an iteration-limit-only reference run.
+    fn gap_stop_config() -> (Config, f64) {
         let ref_result = train_result(&enumerated_config_with_rules(vec![
             StoppingRuleConfig::IterationLimit { limit: 20 },
         ]));
@@ -6291,13 +6293,23 @@ mod chronological_telescoping {
         // 0.1% of the converged bound: above the LP-tolerance floor (so the gap
         // reaches it) yet a real threshold the exact gap must cross.
         let tolerance = 1e-3 * ref_result.final_ub.abs().max(1.0);
-        let result = train_result(&enumerated_config_with_rules(vec![
+        let config = enumerated_config_with_rules(vec![
             StoppingRuleConfig::IterationLimit { limit: 20 },
             StoppingRuleConfig::Gap {
                 tolerance: Some(tolerance),
                 relative_tolerance: None,
             },
-        ]));
+        ]);
+        (config, tolerance)
+    }
+
+    /// An enumerated + expectation study with a `Gap { tolerance }` rule stops via
+    /// the gap rule — before the iteration cap — once the clamped canonical-R$
+    /// `UB_exact − LB` first drops to within the tolerance.
+    #[test]
+    fn enumerated_gap_rule_stops_when_exact_gap_within_tolerance() {
+        let (config, tolerance) = gap_stop_config();
+        let result = train_result(&config);
 
         assert_eq!(
             result.reason, "gap",
@@ -6312,6 +6324,42 @@ mod chronological_telescoping {
         assert!(
             gap <= tolerance,
             "the clamped canonical-R$ gap {gap} must be within tolerance {tolerance}"
+        );
+    }
+
+    #[test]
+    fn gap_stopped_training_reports_convergence_achieved() {
+        let (config, _) = gap_stop_config();
+        let (setup, result) = train_setup(&config);
+
+        assert_eq!(result.reason, "gap");
+        assert!(
+            setup.build_training_output(&result, &[]).converged,
+            "a run stopped by the gap rule must report convergence"
+        );
+    }
+
+    /// Under `All` the 50-iteration stalling window cannot fill within the
+    /// 3-iteration cap, so the run exhausts its budget with no configured stop.
+    #[test]
+    fn exhausted_iteration_budget_reports_iteration_limit_without_convergence() {
+        let mut config = enumerated_config_with_rules(vec![
+            StoppingRuleConfig::IterationLimit { limit: 3 },
+            StoppingRuleConfig::BoundStalling {
+                tolerance: 1e-12,
+                iterations: 50,
+            },
+        ]);
+        config.training.stopping_mode = cobre_io::config::StoppingMode::All;
+        let (setup, result) = train_setup(&config);
+
+        assert_eq!(
+            (result.iterations, result.reason.as_str()),
+            (3, "iteration_limit")
+        );
+        assert!(
+            !setup.build_training_output(&result, &[]).converged,
+            "an exhausted iteration budget must not report convergence"
         );
     }
 

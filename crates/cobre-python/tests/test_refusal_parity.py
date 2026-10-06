@@ -156,11 +156,93 @@ def _time_limit_only_stopping_rules(case: pathlib.Path) -> None:
     _edit_json(case / "config.json", edit)
 
 
+def _train_one_iteration(case: pathlib.Path) -> None:
+    import cobre.run  # noqa: PLC0415
+
+    def edit(config: Any) -> None:
+        config["training"]["stopping_rules"] = [{"type": "iteration_limit", "limit": 1}]
+        config["simulation"]["enabled"] = False
+
+    _edit_json(case / "config.json", edit)
+    cobre.run.run(str(case), output_dir=str(case / "output"))
+
+
+def _restamp_policy_version(policy_dir: pathlib.Path) -> None:
+    import cobre  # noqa: PLC0415
+
+    manifest = policy_dir / "manifest.bin"
+    data = manifest.read_bytes()
+    running = cobre.__version__.encode()
+    assert data.count(running) == 1, "the running version must occur once"
+    other = (b"8" if running.startswith(b"9") else b"9") + running[1:]
+    manifest.write_bytes(data.replace(running, other))
+
+
+def _set_policy_mode(case: pathlib.Path, mode: str) -> None:
+    def edit(config: Any) -> None:
+        config.setdefault("policy", {})["mode"] = mode
+
+    _edit_json(case / "config.json", edit)
+
+
 def _empty_stopping_rules(case: pathlib.Path) -> None:
     def edit(config: Any) -> None:
         config["training"]["stopping_rules"] = []
 
     _edit_json(case / "config.json", edit)
+
+
+def _select_simulation_only(case: pathlib.Path) -> None:
+    def edit(config: Any) -> None:
+        config["training"]["enabled"] = False
+        config["simulation"]["enabled"] = True
+        config["simulation"]["selection"] = {"method": "sampled", "num_scenarios": 1}
+
+    _edit_json(case / "config.json", edit)
+
+
+def _warm_start_policy_from_another_version(case: pathlib.Path) -> None:
+    _train_one_iteration(case)
+    _restamp_policy_version(case / "output" / "policy")
+    _set_policy_mode(case, "warm_start")
+
+
+def _resume_policy_from_another_version(case: pathlib.Path) -> None:
+    _train_one_iteration(case)
+    _restamp_policy_version(case / "output" / "policy")
+    _set_policy_mode(case, "resume")
+
+
+def _simulation_only_policy_from_another_version(case: pathlib.Path) -> None:
+    _train_one_iteration(case)
+    _restamp_policy_version(case / "output" / "policy")
+    _select_simulation_only(case)
+
+
+def _warm_start_without_a_policy_directory(case: pathlib.Path) -> None:
+    _set_policy_mode(case, "warm_start")
+
+
+def _simulation_only_policy_with_unused_stored_bases(case: pathlib.Path) -> None:
+    thermals = case / "system" / "thermals.json"
+
+    def add_third_thermal(document: Any) -> None:
+        document["thermals"].append(
+            {
+                "id": 2,
+                "name": "UTE3",
+                "operational_start_date": "2020-01-01",
+                "bus_id": 0,
+                "generation": {"min_mw": 0.0, "max_mw": 15.0},
+                "cost_per_mwh": 20.0,
+            }
+        )
+
+    _edit_json(thermals, add_third_thermal)
+    _train_one_iteration(case)
+    original = _REPO_ROOT / "examples" / "1dtoy" / "system" / "thermals.json"
+    shutil.copy(original, thermals)
+    _select_simulation_only(case)
 
 
 ROWS = [
@@ -270,6 +352,45 @@ ROWS = [
         fragment="field training.stopping_rules: must contain an iteration_limit rule",
         error_class_name="ValidationError",
     ),
+    _row(
+        name="warm_start_policy_from_another_version",
+        base_case="1dtoy",
+        mutate=_warm_start_policy_from_another_version,
+        outcome="PlainRefusal",
+        fragment="policy was written by",
+        error_class_name="PolicyIncompatibleError",
+    ),
+    _row(
+        name="resume_policy_from_another_version",
+        base_case="1dtoy",
+        mutate=_resume_policy_from_another_version,
+        outcome="PlainRefusal",
+        fragment="policy was written by",
+        error_class_name="PolicyIncompatibleError",
+    ),
+    _row(
+        name="simulation_only_policy_from_another_version",
+        base_case="1dtoy",
+        mutate=_simulation_only_policy_from_another_version,
+        outcome="PlainRefusal",
+        fragment="policy was written by",
+        error_class_name="PolicyIncompatibleError",
+    ),
+    _row(
+        name="warm_start_without_a_policy_directory",
+        base_case="1dtoy",
+        mutate=_warm_start_without_a_policy_directory,
+        outcome="PlainRefusal",
+        fragment="Policy directory not found",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="simulation_only_policy_with_unused_stored_bases",
+        base_case="1dtoy",
+        mutate=_simulation_only_policy_with_unused_stored_bases,
+        outcome="Warning",
+        fragment="stored bases not used",
+    ),
 ]
 
 
@@ -351,10 +472,12 @@ def test_validate_and_run_report_identically(
     shutil.copytree(_REPO_ROOT / "examples" / base_case, case)
     mutate(case)
 
-    validate_result = cobre.io.validate(str(case))
+    out = case / "output"
+
+    validate_result = cobre.io.validate(str(case), output_dir=str(out))
     run_error: BaseException | None
     try:
-        cobre.run.run(str(case), output_dir=str(tmp_path / "out"))
+        cobre.run.run(str(case), output_dir=str(out))
         run_error = None
     except Exception as exc:
         run_error = exc

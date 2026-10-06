@@ -536,3 +536,122 @@ def test_validate_accepts_non_boundary_resolved_scalar_parameter() -> None:
         assert result["errors"] == []
     finally:
         shutil.rmtree(case_dir.parent, ignore_errors=True)
+
+
+# ── output_dir: the directory a configured policy is read from ────────────────
+
+WARM_START = {"policy.mode": "warm_start"}
+
+
+def _train_one_iteration(case: pathlib.Path, out: pathlib.Path) -> None:
+    """Train `case` for one iteration into `out`, leaving a policy in `out/policy`."""
+    import cobre.run  # noqa: PLC0415
+
+    cobre.run.run(
+        str(case),
+        output_dir=str(out),
+        config_overrides={
+            "training.stopping_rules": [{"type": "iteration_limit", "limit": 1}],
+            "simulation.enabled": False,
+        },
+    )
+
+
+def _restamp_policy_version(policy_dir: pathlib.Path) -> None:
+    """Rewrite the cobre version in `policy_dir/manifest.bin` to another string of
+    the same byte length, so the FlatBuffers layout is unchanged."""
+    import cobre  # noqa: PLC0415
+
+    manifest = policy_dir / "manifest.bin"
+    data = manifest.read_bytes()
+    running = cobre.__version__.encode()
+    assert data.count(running) == 1, "the running version occurs once in the manifest"
+    other = (b"8" if running.startswith(b"9") else b"9") + running[1:]
+    manifest.write_bytes(data.replace(running, other))
+
+
+def _case_with_restamped_policy(
+    tmp_path: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path]:
+    """A copy of 1dtoy and a sibling output directory holding its restamped policy."""
+    case = tmp_path / "case"
+    shutil.copytree(VALID_CASE_1DTOY, case)
+    out = tmp_path / "out"
+    _train_one_iteration(case, out)
+    _restamp_policy_version(out / "policy")
+    return case, out
+
+
+def test_validate_output_dir_checks_the_policy_run_loads_from_that_directory(
+    tmp_path: pathlib.Path,
+) -> None:
+    """validate(output_dir=out) refuses the warm-start policy in `out` that
+    run(output_dir=out) refuses, with the same message."""
+    import cobre.errors  # noqa: PLC0415
+    import cobre.io  # noqa: PLC0415
+    import cobre.run  # noqa: PLC0415
+
+    case, out = _case_with_restamped_policy(tmp_path)
+
+    result = cobre.io.validate(str(case), WARM_START, output_dir=str(out))
+
+    assert result["valid"] is False, result
+    assert [e["kind"] for e in result["errors"]] == ["WarmStartIncompatible"]
+    message = result["errors"][0]["message"]
+    assert "policy was written by" in message, message
+    with pytest.raises(cobre.errors.PolicyIncompatibleError) as exc_info:
+        cobre.run.run(str(case), output_dir=str(out), config_overrides=WARM_START)
+    reported = message[message.index("policy was written by") :]
+    assert reported in str(exc_info.value), (reported, str(exc_info.value))
+
+
+def test_validate_without_output_dir_reads_the_case_output_subdirectory(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Without output_dir, validate reads `<case>/output`, where the policy
+    trained into a sibling directory is absent."""
+    import cobre.io  # noqa: PLC0415
+
+    case, _ = _case_with_restamped_policy(tmp_path)
+
+    result = cobre.io.validate(str(case), WARM_START)
+
+    assert result["valid"] is False, result
+    message = result["errors"][0]["message"]
+    assert "Policy directory not found" in message, message
+    assert str(case / "output") in message, message
+
+
+def test_validate_output_dir_is_never_created(tmp_path: pathlib.Path) -> None:
+    """validate leaves an absent output_dir absent."""
+    import cobre.io  # noqa: PLC0415
+
+    absent = tmp_path / "absent"
+
+    result = cobre.io.validate(VALID_CASE_1DTOY, WARM_START, output_dir=str(absent))
+
+    assert result["valid"] is False, result
+    assert not absent.exists()
+
+
+def test_validate_relative_output_dir_resolves_against_the_working_directory(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative output_dir is read from the process working directory."""
+    import cobre.io  # noqa: PLC0415
+
+    case, _ = _case_with_restamped_policy(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = cobre.io.validate(str(case), WARM_START, output_dir="out")
+
+    assert result["valid"] is False, result
+    assert "policy was written by" in result["errors"][0]["message"], result
+
+
+def test_validate_output_dir_is_keyword_only() -> None:
+    """output_dir cannot be passed positionally."""
+    import cobre.io  # noqa: PLC0415
+
+    with pytest.raises(TypeError):
+        cobre.io.validate(VALID_CASE_1DTOY, None, "out")  # type: ignore[call-arg]

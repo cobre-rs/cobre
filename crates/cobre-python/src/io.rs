@@ -32,12 +32,13 @@ use cobre_io::LoadError;
 use cobre_io::ReportEntry;
 use cobre_io::parse_config;
 use cobre_io::validate_case_with_artifacts;
-use cobre_sddp::validate_phases::{self, ValidateRequest, validate_study};
+use cobre_sddp::validate_phases::{self, PolicyLoadFailure, ValidateRequest, validate_study};
 
 use crate::convert::pydict_to_json_map;
 use crate::errors::ErrorSource::Load;
 use crate::errors::convert_error;
 use crate::model::PySystem;
+use crate::study::resolve_output_dir;
 
 // ── Error conversion ──────────────────────────────────────────────────────────
 
@@ -63,8 +64,7 @@ fn convert_load_error(err: &LoadError) -> PyErr {
     convert_error(Load(err))
 }
 
-/// Converts `ReportEntry` warnings to the `{"kind", "message", "file", "entity"}` dict shape shared by [`validate`] and `Study::validate`.
-pub(crate) fn build_warnings_list<'py>(
+fn build_warnings_list<'py>(
     py: Python<'py>,
     warnings: &[ReportEntry],
 ) -> PyResult<Bound<'py, PyList>> {
@@ -133,12 +133,17 @@ pub fn load_case(py: Python<'_>, path: PathBuf) -> PyResult<PySystem> {
 /// Executes the full validation pipeline (case structure, schema, configuration,
 /// stochastic preparation, hydro models, generic constraints, study construction,
 /// the configured warm-start, resume or simulation-only policy read from
-/// `<path>/output/`, and boundary reconciliation when configured),
-/// short-circuiting on the first failure.
+/// `<output_dir>/<policy.path>`, and boundary reconciliation when configured),
+/// short-circuiting on the first failure. Nothing is written, and an absent
+/// `output_dir` is not created.
 ///
 /// # Arguments
 ///
 /// * `path` — path to the case directory, as a `str` or `pathlib.Path`.
+/// * `output_dir` — keyword-only; the directory the configured policy is read
+///   from, as `cobre.run.run`'s `output_dir` names it. Defaults to
+///   `<path>/output`. A relative path resolves from the process working
+///   directory.
 ///
 /// # Returns
 ///
@@ -161,18 +166,43 @@ pub fn load_case(py: Python<'_>, path: PathBuf) -> PyResult<PySystem> {
 /// ```
 #[allow(clippy::needless_pass_by_value)]
 #[pyfunction]
-#[pyo3(signature = (path, config_overrides=None))]
+#[pyo3(signature = (path, config_overrides=None, *, output_dir=None))]
 pub fn validate(
     py: Python<'_>,
     path: PathBuf,
     config_overrides: Option<Bound<'_, PyDict>>,
+    output_dir: Option<PathBuf>,
 ) -> PyResult<Py<PyAny>> {
     let overrides = config_overrides
         .map(|d| pydict_to_json_map(&d))
         .transpose()?;
+    let output_dir = resolve_output_dir(&path, output_dir);
 
-    let outcome = py.detach(|| run_validate_pipeline(&path, overrides.as_ref()));
+    let outcome = py.detach(|| run_validate_pipeline(&path, overrides.as_ref(), &output_dir));
 
+    Ok(build_validation_report(py, outcome)?.into())
+}
+
+/// A refusal rendered as one `{"kind", "message"}` error entry.
+pub(crate) struct ValidateFailure {
+    kind: String,
+    message: String,
+}
+
+impl From<PolicyLoadFailure> for ValidateFailure {
+    fn from(failure: PolicyLoadFailure) -> Self {
+        Self {
+            kind: failure.kind(),
+            message: failure.report(),
+        }
+    }
+}
+
+/// Renders a validation outcome as the `{"valid", "errors", "warnings"}` dict shared by [`validate`] and `Study::validate`.
+pub(crate) fn build_validation_report(
+    py: Python<'_>,
+    outcome: Result<Vec<ReportEntry>, ValidateFailure>,
+) -> PyResult<Bound<'_, PyDict>> {
     let dict = PyDict::new(py);
     match outcome {
         Ok(warnings) => {
@@ -190,19 +220,14 @@ pub fn validate(
             dict.set_item("warnings", PyList::empty(py))?;
         }
     }
-
-    Ok(dict.into())
-}
-
-struct ValidateFailure {
-    kind: String,
-    message: String,
+    Ok(dict)
 }
 
 /// GIL-free validation pipeline, short-circuiting on the first failure.
 fn run_validate_pipeline(
     path: &std::path::Path,
     overrides: Option<&serde_json::Map<String, serde_json::Value>>,
+    output_dir: &std::path::Path,
 ) -> Result<Vec<ReportEntry>, ValidateFailure> {
     if !path.exists() {
         return Err(ValidateFailure {
@@ -228,7 +253,7 @@ fn run_validate_pipeline(
         config: &config,
         system: loaded.system,
         artifacts: loaded.artifacts,
-        output_dir: &path.join("output"),
+        output_dir,
     })
     .map_err(|failure| match failure {
         validate_phases::ValidateFailure::ScenarioSource(err) => ValidateFailure {
@@ -239,10 +264,7 @@ fn run_validate_pipeline(
             kind: failure.kind().to_owned(),
             message: failure.report(),
         },
-        validate_phases::ValidateFailure::PolicyLoad(failure) => ValidateFailure {
-            kind: failure.kind(),
-            message: failure.report(),
-        },
+        validate_phases::ValidateFailure::PolicyLoad(failure) => failure.into(),
     })?;
 
     let mut warnings = report.warnings;

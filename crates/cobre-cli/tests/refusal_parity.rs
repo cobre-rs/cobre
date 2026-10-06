@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod common;
-use common::{case_dir, cobre, copy_dir_recursive};
+use common::{case_dir, cobre, copy_dir_recursive, restamp_policy_version};
 
 enum Outcome {
     BracketedRefusal { kind: &'static str },
@@ -165,6 +165,41 @@ const ROWS: &[ParityRow] = &[
         },
         fragment: "field training.stopping_rules: must contain an iteration_limit rule",
     },
+    ParityRow {
+        name: "warm_start_policy_from_another_version",
+        base_case: "1dtoy",
+        mutate: warm_start_policy_from_another_version,
+        outcome: Outcome::PlainRefusal,
+        fragment: "policy was written by",
+    },
+    ParityRow {
+        name: "resume_policy_from_another_version",
+        base_case: "1dtoy",
+        mutate: resume_policy_from_another_version,
+        outcome: Outcome::PlainRefusal,
+        fragment: "policy was written by",
+    },
+    ParityRow {
+        name: "simulation_only_policy_from_another_version",
+        base_case: "1dtoy",
+        mutate: simulation_only_policy_from_another_version,
+        outcome: Outcome::PlainRefusal,
+        fragment: "policy was written by",
+    },
+    ParityRow {
+        name: "warm_start_without_a_policy_directory",
+        base_case: "1dtoy",
+        mutate: warm_start_without_a_policy_directory,
+        outcome: Outcome::PlainRefusal,
+        fragment: "Policy directory not found",
+    },
+    ParityRow {
+        name: "simulation_only_policy_with_unused_stored_bases",
+        base_case: "1dtoy",
+        mutate: simulation_only_policy_with_unused_stored_bases,
+        outcome: Outcome::Warning,
+        fragment: "stored bases not used",
+    },
 ];
 
 fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) {
@@ -291,6 +326,77 @@ fn empty_stopping_rules(case: &Path) {
     });
 }
 
+fn train_one_iteration(case: &Path) {
+    edit_json(&case.join("config.json"), |config| {
+        config["training"]["stopping_rules"] = json!([{"type": "iteration_limit", "limit": 1}]);
+        config["simulation"]["enabled"] = json!(false);
+    });
+    let trained = cobre()
+        .arg("run")
+        .arg(case)
+        .arg("--quiet")
+        .output()
+        .unwrap();
+    assert!(
+        trained.status.success(),
+        "training the policy failed: {}",
+        String::from_utf8_lossy(&trained.stderr)
+    );
+}
+
+fn set_policy_mode(case: &Path, mode: &str) {
+    edit_json(&case.join("config.json"), |config| {
+        config["policy"]["mode"] = json!(mode);
+    });
+}
+
+fn select_simulation_only(case: &Path) {
+    edit_json(&case.join("config.json"), |config| {
+        config["training"]["enabled"] = json!(false);
+        config["simulation"]["enabled"] = json!(true);
+        config["simulation"]["selection"] = json!({"method": "sampled", "num_scenarios": 1});
+    });
+}
+
+fn warm_start_policy_from_another_version(case: &Path) {
+    train_one_iteration(case);
+    restamp_policy_version(&case.join("output/policy"), "0.0.1");
+    set_policy_mode(case, "warm_start");
+}
+
+fn resume_policy_from_another_version(case: &Path) {
+    train_one_iteration(case);
+    restamp_policy_version(&case.join("output/policy"), "0.0.1");
+    set_policy_mode(case, "resume");
+}
+
+fn simulation_only_policy_from_another_version(case: &Path) {
+    train_one_iteration(case);
+    restamp_policy_version(&case.join("output/policy"), "0.0.1");
+    select_simulation_only(case);
+}
+
+fn warm_start_without_a_policy_directory(case: &Path) {
+    set_policy_mode(case, "warm_start");
+}
+
+fn simulation_only_policy_with_unused_stored_bases(case: &Path) {
+    let thermals = case.join("system/thermals.json");
+    edit_json(&thermals, |thermals| {
+        thermals["thermals"].as_array_mut().unwrap().push(json!({
+            "id": 2,
+            "name": "UTE3",
+            "operational_start_date": "2020-01-01",
+            "bus_id": 0,
+            "generation": {"min_mw": 0.0, "max_mw": 15.0},
+            "cost_per_mwh": 20.0
+        }));
+    });
+    train_one_iteration(case);
+    fs::copy(case_dir("1dtoy").join("system/thermals.json"), thermals).unwrap();
+    select_simulation_only(case);
+}
+
 struct Observed<'a> {
     code: Option<i32>,
     text: &'a str,
@@ -364,7 +470,6 @@ fn mutated_case(row: &ParityRow) -> TempDir {
 }
 
 fn cli_violations(row: &ParityRow, validate_case: &Path, run_case: &Path) -> Vec<String> {
-    let output_dir = TempDir::new().unwrap();
     let validate = cobre()
         .arg("validate")
         .arg(validate_case)
@@ -373,8 +478,6 @@ fn cli_violations(row: &ParityRow, validate_case: &Path, run_case: &Path) -> Vec
     let run = cobre()
         .arg("run")
         .arg(run_case)
-        .arg("--output")
-        .arg(output_dir.path())
         .output()
         .unwrap_or_else(|e| panic!("{}: cobre run failed to spawn: {e}", row.name));
     let validate_text = String::from_utf8_lossy(&validate.stdout);

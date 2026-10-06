@@ -3,8 +3,9 @@
 These tests verify that a case directory can be loaded once into a live,
 reusable Study (front half of the solve lifecycle: load -> stochastic
 preprocessing -> hydro models -> StudySetup construction -> sidecar writes),
-that the captured validation warnings can be replayed without a reload, and
-that a missing case directory is rejected before any work runs.
+that `validate` reports the captured warnings and checks the configured policy
+load without a reload, and that a missing case directory is rejected before any
+work runs.
 
 Run with (from the repo root):
     pytest crates/cobre-python/tests/test_study.py
@@ -593,3 +594,108 @@ def test_study_summary_properties_match_run_result(tmp_path: pathlib.Path) -> No
     assert study.provenance == study.provenance, (
         "repeated access to Study.provenance must return equal dicts"
     )
+
+
+_ONE_ITERATION_NO_SIMULATION = {
+    "training.stopping_rules": [{"type": "iteration_limit", "limit": 1}],
+    "simulation.enabled": False,
+}
+_WARM_START = {"policy.mode": "warm_start"}
+_SIMULATION_ONLY = {
+    "training.enabled": False,
+    "simulation.enabled": True,
+    "simulation.selection": {"method": "sampled", "num_scenarios": 1},
+}
+
+
+def _restamp_policy_version(policy_dir: pathlib.Path) -> None:
+    """Rewrite the cobre version in `policy_dir/manifest.bin` to another string of
+    the same byte length, so the FlatBuffers layout is unchanged."""
+    import cobre  # noqa: PLC0415
+
+    manifest = policy_dir / "manifest.bin"
+    data = manifest.read_bytes()
+    running = cobre.__version__.encode()
+    assert data.count(running) == 1, "the running version occurs once in the manifest"
+    other = (b"8" if running.startswith(b"9") else b"9") + running[1:]
+    manifest.write_bytes(data.replace(running, other))
+
+
+def _copy_case_with_extra_thermal(dest: pathlib.Path) -> None:
+    """Copy 1dtoy into `dest` with a third thermal on the same bus, costlier than
+    the others: more LP columns, identical state."""
+    shutil.copytree(VALID_CASE, dest)
+    thermals_path = dest / "system" / "thermals.json"
+    thermals = json.loads(thermals_path.read_text())
+    existing = thermals["thermals"]
+    existing.append(
+        {
+            "id": max(t["id"] for t in existing) + 1,
+            "name": "UTE_EXTRA",
+            "operational_start_date": "2020-01-01",
+            "bus_id": existing[0]["bus_id"],
+            "generation": {"min_mw": 0.0, "max_mw": 15.0},
+            "cost_per_mwh": max(t["cost_per_mwh"] for t in existing) + 10.0,
+        }
+    )
+    thermals_path.write_text(json.dumps(thermals))
+
+
+def test_study_validate_refuses_a_policy_that_train_refuses(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A warm-start Study whose policy `train()` refuses validates as invalid,
+    with the errors `cobre.io.validate` reports for the same output directory."""
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+    import cobre.io  # noqa: PLC0415
+    import cobre.run  # noqa: PLC0415
+
+    out = tmp_path / "out"
+    cobre.run.run(
+        VALID_CASE, output_dir=str(out), config_overrides=_ONE_ITERATION_NO_SIMULATION
+    )
+    _restamp_policy_version(out / "policy")
+    study = cobre.Study(VALID_CASE, output_dir=str(out), config_overrides=_WARM_START)
+    from_validate = cobre.io.validate(VALID_CASE, _WARM_START, output_dir=str(out))
+
+    report = study.validate()
+
+    assert report["valid"] is False, report
+    assert report["warnings"] == []
+    assert report["errors"] == from_validate["errors"]
+    message = report["errors"][0]["message"]
+    with pytest.raises(cobre.errors.PolicyIncompatibleError) as exc_info:
+        study.train()
+    reported = message[message.index("policy was written by") :]
+    assert reported in str(exc_info.value), (reported, str(exc_info.value))
+
+
+def test_study_validate_reports_unused_stored_bases_as_a_warning(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A simulation-only Study over a policy trained with an extra thermal is
+    valid and warns about the stored bases that no longer fit, with the warnings
+    `cobre.io.validate` reports for the same output directory."""
+    import cobre  # noqa: PLC0415
+    import cobre.io  # noqa: PLC0415
+    import cobre.run  # noqa: PLC0415
+
+    variant = tmp_path / "variant"
+    _copy_case_with_extra_thermal(variant)
+    out = tmp_path / "out"
+    cobre.run.run(
+        str(variant), output_dir=str(out), config_overrides=_ONE_ITERATION_NO_SIMULATION
+    )
+    study = cobre.Study(
+        VALID_CASE, output_dir=str(out), config_overrides=_SIMULATION_ONLY
+    )
+    from_validate = cobre.io.validate(VALID_CASE, _SIMULATION_ONLY, output_dir=str(out))
+
+    report = study.validate()
+
+    assert report["valid"] is True, report
+    assert report["errors"] == []
+    messages = [w["message"] for w in report["warnings"]]
+    assert sum("stored bases not used: " in m for m in messages) == 1, messages
+    assert report["warnings"] == from_validate["warnings"]

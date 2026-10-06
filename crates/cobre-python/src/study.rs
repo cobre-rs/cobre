@@ -4,27 +4,29 @@
 //! `Study.__new__` runs the front half of the solve lifecycle via
 //! [`crate::run::build_study_setup`], storing the live [`StudySetup`] and
 //! adjacent immutable state so later `train`/`simulate` methods need no reload.
-//! [`Study::validate`] replays the validation warnings captured during
-//! construction without re-reading disk.
+//! [`Study::validate`] reports the warnings captured during construction and
+//! checks the configured policy load against the live setup, without
+//! re-reading the case.
 //!
 //! ## Single-process only
 //!
 //! Like [`crate::run`], this module uses [`cobre_comm::LocalBackend`] exclusively
 //! and never initializes MPI.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use pyo3::exceptions::{PyIndexError, PyOSError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::PyDict;
 
 use cobre_io::remove_conditional_training_outputs;
 use cobre_io::remove_success_marker;
 use cobre_sddp::policy::full_fcf_load::{
     FullFcfLoadError, FullFcfLoadKind, check_full_fcf_load, locate_policy_dir,
 };
+use cobre_sddp::validate_phases::check_configured_policy_load;
 use cobre_sddp::{
     FutureCostFunction, HydroModelSummary, ModelProvenanceReport, StochasticSummary, StudySetup,
     TrainingResult,
@@ -32,7 +34,7 @@ use cobre_sddp::{
 
 use crate::convert::pydict_to_json_map;
 use crate::errors::{ErrorSource, OUTPUT_WRITE_ERROR_PREFIX, convert_error};
-use crate::io::build_warnings_list;
+use crate::io::{ValidateFailure, build_validation_report};
 use crate::model::PySystem;
 use crate::run::{
     LoadedStudy, PhaseError, RunError, SimSummary, TrainingPhaseResult, apply_training_policy_mode,
@@ -58,12 +60,19 @@ fn phase_error_to_pyerr(err: PhaseError) -> PyErr {
     }
 }
 
+/// The directory a run or validation reads and writes: `output_dir` as given, or
+/// `<case_dir>/output` when absent.
+pub(crate) fn resolve_output_dir(case_dir: &Path, output_dir: Option<PathBuf>) -> PathBuf {
+    output_dir.unwrap_or_else(|| case_dir.join("output"))
+}
+
 /// A loaded study: the live [`StudySetup`] plus the immutable state produced by
 /// the front half of the solve lifecycle.
 ///
 /// Constructed once via [`Study::__new__`] (which runs
 /// [`crate::run::build_study_setup`]); `train`/`simulate` reuse the stored
-/// state, and [`Study::validate`] replays the captured warnings.
+/// state, and [`Study::validate`] reports the captured warnings and the policy
+/// load check.
 /// The `output_dir` from construction is the default write target for
 /// [`Study::train`]; [`Study::simulate`] and [`Study::load_policy`] each accept
 /// a per-call `output_dir` override.
@@ -86,7 +95,7 @@ pub struct Study {
     stochastic_summary: StochasticSummary,
     /// The structural hydro-model summary.
     hydro_models_summary: HydroModelSummary,
-    /// Validation-pipeline warnings captured during the case load, replayed by
+    /// Validation-pipeline warnings captured during the case load, reported by
     /// [`Study::validate`].
     warnings: Vec<cobre_io::ReportEntry>,
     /// Wall-clock setup-phase timings captured during construction.
@@ -287,7 +296,7 @@ impl Study {
         threads: Option<u32>,
         overrides: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> Result<Self, PhaseError> {
-        let resolved_output = output_dir.unwrap_or_else(|| case_dir.join("output"));
+        let resolved_output = resolve_output_dir(case_dir, output_dir);
 
         let LoadedStudy {
             setup,
@@ -569,16 +578,30 @@ impl Study {
     /// `cobre.io.validate`: keys `"valid"` (bool), `"errors"` (`list[dict]`),
     /// `"warnings"` (`list[dict]`).
     ///
-    /// `__new__` raises on any construction-time validation failure, so this
-    /// method reports the warnings captured then without re-reading disk. Always
-    /// returns `{"valid": True, "errors": [], "warnings": [...]}`.
+    /// `__new__` raises on any construction-time validation failure. This method
+    /// reports the warnings captured then, and checks the configured warm-start,
+    /// resume or simulation-only policy against this study's output directory
+    /// without re-reading the case, so it returns `valid: False` for a policy
+    /// that `cobre.run.run` would refuse, with the error `cobre.io.validate`
+    /// reports for the same output directory.
     fn validate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let dict = PyDict::new(py);
-        dict.set_item("valid", true)?;
-        dict.set_item("errors", PyList::empty(py))?;
-        dict.set_item("warnings", build_warnings_list(py, &self.warnings)?)?;
+        let outcome = py
+            .detach(|| {
+                check_configured_policy_load(
+                    &self.system,
+                    &self.setup,
+                    &self.config,
+                    &self.output_dir,
+                )
+            })
+            .map(|report| {
+                let mut warnings = self.warnings.clone();
+                warnings.extend(report.into_iter().flat_map(|r| r.warnings));
+                warnings
+            })
+            .map_err(ValidateFailure::from);
 
-        Ok(dict)
+        build_validation_report(py, outcome)
     }
 
     /// Train an SDDP policy against this study's in-memory [`StudySetup`],

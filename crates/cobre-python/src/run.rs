@@ -41,6 +41,7 @@ use crate::errors::{
     SIMULATION_ERROR_PREFIX, SIMULATION_WRITER_INIT_ERROR_PREFIX,
     STOCHASTIC_PREPROCESSING_ERROR_PREFIX, TRAINING_ERROR_PREFIX, convert_error,
 };
+use crate::study::resolve_output_dir;
 use cobre_io::LoadError;
 
 use cobre_comm::LocalBackend;
@@ -1443,7 +1444,7 @@ pub fn run(
 
     let threads = validated_threads(threads)?;
 
-    let resolved_output = output_dir.unwrap_or_else(|| case_dir.join("output"));
+    let resolved_output = resolve_output_dir(&case_dir, output_dir);
 
     let overrides = config_overrides
         .map(|dict| pydict_to_json_map(&dict))

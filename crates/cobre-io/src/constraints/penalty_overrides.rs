@@ -155,8 +155,10 @@ pub struct LinePenaltyOverrideRow {
 /// A single row from `constraints/penalty_overrides_hydro.parquet`.
 ///
 /// Carries stage-varying penalty cost overrides for a hydro plant. All sixteen
-/// penalty columns are optional; absent or null means "use entity-level or
-/// global default".
+/// penalty columns are optional. An absent or null directional evaporation or
+/// withdrawal column takes the row's symmetric cost when the row sets it (see
+/// [`resolve_penalties`](crate::resolution::resolve_penalties)); any other absent or
+/// null column means "use entity-level or global default".
 ///
 /// # Examples
 ///

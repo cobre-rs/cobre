@@ -550,6 +550,25 @@ productivity contract published in
   **Trigger.** The next `cobre-docs` methodology-page revision cycle that
   covers hydro productivity.
 
+### Duplicate penalty override rows merge in file order
+
+**What it is.** No validator rejects two rows with the same
+`(entity_id, stage_id)` in a `constraints/penalty_overrides_*.parquet` file;
+the module doc of `crates/cobre-io/src/constraints/penalty_overrides.rs` lists
+that check as deferred. The parsers sort rows stably by that key, and
+`resolve_penalties` (`crates/cobre-io/src/resolution/penalties.rs`) applies
+them in that order, so for a field two such rows both set, the row later in the
+file wins. A hydro row's symmetric evaporation or withdrawal cost also sets each
+matching directional cost the row leaves unset, so a later row's symmetric
+cost replaces an earlier row's directional cost. Reordering duplicate rows can
+therefore change the resolved costs.
+
+**Owner.** The input-validation owner, for a uniqueness rule on the override
+key like the one the bound-override files have.
+
+**Trigger.** A case is found with duplicate penalty override rows, or the
+validation rule table next gains an input-uniqueness rule.
+
 ## Deferred-debt register — whole-lifecycle audit findings
 
 Findings of the full `cobre run` lifecycle read, described by behavior. Each

@@ -45,6 +45,10 @@ pub struct PenaltiesOverrides<'a> {
 
 /// Pre-compute the full penalty table by applying the three-tier cascade.
 ///
+/// Each field a stage override row sets replaces that cell's entity-level value. A
+/// hydro row's `evaporation_violation_cost` or `water_withdrawal_violation_cost` also
+/// sets the cell's two matching directional costs, except a direction the row sets.
+///
 /// Override rows referencing unknown entity IDs or out-of-range stage IDs are silently
 /// skipped (referential integrity is deferred to validation).
 ///
@@ -328,16 +332,30 @@ pub fn resolve_penalties(
         if let Some(v) = row.water_withdrawal_violation_cost {
             cell.water_withdrawal_violation_cost = v;
         }
-        if let Some(v) = row.water_withdrawal_violation_pos_cost {
+        // Only the directional costs are priced, so a row's symmetric cost fills
+        // each direction the row leaves unset.
+        if let Some(v) = row
+            .water_withdrawal_violation_pos_cost
+            .or(row.water_withdrawal_violation_cost)
+        {
             cell.water_withdrawal_violation_pos_cost = v;
         }
-        if let Some(v) = row.water_withdrawal_violation_neg_cost {
+        if let Some(v) = row
+            .water_withdrawal_violation_neg_cost
+            .or(row.water_withdrawal_violation_cost)
+        {
             cell.water_withdrawal_violation_neg_cost = v;
         }
-        if let Some(v) = row.evaporation_violation_pos_cost {
+        if let Some(v) = row
+            .evaporation_violation_pos_cost
+            .or(row.evaporation_violation_cost)
+        {
             cell.evaporation_violation_pos_cost = v;
         }
-        if let Some(v) = row.evaporation_violation_neg_cost {
+        if let Some(v) = row
+            .evaporation_violation_neg_cost
+            .or(row.evaporation_violation_cost)
+        {
             cell.evaporation_violation_neg_cost = v;
         }
         if let Some(v) = row.inflow_nonnegativity_cost {
@@ -535,6 +553,15 @@ mod tests {
                 inflow_nonnegativity_cost: 1000.0,
             },
         }
+    }
+
+    fn make_hydro_with_directional_costs(id: i32) -> Hydro {
+        let mut hydro = make_hydro_distinct_penalties(id);
+        hydro.penalties.water_withdrawal_violation_pos_cost = 101.0;
+        hydro.penalties.water_withdrawal_violation_neg_cost = 102.0;
+        hydro.penalties.evaporation_violation_pos_cost = 151.0;
+        hydro.penalties.evaporation_violation_neg_cost = 152.0;
+        hydro
     }
 
     fn make_bus(id: i32, excess_cost: f64) -> Bus {
@@ -1023,5 +1050,96 @@ mod tests {
         assert!((cell.generation_violation_below_cost - 200.0).abs() < f64::EPSILON);
         assert!((cell.evaporation_violation_cost - 150.0).abs() < f64::EPSILON);
         assert!((cell.water_withdrawal_violation_cost - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn stage_override_symmetric_evaporation_cost_reaches_both_directions() {
+        let hydros = vec![make_hydro_with_directional_costs(0)];
+        let override_row = HydroPenaltyOverrideRow {
+            evaporation_violation_cost: Some(900.0),
+            ..all_none_hydro_override(0, 1)
+        };
+
+        let result = resolve_penalties(&hydros, &[], &[], &[], 3, &[override_row], &[], &[], &[]);
+
+        let cell = result.hydro_penalties(0, 1);
+        assert!((cell.evaporation_violation_pos_cost - 900.0).abs() < f64::EPSILON);
+        assert!((cell.evaporation_violation_neg_cost - 900.0).abs() < f64::EPSILON);
+        assert!((cell.evaporation_violation_cost - 900.0).abs() < f64::EPSILON);
+        assert!((cell.water_withdrawal_violation_pos_cost - 101.0).abs() < f64::EPSILON);
+        assert!((cell.water_withdrawal_violation_neg_cost - 102.0).abs() < f64::EPSILON);
+        assert!((cell.water_withdrawal_violation_cost - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn stage_override_symmetric_withdrawal_cost_reaches_both_directions() {
+        let hydros = vec![make_hydro_with_directional_costs(0)];
+        let override_row = HydroPenaltyOverrideRow {
+            water_withdrawal_violation_cost: Some(800.0),
+            ..all_none_hydro_override(0, 1)
+        };
+
+        let result = resolve_penalties(&hydros, &[], &[], &[], 3, &[override_row], &[], &[], &[]);
+
+        let cell = result.hydro_penalties(0, 1);
+        assert!((cell.water_withdrawal_violation_pos_cost - 800.0).abs() < f64::EPSILON);
+        assert!((cell.water_withdrawal_violation_neg_cost - 800.0).abs() < f64::EPSILON);
+        assert!((cell.water_withdrawal_violation_cost - 800.0).abs() < f64::EPSILON);
+        assert!((cell.evaporation_violation_pos_cost - 151.0).abs() < f64::EPSILON);
+        assert!((cell.evaporation_violation_neg_cost - 152.0).abs() < f64::EPSILON);
+        assert!((cell.evaporation_violation_cost - 150.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn stage_override_directional_cost_wins_over_its_symmetric_cost() {
+        let hydros = vec![make_hydro_with_directional_costs(0)];
+        let override_row = HydroPenaltyOverrideRow {
+            water_withdrawal_violation_cost: Some(800.0),
+            water_withdrawal_violation_pos_cost: Some(850.0),
+            evaporation_violation_cost: Some(900.0),
+            evaporation_violation_neg_cost: Some(950.0),
+            ..all_none_hydro_override(0, 1)
+        };
+
+        let result = resolve_penalties(&hydros, &[], &[], &[], 3, &[override_row], &[], &[], &[]);
+
+        let cell = result.hydro_penalties(0, 1);
+        assert!((cell.water_withdrawal_violation_pos_cost - 850.0).abs() < f64::EPSILON);
+        assert!((cell.water_withdrawal_violation_neg_cost - 800.0).abs() < f64::EPSILON);
+        assert!((cell.evaporation_violation_pos_cost - 900.0).abs() < f64::EPSILON);
+        assert!((cell.evaporation_violation_neg_cost - 950.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn stage_without_override_keeps_the_plant_resolved_costs() {
+        let hydros = vec![
+            make_hydro_with_directional_costs(0),
+            make_hydro_with_directional_costs(1),
+        ];
+        let overrides = [
+            HydroPenaltyOverrideRow {
+                evaporation_violation_cost: Some(900.0),
+                water_withdrawal_violation_cost: Some(800.0),
+                ..all_none_hydro_override(0, 1)
+            },
+            HydroPenaltyOverrideRow {
+                spillage_cost: Some(0.05),
+                ..all_none_hydro_override(1, 1)
+            },
+        ];
+
+        let result = resolve_penalties(&hydros, &[], &[], &[], 3, &overrides, &[], &[], &[]);
+
+        assert_eq!(result.hydro_penalties(0, 0), hydros[0].penalties);
+        assert_eq!(result.hydro_penalties(0, 2), hydros[0].penalties);
+        assert_eq!(result.hydro_penalties(1, 0), hydros[1].penalties);
+        assert_eq!(result.hydro_penalties(1, 2), hydros[1].penalties);
+        assert_eq!(
+            result.hydro_penalties(1, 1),
+            HydroPenalties {
+                spillage_cost: 0.05,
+                ..hydros[1].penalties
+            }
+        );
     }
 }

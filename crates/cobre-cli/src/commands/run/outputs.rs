@@ -9,6 +9,10 @@ use console::Term;
 
 use cobre_core::System;
 use cobre_io::Config;
+use cobre_io::EVAPORATION_MODELS_FILE;
+use cobre_io::FPHA_DEVIATION_POINTS_FILE;
+use cobre_io::FPHA_HYPERPLANES_FILE;
+use cobre_io::GENERIC_CONSTRAINT_ECHO_FILE;
 use cobre_io::OutputContext;
 use cobre_io::SimulationOutput;
 use cobre_io::SolverStatsRow;
@@ -86,10 +90,7 @@ pub(super) fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(),
     .map_err(CliError::from)?;
 
     if !args.setup.hydro_models.fpha_export_rows.is_empty() {
-        let fpha_path = args
-            .output_dir
-            .join("hydro_models")
-            .join("fpha_hyperplanes.parquet");
+        let fpha_path = args.output_dir.join(FPHA_HYPERPLANES_FILE);
         write_fpha_hyperplanes(&fpha_path, &args.setup.hydro_models.fpha_export_rows)
             .map_err(CliError::from)?;
     }
@@ -97,20 +98,14 @@ pub(super) fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(),
     // No evaporation-modeled hydro writes no file (FPHA "if-any" behavior).
     let evaporation_rows = build_evaporation_model_rows(&args.setup.hydro_models, args.system);
     if !evaporation_rows.is_empty() {
-        let evaporation_path = args
-            .output_dir
-            .join("hydro_models")
-            .join("evaporation_models.parquet");
+        let evaporation_path = args.output_dir.join(EVAPORATION_MODELS_FILE);
         write_evaporation_models(&evaporation_path, &evaporation_rows).map_err(CliError::from)?;
     }
 
     // Off by default, so a default run writes no file and stays byte-identical.
     let deviation_point_rows = args.setup.hydro_models.fpha_deviation_point_rows.as_slice();
     if args.config.exports.fpha_deviation_points && !deviation_point_rows.is_empty() {
-        let deviation_points_path = args
-            .output_dir
-            .join("hydro_models")
-            .join("fpha_deviation_points.parquet");
+        let deviation_points_path = args.output_dir.join(FPHA_DEVIATION_POINTS_FILE);
         write_fpha_deviation_points(&deviation_points_path, deviation_point_rows)
             .map_err(CliError::from)?;
     }
@@ -120,10 +115,7 @@ pub(super) fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(),
     // checker's `cobre_io::write_*` match sees it.
     if !args.system.generic_constraints().is_empty() {
         let rows = build_generic_constraint_echo_rows(args.setup, args.system);
-        let echo_path = args
-            .output_dir
-            .join("generic_constraints")
-            .join("resolved_echo.parquet");
+        let echo_path = args.output_dir.join(GENERIC_CONSTRAINT_ECHO_FILE);
         cobre_io::write_generic_constraint_echo(&echo_path, &rows).map_err(CliError::from)?;
     }
 

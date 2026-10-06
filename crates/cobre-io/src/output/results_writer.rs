@@ -212,10 +212,10 @@ const SUCCESS_MARKER_FILE: &str = "_SUCCESS";
 
 /// Write the empty `_SUCCESS` marker into a phase directory.
 ///
-/// The marker means every file of the phase was written, so each phase-writer
-/// calls this as its last write. `phase_dir` is not created: a marker in a
-/// directory the phase never wrote to would be false. A simulation scenario
-/// whose partition could not be written is counted in `scenarios.failed` in
+/// The marker means its phase finished writing, so each phase-writer calls this
+/// as its last write. `phase_dir` is not created: a marker in a directory the
+/// phase never wrote to would be false. A simulation scenario whose partition
+/// could not be written is counted in `scenarios.failed` in
 /// `simulation/metadata.json` and does not withhold the marker.
 ///
 /// # Errors

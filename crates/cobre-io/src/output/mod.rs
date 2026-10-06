@@ -37,8 +37,11 @@ pub mod training_writer;
 pub use dictionary::write_dictionaries;
 pub use error::OutputError;
 pub use fixed_delivery::{FixedDeliveryRow, write_fixed_delivery};
-pub use generic_constraints_echo::{GenericConstraintEchoRow, write_generic_constraint_echo};
+pub use generic_constraints_echo::{
+    GENERIC_CONSTRAINT_ECHO_FILE, GenericConstraintEchoRow, write_generic_constraint_echo,
+};
 pub use hydro_models::{
+    EVAPORATION_MODELS_FILE, FPHA_DEVIATION_POINTS_FILE, FPHA_HYPERPLANES_FILE,
     write_evaporation_models, write_fpha_deviation_points, write_fpha_hyperplanes,
     write_hydro_model_summary,
 };
@@ -66,7 +69,9 @@ pub use stochastic::{
     write_fitting_report, write_inflow_annual_component, write_inflow_ar_coefficients,
     write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings,
 };
-pub use training_writer::{TrainingParquetWriter, write_row_selection_records};
+pub use training_writer::{
+    TrainingParquetWriter, remove_conditional_training_outputs, write_row_selection_records,
+};
 
 /// Arrow `Date32`'s native representation (days since the Unix epoch,
 /// 1970-01-01) for one calendar date.

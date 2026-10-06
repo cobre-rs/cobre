@@ -18,9 +18,20 @@ use arrow::array::{
 };
 
 use super::{IterationRecord, TrainingOutput, WorkerTimingRecord};
-use crate::output::atomic::write_parquet_atomic;
+use crate::output::atomic::{write_batch_atomic, write_parquet_atomic};
 use crate::output::error::OutputError;
+use crate::output::fixed_delivery::FIXED_DELIVERIES_FILE;
+use crate::output::generic_constraints_echo::GENERIC_CONSTRAINT_ECHO_FILE;
+use crate::output::hydro_models::{
+    EVAPORATION_MODELS_FILE, FPHA_DEVIATION_POINTS_FILE, FPHA_HYPERPLANES_FILE,
+};
 use crate::output::schemas::{convergence_schema, iteration_timing_schema};
+use crate::output::simulation_writer::{remove_dir_if_empty, remove_file_if_present};
+use crate::output::solver_stats_writer::{
+    SOLVER_ITERATIONS_FILE, SOLVER_RETRY_HISTOGRAM_FILE, TRAINING_SOLVER_DIR,
+};
+
+const CUT_SELECTION_FILE: &str = "training/cut_selection/iterations.parquet";
 
 /// Writes training output to `training/convergence.parquet` and
 /// `training/timing/iterations.parquet`, each written atomically.
@@ -300,9 +311,6 @@ pub fn write_row_selection_records(
         return Ok(());
     }
 
-    let dir = output_dir.join("training/cut_selection");
-    std::fs::create_dir_all(&dir).map_err(|e| OutputError::io(&dir, e))?;
-
     let schema = Arc::new(super::schemas::row_selection_schema());
 
     let n = records.len();
@@ -346,7 +354,42 @@ pub fn write_row_selection_records(
     let batch = RecordBatch::try_new(schema, columns)
         .map_err(|e| OutputError::serialization("cut_selection", e.to_string()))?;
 
-    write_parquet_atomic(&dir.join("iterations.parquet"), &batch)
+    write_batch_atomic(&output_dir.join(CUT_SELECTION_FILE), &batch)
+}
+
+fn conditional_training_output_files(output_dir: &Path) -> [PathBuf; 8] {
+    let solver_dir = output_dir.join(TRAINING_SOLVER_DIR);
+    [
+        output_dir.join(CUT_SELECTION_FILE),
+        solver_dir.join(SOLVER_ITERATIONS_FILE),
+        solver_dir.join(SOLVER_RETRY_HISTOGRAM_FILE),
+        output_dir.join(FIXED_DELIVERIES_FILE),
+        output_dir.join(FPHA_HYPERPLANES_FILE),
+        output_dir.join(EVAPORATION_MODELS_FILE),
+        output_dir.join(FPHA_DEVIATION_POINTS_FILE),
+        output_dir.join(GENERIC_CONSTRAINT_ECHO_FILE),
+    ]
+}
+
+/// Remove the training outputs that a run writes only when it has rows for
+/// them from under `output_dir`, together with each of their directories this
+/// leaves empty. Callers invoke it before the training phase's first write,
+/// after removing the stale training `_SUCCESS` marker.
+///
+/// # Errors
+///
+/// Returns [`OutputError::IoError`] for the first entry that exists but cannot be
+/// removed, such as a directory at a file path or a regular file where a parent
+/// directory belongs: the entry is not one this writer wrote.
+pub fn remove_conditional_training_outputs(output_dir: &Path) -> Result<(), OutputError> {
+    let files = conditional_training_output_files(output_dir);
+    for file in &files {
+        remove_file_if_present(file)?;
+    }
+    for dir in files.iter().filter_map(|file| file.parent()) {
+        remove_dir_if_empty(dir)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -989,5 +1032,168 @@ mod tests {
             schema.field_with_name("cuts_in_lp").is_err(),
             "cuts_in_lp column must not be present in schema"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // remove_conditional_training_outputs tests
+    // -------------------------------------------------------------------------
+
+    const CONDITIONAL_TRAINING_OUTPUTS: [&str; 8] = [
+        "training/cut_selection/iterations.parquet",
+        "training/solver/iterations.parquet",
+        "training/solver/retry_histogram.parquet",
+        "anticipated/fixed_deliveries.parquet",
+        "hydro_models/fpha_hyperplanes.parquet",
+        "hydro_models/evaporation_models.parquet",
+        "hydro_models/fpha_deviation_points.parquet",
+        "generic_constraints/resolved_echo.parquet",
+    ];
+
+    fn seed_stale_file(root: &Path, relative: &str) {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"stale").unwrap();
+    }
+
+    #[test]
+    fn conditional_training_output_remover_clears_each_output_and_its_empty_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let kept_files = [
+            "hydro_models/notes.txt",
+            "hydro_models/fpha_hyperplanes.parquet.tmp",
+            "training/_SUCCESS",
+            "training/metadata.json",
+            "policy/manifest.json",
+            "simulation/solver/iterations.parquet",
+        ];
+        for relative in CONDITIONAL_TRAINING_OUTPUTS.into_iter().chain(kept_files) {
+            seed_stale_file(root, relative);
+        }
+        let leftover_tmp = root.join("training/solver/retry_histogram.parquet.tmp");
+        std::fs::create_dir_all(&leftover_tmp).unwrap();
+
+        remove_conditional_training_outputs(root).unwrap();
+
+        for relative in CONDITIONAL_TRAINING_OUTPUTS.into_iter().chain([
+            "training/cut_selection",
+            "anticipated",
+            "generic_constraints",
+        ]) {
+            assert!(!root.join(relative).exists(), "{relative} must be removed");
+        }
+        for relative in kept_files {
+            assert!(root.join(relative).is_file(), "{relative} must be kept");
+        }
+        assert!(leftover_tmp.is_dir(), "a .tmp leftover must be kept");
+        assert!(root.join("hydro_models").is_dir());
+        assert!(root.join("training/solver").is_dir());
+    }
+
+    #[test]
+    fn conditional_training_output_remover_clears_what_the_writers_wrote() {
+        use chrono::NaiveDate;
+
+        use super::super::RowSelectionRecord;
+        use crate::output::{
+            FixedDeliveryRow, write_evaporation_models, write_fixed_delivery,
+            write_fpha_deviation_points, write_fpha_hyperplanes, write_generic_constraint_echo,
+            write_solver_stats,
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let record = RowSelectionRecord {
+            iteration: 3,
+            stage: 0,
+            cuts_populated: 10,
+            cuts_active_before: 10,
+            cuts_deactivated: 0,
+            cuts_reactivated: 0,
+            cuts_active_after: 10,
+            selection_time_ms: 0.0,
+            budget_evicted: None,
+            active_after_budget: None,
+        };
+        write_row_selection_records(root, &[record]).unwrap();
+        write_solver_stats(root, &[]).unwrap();
+        let delivery = FixedDeliveryRow {
+            thermal_id: 3,
+            start_date: NaiveDate::from_ymd_opt(2030, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+            value_mw: 120.5,
+        };
+        write_fixed_delivery(root, &[delivery]).unwrap();
+        write_fpha_hyperplanes(&root.join(FPHA_HYPERPLANES_FILE), &[]).unwrap();
+        write_evaporation_models(&root.join(EVAPORATION_MODELS_FILE), &[]).unwrap();
+        write_fpha_deviation_points(&root.join(FPHA_DEVIATION_POINTS_FILE), &[]).unwrap();
+        write_generic_constraint_echo(&root.join(GENERIC_CONSTRAINT_ECHO_FILE), &[]).unwrap();
+        for relative in CONDITIONAL_TRAINING_OUTPUTS {
+            assert!(root.join(relative).is_file(), "{relative} must be written");
+        }
+
+        remove_conditional_training_outputs(root).unwrap();
+
+        let entries: Vec<String> = std::fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(entries, ["training"]);
+        assert_eq!(std::fs::read_dir(root.join("training")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn conditional_training_output_remover_accepts_missing_outputs() {
+        let tmp = tempfile::tempdir().unwrap();
+        remove_conditional_training_outputs(tmp.path()).unwrap();
+        remove_conditional_training_outputs(&tmp.path().join("absent")).unwrap();
+    }
+
+    #[test]
+    fn conditional_training_output_remover_reports_an_entry_it_cannot_remove() {
+        let file_at_parent = tempfile::tempdir().unwrap();
+        seed_stale_file(file_at_parent.path(), "training/solver");
+        let dir_at_file = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(
+            dir_at_file
+                .path()
+                .join("anticipated/fixed_deliveries.parquet"),
+        )
+        .unwrap();
+
+        for (root, blocker, reported) in [
+            (
+                file_at_parent.path(),
+                "training/solver",
+                "solver/iterations.parquet",
+            ),
+            (
+                dir_at_file.path(),
+                "anticipated/fixed_deliveries.parquet",
+                "fixed_deliveries.parquet",
+            ),
+        ] {
+            let err = remove_conditional_training_outputs(root).unwrap_err();
+            assert!(
+                matches!(&err, OutputError::IoError { path, .. } if path.ends_with(reported)),
+                "expected an IoError naming {reported}, got {err:?}"
+            );
+            assert!(root.join(blocker).exists(), "{blocker} must be kept");
+        }
+    }
+
+    #[test]
+    fn conditional_training_outputs_are_registered_training_files() {
+        use crate::output::file_registry::{FileLayout, OUTPUT_FILES, WritePhase};
+
+        for file in conditional_training_output_files(Path::new("")) {
+            let path = file.to_str().unwrap();
+            assert!(
+                OUTPUT_FILES.iter().any(|entry| entry.path == path
+                    && entry.layout == FileLayout::File
+                    && entry.phase == WritePhase::Training),
+                "{path} must be a registered training-phase file"
+            );
+        }
     }
 }

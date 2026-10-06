@@ -20,6 +20,7 @@ use cobre_io::PolicyMode;
 use cobre_io::SetupTimings;
 use cobre_io::load_case_with_artifacts;
 use cobre_io::parse_config;
+use cobre_io::remove_conditional_training_outputs;
 use cobre_io::remove_simulation_outputs;
 use cobre_io::remove_success_marker;
 use cobre_io::write_hydro_model_summary;
@@ -521,10 +522,11 @@ pub(super) fn run_pre_training(
 }
 
 /// Rank-0 pre-training exports: removes the stale `_SUCCESS` of each planned
-/// phase and, when simulation is planned, an earlier run's simulation outputs,
-/// then writes the hydro model summary, provenance report, stochastic
-/// artifacts (non-fatal), and scaling report. Called only on rank 0; the
-/// returned `Result` is reconciled across ranks before the post-export barrier.
+/// phase, an earlier run's simulation outputs when simulation is planned and an
+/// earlier run's conditional training outputs when training is planned, then
+/// writes the hydro model summary, provenance report, stochastic artifacts
+/// (non-fatal), and scaling report. Called only on rank 0; the returned
+/// `Result` is reconciled across ranks before the post-export barrier.
 fn run_root_exports(
     ctx: &RunContext<impl Communicator>,
     system: &System,
@@ -539,6 +541,9 @@ fn run_root_exports(
     if setup.simulation_config.n_scenarios > 0 {
         remove_success_marker(&ctx.output_dir.join("simulation")).map_err(CliError::from)?;
         remove_simulation_outputs(&ctx.output_dir).map_err(CliError::from)?;
+    }
+    if root_config.is_some_and(|c| c.training.enabled) {
+        remove_conditional_training_outputs(&ctx.output_dir).map_err(CliError::from)?;
     }
 
     // Built regardless of `quiet`: it feeds the `training/hydro_models.json`

@@ -21,6 +21,8 @@ use crate::output::atomic::write_batch_atomic;
 use crate::output::error::OutputError;
 use crate::output::schemas::fixed_delivery_schema;
 
+pub(crate) const FIXED_DELIVERIES_FILE: &str = "anticipated/fixed_deliveries.parquet";
+
 /// One row of the run-level fixed post-horizon commitment echo.
 ///
 /// Each row is one anticipated plant's declared fixed (class-4) commitment
@@ -76,9 +78,7 @@ pub fn write_fixed_delivery(
     if rows.is_empty() {
         return Ok(());
     }
-    let path = output_dir
-        .join("anticipated")
-        .join("fixed_deliveries.parquet");
+    let path = output_dir.join(FIXED_DELIVERIES_FILE);
     let batch = build_fixed_delivery_batch(rows)?;
     write_batch_atomic(&path, &batch)
 }

@@ -272,7 +272,7 @@ def test_run_writes_no_training_marker_when_the_last_training_write_fails(
     tmp_path: pathlib.Path,
 ) -> None:
     """A failed training write leaves no training/_SUCCESS beside the files written before it."""
-    _run_1dtoy_with_a_directory_at(tmp_path, "training/solver/retry_histogram.parquet")
+    _run_1dtoy_with_a_directory_at(tmp_path, "training/solver/retry_histogram.parquet.tmp")
 
     assert (tmp_path / "training" / "metadata.json").is_file()
     assert not (tmp_path / "training" / "_SUCCESS").exists()
@@ -440,3 +440,128 @@ def test_simulate_clears_stale_outputs_before_writing(tmp_path: pathlib.Path) ->
         "_SUCCESS",
     ):
         assert (sim / kept).is_file(), f"simulation/{kept} must exist"
+
+
+# ---------------------------------------------------------------------------
+# Conditional training outputs
+# ---------------------------------------------------------------------------
+
+# The conditional training outputs 1dtoy never writes.
+_STALE_CONDITIONAL_TRAINING_OUTPUTS = (
+    "training/cut_selection/iterations.parquet",
+    "hydro_models/fpha_hyperplanes.parquet",
+    "hydro_models/evaporation_models.parquet",
+    "hydro_models/fpha_deviation_points.parquet",
+    "generic_constraints/resolved_echo.parquet",
+    "anticipated/fixed_deliveries.parquet",
+)
+
+
+def _rewrite_config(case_dir: pathlib.Path, edit: Any) -> None:
+    config_path = case_dir / "config.json"
+    config = json.loads(config_path.read_text())
+    edit(config)
+    config_path.write_text(json.dumps(config))
+
+
+def test_run_clears_stale_training_outputs_before_training(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A run into a reused directory shows no earlier conditional training output while it trains."""
+    import cobre.run
+
+    stale = [tmp_path / relative for relative in _STALE_CONDITIONAL_TRAINING_OUTPUTS]
+    for path in stale:
+        _seed_file(path, "stale")
+    observed: list[tuple[bool, ...]] = []
+
+    def on_iteration(_event: dict[str, Any]) -> None:
+        observed.append(tuple(path.exists() for path in stale))
+
+    cobre.run.run(VALID_CASE, output_dir=str(tmp_path), on_iteration=on_iteration)
+
+    assert observed, "on_iteration was never called"
+    assert set(observed) == {(False,) * len(stale)}
+    assert (tmp_path / "training" / "_SUCCESS").is_file()
+
+
+def test_study_train_clears_stale_training_outputs(tmp_path: pathlib.Path) -> None:
+    """Study() keeps an earlier run's conditional training outputs; train() removes them."""
+    import cobre
+
+    stale = [
+        tmp_path / "hydro_models" / "fpha_hyperplanes.parquet",
+        tmp_path / "training" / "cut_selection" / "iterations.parquet",
+    ]
+    for path in stale:
+        _seed_file(path, "stale")
+    study = cobre.Study(VALID_CASE, output_dir=str(tmp_path))
+    assert all(path.is_file() for path in stale)
+
+    study.train()
+
+    assert not any(path.exists() for path in stale)
+    assert (tmp_path / "training" / "_SUCCESS").is_file()
+
+
+def test_run_clears_cut_selection_output_after_cut_selection_is_disabled(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A rerun without cut selection leaves no training/cut_selection/ from the first run."""
+    import cobre.run
+
+    case_dir = tmp_path / "case"
+    output_dir = tmp_path / "output"
+    shutil.copytree(VALID_CASE, case_dir)
+
+    def enable_cut_selection(config: dict[str, Any]) -> None:
+        config["training"]["stopping_rules"] = [{"type": "iteration_limit", "limit": 6}]
+        config["training"]["cut_selection"] = {
+            "selection": {"method": "level1", "check_frequency": 2}
+        }
+        config["simulation"]["enabled"] = False
+
+    _rewrite_config(case_dir, enable_cut_selection)
+    cobre.run.run(str(case_dir), output_dir=str(output_dir))
+    assert (output_dir / "training" / "cut_selection" / "iterations.parquet").is_file()
+
+    _rewrite_config(case_dir, lambda config: config["training"].pop("cut_selection"))
+    cobre.run.run(str(case_dir), output_dir=str(output_dir))
+
+    assert (output_dir / "training" / "_SUCCESS").is_file()
+    assert not (output_dir / "training" / "cut_selection").exists()
+
+
+def test_warm_start_rerun_reads_the_policy_the_training_clear_keeps(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A warm-start rerun into the same directory reads the policy the first run wrote."""
+    import cobre.run
+
+    cobre.run.run(VALID_CASE, output_dir=str(tmp_path))
+    cobre.run.run(
+        VALID_CASE,
+        output_dir=str(tmp_path),
+        config_overrides={"policy.mode": "warm_start"},
+    )
+
+    assert (tmp_path / "training" / "_SUCCESS").is_file()
+
+
+def test_simulation_only_run_keeps_training_outputs(tmp_path: pathlib.Path) -> None:
+    """A run with training disabled removes no training output."""
+    import cobre.run
+
+    cobre.run.run(VALID_CASE, output_dir=str(tmp_path))
+    seeded = tmp_path / "hydro_models" / "fpha_hyperplanes.parquet"
+    _seed_file(seeded, "stale")
+
+    cobre.run.run(
+        VALID_CASE,
+        output_dir=str(tmp_path),
+        config_overrides={"training.enabled": False},
+    )
+
+    assert seeded.is_file()
+    assert (tmp_path / "training" / "solver" / "iterations.parquet").is_file()
+    assert (tmp_path / "training" / "_SUCCESS").is_file()

@@ -1745,7 +1745,7 @@ fn training_only_run_writes_no_simulation_success_marker() {
 
 #[test]
 fn run_writes_no_training_marker_when_the_last_training_write_fails() {
-    let out = run_1dtoy_with_a_directory_at("training/solver/retry_histogram.parquet");
+    let out = run_1dtoy_with_a_directory_at("training/solver/retry_histogram.parquet.tmp");
 
     assert!(out.path().join("training/metadata.json").is_file());
     assert!(
@@ -1772,7 +1772,11 @@ fn run_clears_stale_markers_of_planned_phases_before_writing() {
     let out = TempDir::new().unwrap();
     write_file(out.path(), "training/_SUCCESS", "");
     write_file(out.path(), "simulation/_SUCCESS", "");
-    write_file(out.path(), "training/solver", "");
+    fs::create_dir_all(
+        out.path()
+            .join("training/solver/retry_histogram.parquet.tmp"),
+    )
+    .unwrap();
 
     cobre()
         .args([
@@ -1831,11 +1835,27 @@ fn simulation_only_run_keeps_the_training_marker() {
     rewrite_json(&dir.path().join("config.json"), |config| {
         config["training"]["enabled"] = serde_json::json!(false);
     });
+    write_file(
+        out.path(),
+        "training/cut_selection/iterations.parquet",
+        "stale",
+    );
+    write_file(out.path(), "hydro_models/fpha_hyperplanes.parquet", "stale");
 
     run_case(dir.path(), out.path());
 
     assert_empty_file(&out.path().join("training/_SUCCESS"));
     assert_empty_file(&out.path().join("simulation/_SUCCESS"));
+    for kept in [
+        "training/cut_selection/iterations.parquet",
+        "hydro_models/fpha_hyperplanes.parquet",
+        "training/solver/iterations.parquet",
+    ] {
+        assert!(
+            out.path().join(kept).is_file(),
+            "{kept} must be kept by a run that does not train"
+        );
+    }
 }
 
 const STALE_SIMULATION_OUTPUTS: [(&str, &str); 6] = [
@@ -1911,4 +1931,162 @@ fn run_replaces_stale_simulation_outputs() {
     ] {
         assert!(sim.join(kept).is_file(), "simulation/{kept} must exist");
     }
+}
+
+// ── Conditional training outputs ──────────────────────────────────────────────
+
+/// The conditional training outputs 1dtoy never writes.
+const STALE_CONDITIONAL_TRAINING_OUTPUTS: [&str; 6] = [
+    "training/cut_selection/iterations.parquet",
+    "hydro_models/fpha_hyperplanes.parquet",
+    "hydro_models/evaporation_models.parquet",
+    "hydro_models/fpha_deviation_points.parquet",
+    "generic_constraints/resolved_echo.parquet",
+    "anticipated/fixed_deliveries.parquet",
+];
+
+fn seed_stale_conditional_training_outputs(out: &Path) {
+    for relative in STALE_CONDITIONAL_TRAINING_OUTPUTS {
+        write_file(out, relative, "stale");
+    }
+    write_file(out, "hydro_models/notes.txt", "");
+}
+
+fn assert_stale_conditional_training_outputs_removed(out: &Path) {
+    for relative in STALE_CONDITIONAL_TRAINING_OUTPUTS {
+        assert!(
+            !out.join(relative).exists(),
+            "the stale {relative} must be removed before training"
+        );
+    }
+}
+
+fn copy_of_1dtoy_training_six_iterations() -> TempDir {
+    let case = TempDir::new().unwrap();
+    copy_dir_recursive(&case_dir("1dtoy"), case.path());
+    rewrite_json(&case.path().join("config.json"), |config| {
+        config["training"]["stopping_rules"] =
+            serde_json::json!([{ "type": "iteration_limit", "limit": 6 }]);
+        config["simulation"]["enabled"] = serde_json::json!(false);
+    });
+    case
+}
+
+#[test]
+fn run_clears_stale_conditional_training_outputs() {
+    let out = TempDir::new().unwrap();
+    seed_stale_conditional_training_outputs(out.path());
+
+    run_case(&case_dir("1dtoy"), out.path());
+
+    assert_stale_conditional_training_outputs_removed(out.path());
+    for emptied in [
+        "training/cut_selection",
+        "anticipated",
+        "generic_constraints",
+    ] {
+        assert!(
+            !out.path().join(emptied).exists(),
+            "{emptied} must be removed once its stale output is gone"
+        );
+    }
+    assert!(out.path().join("hydro_models/notes.txt").is_file());
+    assert_empty_file(&out.path().join("training/_SUCCESS"));
+}
+
+#[test]
+fn run_clears_stale_conditional_training_outputs_before_training() {
+    let out = TempDir::new().unwrap();
+    seed_stale_conditional_training_outputs(out.path());
+    fs::create_dir_all(
+        out.path()
+            .join("training/solver/retry_histogram.parquet.tmp"),
+    )
+    .unwrap();
+
+    cobre()
+        .args([
+            "run",
+            case_dir("1dtoy").to_str().unwrap(),
+            "--output",
+            out.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .failure();
+
+    assert_stale_conditional_training_outputs_removed(out.path());
+    assert!(out.path().join("training/metadata.json").is_file());
+    assert!(
+        !out.path().join("training/_SUCCESS").exists(),
+        "training/_SUCCESS must not exist when a training write failed"
+    );
+}
+
+#[test]
+fn run_clears_cut_selection_output_after_cut_selection_is_disabled() {
+    let case = copy_of_1dtoy_training_six_iterations();
+    rewrite_json(&case.path().join("config.json"), |config| {
+        config["training"]["cut_selection"] = serde_json::json!({
+            "selection": { "method": "level1", "check_frequency": 2 }
+        });
+    });
+    let out = TempDir::new().unwrap();
+    run_case(case.path(), out.path());
+    assert!(
+        out.path()
+            .join("training/cut_selection/iterations.parquet")
+            .is_file()
+    );
+
+    rewrite_json(&case.path().join("config.json"), |config| {
+        config["training"]
+            .as_object_mut()
+            .unwrap()
+            .remove("cut_selection");
+    });
+    run_case(case.path(), out.path());
+
+    assert_empty_file(&out.path().join("training/_SUCCESS"));
+    assert!(!out.path().join("training/cut_selection").exists());
+}
+
+#[test]
+fn run_clears_fpha_hyperplanes_after_switching_to_constant_productivity() {
+    let case = TempDir::new().unwrap();
+    copy_dir_recursive(&case_dir("deterministic/d07-fpha-computed"), case.path());
+    let out = TempDir::new().unwrap();
+    run_case(case.path(), out.path());
+    assert!(
+        out.path()
+            .join("hydro_models/fpha_hyperplanes.parquet")
+            .is_file()
+    );
+
+    rewrite_json(
+        &case.path().join("system/hydro_production_models.json"),
+        |models| {
+            let range = &mut models["production_models"][0]["stage_ranges"][0];
+            range["model"] = serde_json::json!("constant_productivity");
+            range.as_object_mut().unwrap().remove("fpha_config");
+        },
+    );
+    run_case(case.path(), out.path());
+
+    assert_empty_file(&out.path().join("training/_SUCCESS"));
+    assert!(!out.path().join("hydro_models").exists());
+}
+
+#[test]
+fn warm_start_rerun_reads_the_policy_the_training_clear_keeps() {
+    let case = copy_of_1dtoy_training_six_iterations();
+    let out = TempDir::new().unwrap();
+    run_case(case.path(), out.path());
+    rewrite_json(&case.path().join("config.json"), |config| {
+        config["policy"]["mode"] = serde_json::json!("warm_start");
+    });
+
+    run_case(case.path(), out.path());
+
+    assert_empty_file(&out.path().join("training/_SUCCESS"));
 }

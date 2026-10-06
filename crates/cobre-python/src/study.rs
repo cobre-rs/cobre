@@ -20,6 +20,7 @@ use pyo3::exceptions::{PyIndexError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use cobre_io::remove_conditional_training_outputs;
 use cobre_io::remove_success_marker;
 use cobre_sddp::policy::full_fcf_load::{
     FullFcfLoadError, FullFcfLoadKind, check_full_fcf_load, locate_policy_dir,
@@ -358,6 +359,9 @@ impl Study {
                 remove_success_marker(&output_dir.join("training")).map_err(|e| {
                     format!("{OUTPUT_WRITE_ERROR_PREFIX}: stale training marker: {e}")
                 })?;
+                remove_conditional_training_outputs(&output_dir).map_err(|e| {
+                    format!("{OUTPUT_WRITE_ERROR_PREFIX}: stale training outputs: {e}")
+                })?;
                 apply_training_policy_mode(setup, system, config, &output_dir, &case_dir)?;
                 setup.enable_periodic_checkpoints(system, &output_dir);
 
@@ -594,14 +598,17 @@ impl Study {
     /// `training/timing/iterations.parquet`, `training/solver/iterations.parquet`,
     /// `training/solver/retry_histogram.parquet`, and the four
     /// `training/dictionaries/` files (`variables.csv`, `entities.csv`,
-    /// `codes.json`, `bounds.parquet`). When cut selection is enabled and produces
-    /// rows, a `training/cut_selection/` directory is written. Several sidecars
-    /// are written conditionally when their source data is non-empty:
+    /// `codes.json`, `bounds.parquet`). The following are written only when the
+    /// run has rows for them: `training/cut_selection/iterations.parquet` (cut
+    /// selection),
     /// `hydro_models/fpha_hyperplanes.parquet` (FPHA planes),
-    /// `hydro_models/fpha_deviation_points.parquet` (FPHA deviation tracking),
-    /// `hydro_models/evaporation_models.json` (evaporation config),
-    /// `constraints/generic_constraints_echo.json` (generic constraint reflection),
-    /// `delivery/fixed_delivery.parquet` (fixed-delivery schedules).
+    /// `hydro_models/evaporation_models.parquet` (evaporation models),
+    /// `hydro_models/fpha_deviation_points.parquet` (FPHA deviation tracking,
+    /// with `exports.fpha_deviation_points`),
+    /// `generic_constraints/resolved_echo.parquet` (resolved generic constraints)
+    /// and `anticipated/fixed_deliveries.parquet` (fixed post-horizon deliveries).
+    /// Training first removes an earlier run's copies of these files and of the
+    /// two `training/solver/` files from the output directory.
     ///
     /// Artifacts reach disk via an identical call sequence to
     /// [`crate::run::run_via_study`], invoking the same writers; byte-identity

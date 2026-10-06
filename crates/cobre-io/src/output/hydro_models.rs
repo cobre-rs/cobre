@@ -39,6 +39,13 @@ use crate::output::schemas::{
     evaporation_models_schema, fpha_deviation_points_schema, fpha_hyperplanes_schema,
 };
 
+/// The fitted FPHA hyperplanes file's path relative to the output directory.
+pub const FPHA_HYPERPLANES_FILE: &str = "hydro_models/fpha_hyperplanes.parquet";
+/// The evaporation models file's path relative to the output directory.
+pub const EVAPORATION_MODELS_FILE: &str = "hydro_models/evaporation_models.parquet";
+/// The FPHA deviation points file's path relative to the output directory.
+pub const FPHA_DEVIATION_POINTS_FILE: &str = "hydro_models/fpha_deviation_points.parquet";
+
 /// Write a slice of [`FphaHyperplaneRow`] to a Parquet file at `path`,
 /// re-readable as `system/fpha_hyperplanes.parquet` by
 /// [`crate::extensions::parse_fpha_hyperplanes`].

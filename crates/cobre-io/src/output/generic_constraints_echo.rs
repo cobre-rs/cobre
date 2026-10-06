@@ -17,6 +17,9 @@ use crate::output::atomic::write_batch_atomic;
 use crate::output::error::OutputError;
 use crate::output::schemas::generic_constraint_echo_schema;
 
+/// The resolved generic-constraint echo file's path relative to the output directory.
+pub const GENERIC_CONSTRAINT_ECHO_FILE: &str = "generic_constraints/resolved_echo.parquet";
+
 /// One row of the resolved generic-constraint echo.
 ///
 /// Each row is one resolved LHS term of one generic constraint at one

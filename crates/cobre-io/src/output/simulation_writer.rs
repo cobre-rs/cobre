@@ -1286,7 +1286,7 @@ pub fn remove_simulation_outputs(output_dir: &Path) -> Result<(), OutputError> {
     Ok(())
 }
 
-fn remove_file_if_present(path: &Path) -> Result<(), OutputError> {
+pub(super) fn remove_file_if_present(path: &Path) -> Result<(), OutputError> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
@@ -1294,7 +1294,7 @@ fn remove_file_if_present(path: &Path) -> Result<(), OutputError> {
     }
 }
 
-fn remove_dir_if_empty(dir: &Path) -> Result<(), OutputError> {
+pub(super) fn remove_dir_if_empty(dir: &Path) -> Result<(), OutputError> {
     match std::fs::remove_dir(dir) {
         Ok(()) => Ok(()),
         Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::DirectoryNotEmpty) => Ok(()),

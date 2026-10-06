@@ -48,6 +48,10 @@ use cobre_core::System;
 use cobre_core::TrainingEvent::IterationSummary;
 use cobre_io::Config;
 use cobre_io::DistributionInfo;
+use cobre_io::EVAPORATION_MODELS_FILE;
+use cobre_io::FPHA_DEVIATION_POINTS_FILE;
+use cobre_io::FPHA_HYPERPLANES_FILE;
+use cobre_io::GENERIC_CONSTRAINT_ECHO_FILE;
 use cobre_io::LoadedCase;
 use cobre_io::MetadataCost;
 use cobre_io::MetadataSimulationSolveStats;
@@ -560,9 +564,7 @@ pub(crate) fn write_training_outputs(
         .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: training results output: {e}"))?;
 
     if !setup.hydro_models.fpha_export_rows.is_empty() {
-        let fpha_path = output_dir
-            .join("hydro_models")
-            .join("fpha_hyperplanes.parquet");
+        let fpha_path = output_dir.join(FPHA_HYPERPLANES_FILE);
         write_fpha_hyperplanes(&fpha_path, &setup.hydro_models.fpha_export_rows).map_err(|e| {
             format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write fpha_hyperplanes: {e}")
         })?;
@@ -570,9 +572,7 @@ pub(crate) fn write_training_outputs(
 
     let evaporation_rows = build_evaporation_model_rows(&setup.hydro_models, system);
     if !evaporation_rows.is_empty() {
-        let evaporation_path = output_dir
-            .join("hydro_models")
-            .join("evaporation_models.parquet");
+        let evaporation_path = output_dir.join(EVAPORATION_MODELS_FILE);
         write_evaporation_models(&evaporation_path, &evaporation_rows).map_err(|e| {
             format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write evaporation_models: {e}")
         })?;
@@ -580,9 +580,7 @@ pub(crate) fn write_training_outputs(
 
     let deviation_point_rows = setup.hydro_models.fpha_deviation_point_rows.as_slice();
     if config.exports.fpha_deviation_points && !deviation_point_rows.is_empty() {
-        let deviation_points_path = output_dir
-            .join("hydro_models")
-            .join("fpha_deviation_points.parquet");
+        let deviation_points_path = output_dir.join(FPHA_DEVIATION_POINTS_FILE);
         write_fpha_deviation_points(&deviation_points_path, deviation_point_rows).map_err(|e| {
             format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write fpha_deviation_points: {e}")
         })?;
@@ -590,9 +588,7 @@ pub(crate) fn write_training_outputs(
 
     if !system.generic_constraints().is_empty() {
         let rows = build_generic_constraint_echo_rows(setup, system);
-        let echo_path = output_dir
-            .join("generic_constraints")
-            .join("resolved_echo.parquet");
+        let echo_path = output_dir.join(GENERIC_CONSTRAINT_ECHO_FILE);
         write_generic_constraint_echo(&echo_path, &rows).map_err(|e| {
             format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write generic_constraint_echo: {e}")
         })?;

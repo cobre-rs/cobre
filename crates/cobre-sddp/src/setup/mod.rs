@@ -2338,8 +2338,7 @@ fn rule_is_gap(rule: &StoppingRule) -> bool {
         } => true,
         StoppingRule::IterationLimit { .. }
         | StoppingRule::TimeLimit { .. }
-        | StoppingRule::BoundStalling { .. }
-        | StoppingRule::GracefulShutdown => false,
+        | StoppingRule::BoundStalling { .. } => false,
     }
 }
 

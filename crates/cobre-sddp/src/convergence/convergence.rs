@@ -335,12 +335,9 @@ mod tests {
     }
 
     #[test]
-    fn set_shutdown_triggers_graceful_rule() {
+    fn set_shutdown_reports_graceful_shutdown_under_any_mode() {
         let rule_set = StoppingRuleSet {
-            rules: vec![
-                StoppingRule::GracefulShutdown,
-                StoppingRule::IterationLimit { limit: 100 },
-            ],
+            rules: vec![StoppingRule::IterationLimit { limit: 100 }],
             mode: StoppingMode::Any,
         };
         let mut monitor = ConvergenceMonitor::new(rule_set);
@@ -350,6 +347,7 @@ mod tests {
         assert!(decision.mask().contains(StopMask::SHUTDOWN));
         assert!(!decision.mask().contains(StopMask::SIGNAL));
         assert_eq!(decision.termination_reason(), Some("graceful_shutdown"));
+        assert!(decision.ended_by_shutdown());
     }
 
     #[test]
@@ -503,13 +501,10 @@ mod tests {
     }
 
     #[test]
-    fn ac_set_shutdown_triggers_graceful_shutdown_rule() {
+    fn set_shutdown_reports_graceful_shutdown_under_all_mode() {
         let rule_set = StoppingRuleSet {
-            rules: vec![
-                StoppingRule::GracefulShutdown,
-                StoppingRule::IterationLimit { limit: 100 },
-            ],
-            mode: StoppingMode::Any,
+            rules: vec![StoppingRule::IterationLimit { limit: 100 }],
+            mode: StoppingMode::All,
         };
         let mut monitor = ConvergenceMonitor::new(rule_set);
         monitor.set_shutdown(ShutdownSource::Cooperative);
@@ -517,6 +512,7 @@ mod tests {
         assert!(decision.should_stop());
         assert!(decision.mask().contains(StopMask::SHUTDOWN));
         assert_eq!(decision.termination_reason(), Some("graceful_shutdown"));
+        assert!(decision.ended_by_shutdown());
     }
 
     #[test]

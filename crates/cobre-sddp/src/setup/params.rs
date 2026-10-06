@@ -754,11 +754,11 @@ mod tests {
         );
     }
 
-    /// A production rule set lists no `GracefulShutdown` entry, yet a shutdown
-    /// request alone is still reported as `graceful_shutdown`.
+    /// A shutdown request alone is reported as `graceful_shutdown`; one that
+    /// coincides with the iteration limit is reported as `iteration_limit`.
     #[test]
     fn production_rule_set_reports_graceful_shutdown_on_a_shutdown_request() {
-        use crate::stopping_rule::{MonitorState, StoppingRule};
+        use crate::stopping_rule::MonitorState;
 
         let mut config = base_test_config();
         config.training.stopping_rules =
@@ -766,14 +766,6 @@ mod tests {
         let params = StudyParams::from_config(&config, Vec::new())
             .expect("the base config maps successfully");
         let rule_set = &params.stopping_rule_set;
-        assert!(
-            !rule_set
-                .rules
-                .iter()
-                .any(|r| matches!(r, StoppingRule::GracefulShutdown)),
-            "from_config must not list a GracefulShutdown rule: {:?}",
-            rule_set.rules
-        );
 
         let shutdown_at = |iteration| MonitorState {
             iteration,

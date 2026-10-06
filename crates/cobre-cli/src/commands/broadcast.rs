@@ -8,8 +8,8 @@ use cobre_io::Config;
 use cobre_io::PolicyMode;
 use cobre_io::config::{BackwardScheduler, CheckpointSchedule, PhaseSolverProfileConfig};
 use cobre_sddp::{
-    BoundaryStateRequirements, CutSelectionStrategy, DEFAULT_MAX_ITERATIONS,
-    InflowNonNegativityMethod, StoppingMode, StoppingRule, StoppingRuleSet, StudyParams,
+    BoundaryStateRequirements, CutSelectionStrategy, InflowNonNegativityMethod, StoppingMode,
+    StoppingRule, StoppingRuleSet, StudyParams,
     setup::{
         NodeGraph, NodeId, NodeOpenings, NodePos, NodeRuntime, NodeSuccessor, OpeningSource,
         SimulationEnumeratedRequest, StageIdx, TypedVec,
@@ -179,17 +179,6 @@ impl BroadcastConfig {
                     tolerance: *tolerance,
                     relative_tolerance: *relative_tolerance,
                 },
-                // GracefulShutdown evaluates on rank 0 only and is not
-                // broadcastable; non-root ranks fall back to an iteration limit.
-                StoppingRule::GracefulShutdown => {
-                    tracing::warn!(
-                        "stopping rule not broadcastable, \
-                         substituting IterationLimit({DEFAULT_MAX_ITERATIONS})"
-                    );
-                    BroadcastStoppingRule::IterationLimit {
-                        limit: DEFAULT_MAX_ITERATIONS,
-                    }
-                }
             })
             .collect();
 

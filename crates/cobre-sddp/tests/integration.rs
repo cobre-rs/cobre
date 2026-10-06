@@ -948,9 +948,9 @@ fn train_stops_at_iteration_limit() {
     assert_eq!(result.result.reason, "iteration_limit");
 }
 
-/// Train under the production rule shape (`[IterationLimit{iteration_limit}]`,
-/// no `GracefulShutdown` entry) with a shutdown request of `level` stored during
-/// iteration 1. Returns the outcome and the shutdown flag training read.
+/// Train under the production rule shape (`[IterationLimit{iteration_limit}]`)
+/// with a shutdown request of `level` stored during iteration 1. Returns the
+/// outcome and the shutdown flag training read.
 fn train_with_a_shutdown_during_iteration_1(
     iteration_limit: u64,
     level: usize,

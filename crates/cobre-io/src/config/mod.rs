@@ -812,9 +812,6 @@ mod tests {
     }
 
     /// All 4 JSON-configurable stopping rule variants deserialize correctly.
-    ///
-    /// The `GracefulShutdown` variant is runtime-only and has no JSON representation
-    /// per the stopping-rule-trait spec (SS4.1).
     #[test]
     fn test_stopping_rule_variants() {
         let json = r#"{

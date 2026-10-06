@@ -86,7 +86,7 @@ pub enum StoppingMode {
     /// Stop when **any** configured rule triggers (OR logic). A shutdown
     /// request also stops the run, as the [`StopMask::SHUTDOWN`] bit; a
     /// configured stop or an exhausted budget at the same iteration is the
-    /// reported reason, and listing `GracefulShutdown` changes nothing.
+    /// reported reason.
     Any,
 
     /// Stop when every rule other than `IterationLimit` triggers at the same
@@ -94,8 +94,7 @@ pub enum StoppingMode {
     /// budget, the largest `IterationLimit`, caps the run whatever the other
     /// rules do. A shutdown request also stops the run, as the
     /// [`StopMask::SHUTDOWN`] bit; a configured stop or an exhausted budget at
-    /// the same iteration is the reported reason, and listing `GracefulShutdown`
-    /// changes nothing.
+    /// the same iteration is the reported reason.
     All,
 }
 
@@ -150,12 +149,6 @@ pub enum StoppingRule {
         /// 0.01%, directly comparable to the reported `gap_percent`.
         relative_tolerance: Option<f64>,
     },
-
-    /// Terminate on a shutdown request. Not JSON-configured: every set treats a
-    /// request as the [`StopMask::SHUTDOWN`] bit, so listing this variant
-    /// changes nothing, and a configured stop or an exhausted budget at the same
-    /// iteration is the reported reason.
-    GracefulShutdown,
 }
 
 impl StoppingRule {
@@ -173,7 +166,6 @@ impl StoppingRule {
                 tolerance,
                 relative_tolerance,
             } => Self::gap_triggered(state, *tolerance, *relative_tolerance),
-            Self::GracefulShutdown => state.shutdown_requested,
         }
     }
 
@@ -185,7 +177,6 @@ impl StoppingRule {
             Self::TimeLimit { .. } => RULE_TIME_LIMIT,
             Self::BoundStalling { .. } => RULE_BOUND_STALLING,
             Self::Gap { .. } => RULE_GAP,
-            Self::GracefulShutdown => RULE_GRACEFUL_SHUTDOWN,
         }
     }
 
@@ -195,7 +186,6 @@ impl StoppingRule {
             Self::TimeLimit { .. } => StopMask::TIME_LIMIT,
             Self::BoundStalling { .. } => StopMask::BOUND_STALLING,
             Self::Gap { .. } => StopMask::GAP,
-            Self::GracefulShutdown => StopMask::SHUTDOWN,
         }
     }
 
@@ -246,11 +236,11 @@ impl StoppingRule {
 /// qualifiers only the [`crate::ConvergenceMonitor`] knows.
 ///
 /// A kind bit means "at least one listed rule of this kind triggered", under
-/// either [`StoppingMode`]. [`StopMask::SHUTDOWN`] is also set whenever
-/// [`MonitorState::shutdown_requested`] is true, whether or not a
-/// [`StoppingRule::GracefulShutdown`] rule is listed. [`StoppingRuleSet::evaluate`]
-/// never sets [`StopMask::SIGNAL`] or [`StopMask::BUDGET_EXHAUSTED`];
-/// [`crate::ConvergenceMonitor::update`] adds them.
+/// either [`StoppingMode`]. [`StopMask::SHUTDOWN`] is set exactly when the
+/// evaluated [`MonitorState`] carries a shutdown request, whatever rules the
+/// set lists. [`StoppingRuleSet::evaluate`] never sets [`StopMask::SIGNAL`] or
+/// [`StopMask::BUDGET_EXHAUSTED`]; [`crate::ConvergenceMonitor::update`] adds
+/// them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StopMask(u32);
 
@@ -304,8 +294,8 @@ impl StopDecision {
     }
 
     /// The mode applied to the configured rules. Under [`StoppingMode::All`]
-    /// the conjuncts are the rules other than `IterationLimit` and
-    /// `GracefulShutdown`, and a set with no conjunct never has a configured stop.
+    /// the conjuncts are the rules other than `IterationLimit`, and a set with
+    /// no conjunct never has a configured stop.
     #[must_use]
     pub fn configured_stop(&self) -> bool {
         self.configured_stop
@@ -323,8 +313,8 @@ impl StopDecision {
     /// Why training stops, or `None` if it does not.
     ///
     /// A configured stop names its first triggered rule in declared order among
-    /// the rules the mode decides on (every rule but `GracefulShutdown` under
-    /// [`StoppingMode::Any`], also leaving out `IterationLimit` under
+    /// the rules the mode decides on (every listed rule under
+    /// [`StoppingMode::Any`], every rule but `IterationLimit` under
     /// [`StoppingMode::All`]). Otherwise an exhausted budget is
     /// [`RULE_ITERATION_LIMIT`], and a shutdown request alone is
     /// [`RULE_GRACEFUL_SHUTDOWN`].
@@ -402,7 +392,7 @@ pub struct StoppingRuleSet {
     /// [`StoppingRule::IterationLimit`] (validated at config load). A shutdown
     /// request is the [`StopMask::SHUTDOWN`] bit of every set, reported as the
     /// reason only without a configured stop or an exhausted budget at the same
-    /// iteration, so a [`StoppingRule::GracefulShutdown`] entry changes nothing.
+    /// iteration.
     pub rules: Vec<StoppingRule>,
 
     /// Combination mode for the rules.
@@ -434,9 +424,7 @@ impl StoppingRuleSet {
             if triggered {
                 mask.insert(rule.stop_bit());
             }
-            if matches!(rule, StoppingRule::GracefulShutdown)
-                || (all_mode && matches!(rule, StoppingRule::IterationLimit { .. }))
-            {
+            if all_mode && matches!(rule, StoppingRule::IterationLimit { .. }) {
                 continue;
             }
             if triggered && first_triggered.is_none() {
@@ -652,22 +640,6 @@ mod tests {
     }
 
     #[test]
-    fn graceful_shutdown_triggered_when_requested() {
-        let rule = StoppingRule::GracefulShutdown;
-        let mut state = make_state(1, 0.0, 0.0, vec![]);
-        state.shutdown_requested = true;
-        assert!(rule.is_triggered(&state));
-        assert_eq!(rule.name(), "graceful_shutdown");
-    }
-
-    #[test]
-    fn graceful_shutdown_not_triggered_when_not_requested() {
-        let rule = StoppingRule::GracefulShutdown;
-        let state = make_state(1, 0.0, 0.0, vec![]);
-        assert!(!rule.is_triggered(&state));
-    }
-
-    #[test]
     fn rule_set_any_mode_stops_on_first_triggered_rule() {
         let rule_set = StoppingRuleSet {
             rules: vec![
@@ -727,28 +699,37 @@ mod tests {
     }
 
     #[test]
-    fn rule_set_graceful_shutdown_bypasses_all_mode() {
+    fn shutdown_request_stops_an_all_mode_set_whose_rules_have_not_triggered() {
         let rule_set = StoppingRuleSet {
-            rules: vec![
-                StoppingRule::IterationLimit { limit: 100 },
-                StoppingRule::GracefulShutdown,
-            ],
+            rules: vec![StoppingRule::IterationLimit { limit: 100 }],
             mode: StoppingMode::All,
         };
-        let mut state = make_state(1, 0.0, 0.0, vec![]);
-        state.shutdown_requested = true;
-        assert!(rule_set.evaluate(&state).should_stop());
+        let state = MonitorState {
+            shutdown_requested: true,
+            ..make_state(1, 0.0, 0.0, vec![])
+        };
+        let decision = rule_set.evaluate(&state);
+        assert!(decision.should_stop());
+        assert!(decision.mask().contains(StopMask::SHUTDOWN));
+        assert_eq!(decision.termination_reason(), Some("graceful_shutdown"));
+        assert!(decision.ended_by_shutdown());
     }
 
     #[test]
-    fn rule_set_graceful_shutdown_bypasses_any_mode() {
+    fn shutdown_request_stops_an_any_mode_set_whose_rules_have_not_triggered() {
         let rule_set = StoppingRuleSet {
-            rules: vec![StoppingRule::GracefulShutdown],
+            rules: vec![StoppingRule::IterationLimit { limit: 100 }],
             mode: StoppingMode::Any,
         };
-        let mut state = make_state(1, 0.0, 0.0, vec![]);
-        state.shutdown_requested = true;
-        assert!(rule_set.evaluate(&state).should_stop());
+        let state = MonitorState {
+            shutdown_requested: true,
+            ..make_state(1, 0.0, 0.0, vec![])
+        };
+        let decision = rule_set.evaluate(&state);
+        assert!(decision.should_stop());
+        assert!(decision.mask().contains(StopMask::SHUTDOWN));
+        assert_eq!(decision.termination_reason(), Some("graceful_shutdown"));
+        assert!(decision.ended_by_shutdown());
     }
 
     #[test]
@@ -940,7 +921,7 @@ mod tests {
             assert_eq!(
                 shutdown_only.evaluate(&state).mask(),
                 StopMask::SHUTDOWN,
-                "a shutdown request sets the bit with no GracefulShutdown rule listed"
+                "a shutdown request sets the SHUTDOWN bit and no other"
             );
         }
     }
@@ -948,10 +929,7 @@ mod tests {
     #[test]
     fn configured_rule_wins_a_coincident_shutdown() {
         let rule_set = StoppingRuleSet {
-            rules: vec![
-                StoppingRule::GracefulShutdown,
-                StoppingRule::IterationLimit { limit: 5 },
-            ],
+            rules: vec![StoppingRule::IterationLimit { limit: 5 }],
             mode: StoppingMode::Any,
         };
         let state = MonitorState {
@@ -1097,7 +1075,6 @@ mod proptests {
                     tolerance,
                     relative_tolerance,
                 }),
-            Just(StoppingRule::GracefulShutdown),
         ]
     }
 
@@ -1140,8 +1117,8 @@ mod proptests {
     /// The stop precedence written from the per-rule `is_triggered` flags: a
     /// configured stop names its first triggered configured rule, else an
     /// exhausted budget is `iteration_limit`, else a shutdown is
-    /// `graceful_shutdown`. The configured rules leave out `GracefulShutdown`,
-    /// and also `IterationLimit` under `All`.
+    /// `graceful_shutdown`. The configured rules are every listed rule under
+    /// `Any`, and every rule but `IterationLimit` under `All`.
     fn precedence_oracle(
         rule_set: &StoppingRuleSet,
         state: &MonitorState,
@@ -1151,7 +1128,6 @@ mod proptests {
             .rules
             .iter()
             .filter(|r| match r {
-                StoppingRule::GracefulShutdown => false,
                 StoppingRule::IterationLimit { .. } => rule_set.mode == StoppingMode::Any,
                 _ => true,
             })

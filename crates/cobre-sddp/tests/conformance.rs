@@ -502,16 +502,13 @@ mod stopping_rule_conformance {
                 // IterationLimit(100) has not triggered at iteration 1.
                 2 => {
                     let rule_set = StoppingRuleSet {
-                        rules: vec![
-                            StoppingRule::IterationLimit { limit: iter_limit },
-                            StoppingRule::GracefulShutdown,
-                        ],
+                        rules: vec![StoppingRule::IterationLimit { limit: iter_limit }],
                         mode: StoppingMode::All,
                     };
                     let state = make_state(1, 0.0, vec![], shutdown);
                     assert!(
                         rule_set.evaluate(&state).should_stop(),
-                        "case_index = {idx}, desc = {desc}: GracefulShutdown must bypass All \
+                        "case_index = {idx}, desc = {desc}: a shutdown request must bypass All \
                          mode and force should_stop=true (shutdown_requested={shutdown})"
                     );
                 }

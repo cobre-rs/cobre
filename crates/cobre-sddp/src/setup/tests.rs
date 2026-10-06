@@ -10560,7 +10560,6 @@ fn admission_gate_predicates_destructure_exhaustively() {
         tolerance: 0.1,
         iterations: 1,
     }));
-    assert!(!super::rule_is_gap(&StoppingRule::GracefulShutdown));
 }
 
 // ---------------------------------------------------------------------------

@@ -449,9 +449,6 @@ pub enum PriceStrategy {
 /// parameter belonging to a different rule type a load-time error rather
 /// than a silently ignored key.
 ///
-/// The `GracefulShutdown` rule has no JSON representation — it is injected at
-/// runtime by `StoppingRuleSet` construction and is never deserialized.
-///
 /// # Examples
 ///
 /// ```

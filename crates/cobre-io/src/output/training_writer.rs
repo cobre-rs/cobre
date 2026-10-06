@@ -28,7 +28,7 @@ use crate::output::schemas::{convergence_schema, iteration_timing_schema};
 /// # Examples
 ///
 /// ```no_run
-/// use cobre_io::{TrainingOutput, RowPoolStatistics};
+/// use cobre_io::{TrainingOutput, RowPoolStatistics, RunStatus};
 /// use cobre_io::MetadataTrainingSolveStats;
 /// use cobre_io::output::training_writer::TrainingParquetWriter;
 /// use std::path::Path;
@@ -45,6 +45,7 @@ use crate::output::schemas::{convergence_schema, iteration_timing_schema};
 ///     iterations_completed: 0,
 ///     converged: false,
 ///     termination_reason: "iteration limit".to_string(),
+///     status: RunStatus::Complete,
 ///     total_time_ms: 0,
 ///     cut_stats: RowPoolStatistics {
 ///         total_generated: 0,
@@ -358,7 +359,7 @@ pub fn write_row_selection_records(
 mod tests {
     use super::*;
     use crate::MetadataTrainingSolveStats;
-    use crate::output::{RowPoolStatistics, TrainingOutput};
+    use crate::output::{RowPoolStatistics, RunStatus, TrainingOutput};
     use crate::test_support::output::read_first_batch;
 
     fn make_record(iteration: u32, gap: Option<f64>) -> IterationRecord {
@@ -405,6 +406,7 @@ mod tests {
             iterations_completed: 0,
             converged: true,
             termination_reason: "gap tolerance reached".to_string(),
+            status: RunStatus::Complete,
             total_time_ms: 5_000,
             cut_stats: RowPoolStatistics {
                 total_generated: 200,

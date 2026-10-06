@@ -12,8 +12,9 @@ use cobre_io::{
     DeviationSummary, DeviationWorstEntry, DistributionInfo, HostLayout, MetadataBounds,
     MetadataConfiguration, MetadataConvergence, MetadataCost, MetadataIterations,
     MetadataProblemDimensions, MetadataRowPool, MetadataScenarios, MetadataSimulationSolveStats,
-    MetadataTrainingSolveStats, SimulationMetadata, TrainingMetadata, read_simulation_metadata,
-    read_training_metadata, write_simulation_metadata, write_training_metadata,
+    MetadataTrainingSolveStats, RunStatus, SimulationMetadata, TrainingMetadata,
+    read_simulation_metadata, read_training_metadata, write_simulation_metadata,
+    write_training_metadata,
 };
 
 // ── Frozen legacy fixtures ─────────────────────────────────────────────────────
@@ -259,7 +260,7 @@ fn fully_populated_training_metadata() -> TrainingMetadata {
         started_at: "2026-01-17T08:00:00Z".to_string(),
         completed_at: "2026-01-17T12:30:00Z".to_string(),
         duration_seconds: 16_200.0,
-        status: "complete".to_string(),
+        status: RunStatus::Complete,
         configuration: MetadataConfiguration {
             seed: Some(42),
             max_iterations: Some(100),
@@ -336,7 +337,7 @@ fn fully_populated_simulation_metadata() -> SimulationMetadata {
         started_at: "2026-01-17T13:00:00Z".to_string(),
         completed_at: "2026-01-17T13:15:00Z".to_string(),
         duration_seconds: 900.0,
-        status: "complete".to_string(),
+        status: RunStatus::Complete,
         scenarios: MetadataScenarios {
             total: 100,
             completed: 100,

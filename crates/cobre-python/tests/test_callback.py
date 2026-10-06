@@ -157,6 +157,29 @@ def test_callback_truthy_return_stops_early(tmp_path: pathlib.Path) -> None:
     )
 
 
+def test_callback_truthy_return_writes_partial_training_status(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A training a callback stop alone ended reports ``status`` ``partial``."""
+    import cobre.run  # noqa: PLC0415
+
+    def on_iteration(event: dict[str, Any]) -> bool:
+        return int(event["iteration"]) >= 3
+
+    cobre.run.run(
+        VALID_CASE,
+        output_dir=str(tmp_path),
+        config_overrides={"simulation": {"enabled": False}},
+        on_iteration=on_iteration,
+    )
+
+    metadata = json.loads((tmp_path / "training" / "metadata.json").read_text())
+    assert metadata["status"] == "partial", metadata
+    assert metadata["convergence"]["termination_reason"] == "graceful_shutdown", (
+        metadata["convergence"]
+    )
+
+
 def test_callback_raises_propagates_with_partial_metadata(
     tmp_path: pathlib.Path,
 ) -> None:

@@ -8,7 +8,7 @@ use super::dictionary::write_dictionaries;
 use super::error::OutputError;
 use super::manifest::{
     MetadataBounds, MetadataConfiguration, MetadataConvergence, MetadataIterations,
-    MetadataProblemDimensions, MetadataRowPool, MetadataScenarios, OutputContext,
+    MetadataProblemDimensions, MetadataRowPool, MetadataScenarios, OutputContext, RunStatus,
     SimulationMetadata, TrainingMetadata, write_simulation_metadata, write_training_metadata,
 };
 use super::software::{SOFTWARE_NAME, SOFTWARE_VERSION};
@@ -57,7 +57,7 @@ pub fn write_training_results(
         started_at: ctx.started_at.clone(),
         completed_at: ctx.completed_at.clone(),
         duration_seconds: training_output.total_time_ms as f64 / 1_000.0,
-        status: "complete".to_string(),
+        status: training_output.status,
         configuration: MetadataConfiguration {
             seed: config.training.tree_seed,
             max_iterations,
@@ -133,7 +133,7 @@ pub fn write_simulation_results(
         started_at: ctx.started_at.clone(),
         completed_at: ctx.completed_at.clone(),
         duration_seconds: simulation_output.total_time_ms as f64 / 1_000.0,
-        status: "complete".to_string(),
+        status: RunStatus::Complete,
         scenarios: MetadataScenarios {
             total: simulation_output.n_scenarios,
             completed: simulation_output.completed,
@@ -282,6 +282,7 @@ mod tests {
             iterations_completed: n_records as u32,
             converged: true,
             termination_reason: "gap tolerance reached".to_string(),
+            status: RunStatus::Complete,
             total_time_ms: 5_000,
             cut_stats: RowPoolStatistics {
                 total_generated: 200,
@@ -669,6 +670,47 @@ mod tests {
 
         assert!(tmp.path().join("simulation/metadata.json").is_file());
         assert!(!tmp.path().join("simulation/_SUCCESS").exists());
+    }
+
+    #[test]
+    fn training_metadata_records_the_phase_status() {
+        use crate::output::manifest::read_training_metadata;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut training = make_training_output(2);
+        training.status = RunStatus::Partial;
+
+        write_training_results(
+            tmp.path(),
+            &training,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_training_results must succeed");
+
+        let metadata = read_training_metadata(&tmp.path().join("training/metadata.json"))
+            .expect("read_training_metadata must succeed");
+        assert_eq!(metadata.status, RunStatus::Partial);
+    }
+
+    #[test]
+    fn simulation_metadata_stays_complete_with_failed_scenarios() {
+        use crate::output::manifest::read_simulation_metadata;
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("simulation")).unwrap();
+        let mut sim = make_simulation_output();
+        sim.completed = 7;
+        sim.failed = 3;
+
+        write_simulation_results(tmp.path(), &sim, &make_output_context())
+            .expect("write_simulation_results must succeed");
+
+        let metadata = read_simulation_metadata(&tmp.path().join("simulation/metadata.json"))
+            .expect("read_simulation_metadata must succeed");
+        assert_eq!(metadata.scenarios.failed, 3);
+        assert_eq!(metadata.status, RunStatus::Complete);
     }
 
     #[test]

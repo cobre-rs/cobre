@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use cobre_core::TrainingEvent;
 use cobre_io::{
-    IterationRecord, MetadataTrainingSolveStats, RowPoolStatistics, RowSelectionRecord,
+    IterationRecord, MetadataTrainingSolveStats, RowPoolStatistics, RowSelectionRecord, RunStatus,
     TrainingOutput,
 };
 
@@ -334,6 +334,11 @@ pub fn build_training_output(
     let mask = result.stop_decision.mask();
     let converged = result.stop_decision.configured_stop()
         && (mask.contains(StopMask::GAP) || mask.contains(StopMask::BOUND_STALLING));
+    let status = if result.stop_decision.ended_by_shutdown() {
+        RunStatus::Partial
+    } else {
+        RunStatus::Complete
+    };
 
     // None for non-positive lower bound: the gap percentage is undefined
     // (final_lb == 0) or sign-inverted (final_lb < 0).
@@ -397,6 +402,7 @@ pub fn build_training_output(
         iterations_completed,
         converged,
         termination_reason: result.reason.clone(),
+        status,
         total_time_ms: result.total_time_ms,
         cut_stats,
         cut_selection_records,
@@ -545,14 +551,15 @@ fn build_worker_timing_records(
 #[allow(clippy::unwrap_used, clippy::panic, clippy::doc_markdown)]
 mod tests {
     use cobre_core::TrainingEvent;
-    use cobre_io::IterationRecord;
+    use cobre_io::{IterationRecord, RunStatus};
 
     use super::{PhaseTimingTotals, build_training_output, sum_phase_timing_ms};
+    use crate::config::ShutdownSource;
     use crate::setup::NodeId;
     use crate::stopping_rule::{
         MonitorState, StopDecision, StoppingMode, StoppingRule, StoppingRuleSet,
     };
-    use crate::{FutureCostFunction, TrainingResult};
+    use crate::{ConvergenceMonitor, FutureCostFunction, SyncResult, TrainingResult};
 
     fn make_result(reason: &str, lb: f64, ub: f64, gap: f64, iterations: u64) -> TrainingResult {
         TrainingResult::new(
@@ -785,6 +792,126 @@ mod tests {
         let result = make_result("bound_stalling", 100.0, 101.0, 0.01, 5);
         let output = build_training_output(&result, &[], &make_empty_fcf(), false);
         assert!(!output.converged);
+    }
+
+    fn status_for(reason: &str, stop_decision: StopDecision) -> RunStatus {
+        let mut result = make_result(reason, 100.0, 110.0, 0.1, 1);
+        result.stop_decision = stop_decision;
+        build_training_output(&result, &[], &make_empty_fcf(), false).status
+    }
+
+    fn monitor_decision(max_iterations: u64, shutdown: ShutdownSource) -> StopDecision {
+        let rules = StoppingRuleSet {
+            rules: vec![StoppingRule::IterationLimit { limit: 100 }],
+            mode: StoppingMode::Any,
+        };
+        let mut monitor = ConvergenceMonitor::with_iteration_budget(rules, max_iterations);
+        monitor.set_shutdown(shutdown);
+        monitor.update(
+            100.0,
+            &SyncResult {
+                global_ub_mean: 110.0,
+                global_ub_std: 1.0,
+                ci_95_half_width: 0.5,
+                sync_time_ms: 0,
+            },
+            0.0,
+        )
+    }
+
+    #[test]
+    fn training_status_is_partial_only_when_a_shutdown_alone_ended_training() {
+        let cases = [
+            (
+                "cooperative shutdown, no configured stop",
+                status_for(
+                    "graceful_shutdown",
+                    monitor_decision(100, ShutdownSource::Cooperative),
+                ),
+                RunStatus::Partial,
+            ),
+            (
+                "signal shutdown, no configured stop",
+                status_for(
+                    "graceful_shutdown",
+                    monitor_decision(100, ShutdownSource::Signal),
+                ),
+                RunStatus::Partial,
+            ),
+            (
+                "shutdown with only part of an all-mode set triggered",
+                status_for(
+                    "graceful_shutdown",
+                    StoppingRuleSet {
+                        rules: vec![
+                            StoppingRule::IterationLimit { limit: 100 },
+                            StoppingRule::TimeLimit { seconds: 10.0 },
+                            StoppingRule::BoundStalling {
+                                tolerance: 1e-3,
+                                iterations: 1,
+                            },
+                        ],
+                        mode: StoppingMode::All,
+                    }
+                    .evaluate(&MonitorState {
+                        iteration: 1,
+                        wall_time_seconds: 0.0,
+                        lower_bound: 100.0,
+                        upper_bound: 200.0,
+                        lower_bound_history: vec![100.0],
+                        shutdown_requested: true,
+                    }),
+                ),
+                RunStatus::Partial,
+            ),
+            (
+                "configured stop with a shutdown at the same iteration",
+                status_for(
+                    "bound_stalling",
+                    stop_case(
+                        KIND_BOUND_STALLING,
+                        KIND_BOUND_STALLING,
+                        StoppingMode::Any,
+                        true,
+                    ),
+                ),
+                RunStatus::Complete,
+            ),
+            (
+                "exhausted budget with a signal shutdown",
+                status_for(
+                    "iteration_limit",
+                    monitor_decision(1, ShutdownSource::Signal),
+                ),
+                RunStatus::Complete,
+            ),
+            (
+                "configured stop, no shutdown",
+                status_for(
+                    "bound_stalling",
+                    stop_case(
+                        KIND_BOUND_STALLING,
+                        KIND_BOUND_STALLING,
+                        StoppingMode::Any,
+                        false,
+                    ),
+                ),
+                RunStatus::Complete,
+            ),
+            (
+                "default decision ended on an error",
+                status_for("error", StopDecision::default()),
+                RunStatus::Complete,
+            ),
+            (
+                "default decision with a graceful_shutdown reason",
+                status_for("graceful_shutdown", StopDecision::default()),
+                RunStatus::Complete,
+            ),
+        ];
+        for (case, actual, expected) in cases {
+            assert_eq!(actual, expected, "{case}");
+        }
     }
 
     #[test]

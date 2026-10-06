@@ -45,8 +45,8 @@ pub use manifest::{
     DeviationSummary, DeviationWorstEntry, DistributionInfo, HostLayout, MetadataBounds,
     MetadataConfiguration, MetadataConvergence, MetadataCost, MetadataIterations,
     MetadataProblemDimensions, MetadataRowPool, MetadataScenarios, MetadataSimulationSolveStats,
-    MetadataTrainingSolveStats, OutputContext, SetupTimings, SimulationMetadata, TrainingMetadata,
-    get_hostname, now_iso8601, read_simulation_metadata, read_training_metadata,
+    MetadataTrainingSolveStats, OutputContext, RunStatus, SetupTimings, SimulationMetadata,
+    TrainingMetadata, get_hostname, now_iso8601, read_simulation_metadata, read_training_metadata,
     write_simulation_metadata, write_training_metadata,
 };
 pub use provenance::write_provenance_report;
@@ -314,6 +314,9 @@ pub struct TrainingOutput {
     /// Human-readable description of the rule that terminated training.
     pub termination_reason: String,
 
+    /// The phase status written to `training/metadata.json`.
+    pub status: RunStatus,
+
     /// Total elapsed wall-clock time for the entire training run (ms).
     pub total_time_ms: u64,
 
@@ -537,6 +540,7 @@ mod tests {
             iterations_completed: 5,
             converged: true,
             termination_reason: "relative gap < 1%".to_string(),
+            status: RunStatus::Complete,
             total_time_ms: 12_000,
             cut_stats: RowPoolStatistics {
                 total_generated: 300,

@@ -16,15 +16,20 @@ use crate::{LoadError, StageIdResolver};
 use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
 use super::envelope_tolerance;
 
-// ── Rules 6-10: Penalty ordering ──────────────────────────────────────────────
+// ── Rules 8-10: Penalty ordering ──────────────────────────────────────────────
 
-/// Rules 6-10: checks the penalty hierarchy ordering across all hydros and buses.
+/// Rules 8-10: checks the penalty hierarchy ordering across all hydros and buses.
+///
+/// Only costs that share a unit are compared. Deficit and
+/// `generation_violation_below_cost` are $/`MWh`; the flow-violation and resource
+/// costs are $/(m³/s·h). A $/hm³ storage cost or a $/(m³/s·h) flow cost is never
+/// compared with a $/`MWh` cost, because the conversion needs plant productivity,
+/// which this layer does not have; that is why rules 6 and 7 are retired. Rule 9
+/// reads the directional evaporation and withdrawal costs because those are the
+/// ones the LP prices; the symmetric pair is only their fallback.
 ///
 /// Emits one `ModelQuality` warning per violated ordering check, aggregating
 /// all violating entities into a single warning with the count and worst-case ID.
-// Rationale: five independent ordering rules, each a full entity pass with its
-// own worst-case aggregation; per-rule helpers would not reduce the line count.
-#[allow(clippy::too_many_lines)]
 pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationContext) {
     let max_deficit_cost: f64 = data
         .buses
@@ -33,13 +38,12 @@ pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationCont
         .fold(f64::NEG_INFINITY, f64::max)
         .max(0.0);
 
-    // Skipped with no deficit segments (max == 0.0): there is then no comparand.
-    if max_deficit_cost > 0.0 {
+    {
         let mut violations: Vec<(i32, f64)> = Vec::new();
         for hydro in &data.hydros {
-            let filling = hydro.penalties.filling_target_violation_cost;
-            if filling >= max_deficit_cost {
-                violations.push((hydro.id.0, filling));
+            let generation = hydro.penalties.generation_violation_below_cost;
+            if generation >= max_deficit_cost {
+                violations.push((hydro.id.0, generation));
             }
         }
         if let Some(worst) = violations
@@ -52,9 +56,9 @@ pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationCont
                 "penalties.json",
                 None::<&str>,
                 format!(
-                    "Penalty ordering violation: filling_target_violation_cost ({}) should be < \
-                     deficit_cost ({max_deficit_cost}) so filling is not as hard as load shedding \
-                     -- {count} hydro(s) affected, worst-case hydro {}",
+                    "Penalty ordering violation: max(deficit_segment_costs) \
+                     ({max_deficit_cost}) should be > generation_violation_below_cost ({}) \
+                     (both $/MWh) -- {count} hydro(s) affected, worst case: Hydro {}",
                     worst.1, worst.0
                 ),
             );
@@ -62,11 +66,29 @@ pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationCont
     }
 
     {
+        let min_flow_cost = |h: &Hydro| {
+            let p = &h.penalties;
+            p.turbined_violation_below_cost
+                .min(p.outflow_violation_below_cost)
+                .min(p.outflow_violation_above_cost)
+                .min(p.evaporation_violation_pos_cost)
+                .min(p.evaporation_violation_neg_cost)
+                .min(p.water_withdrawal_violation_pos_cost)
+                .min(p.water_withdrawal_violation_neg_cost)
+        };
+
+        let max_resource_cost: f64 = data
+            .hydros
+            .iter()
+            .map(|h| h.penalties.spillage_cost.max(h.penalties.diversion_cost))
+            .fold(f64::NEG_INFINITY, f64::max)
+            .max(0.0);
+
         let mut violations: Vec<(i32, f64)> = Vec::new();
         for hydro in &data.hydros {
-            let higher = hydro.penalties.storage_violation_below_cost;
-            if higher <= max_deficit_cost {
-                violations.push((hydro.id.0, higher));
+            let min_flow = min_flow_cost(hydro);
+            if min_flow <= max_resource_cost {
+                violations.push((hydro.id.0, min_flow));
             }
         }
         if let Some(worst) = violations
@@ -79,91 +101,10 @@ pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationCont
                 "penalties.json",
                 None::<&str>,
                 format!(
-                    "Penalty ordering violation: storage_violation_below_cost ({}) should be > \
-                     max(deficit_segment_costs) ({max_deficit_cost}) -- {count} hydro(s) affected, \
-                     worst case: Hydro {}",
+                    "Penalty ordering violation: min(flow_violation_costs) ({}) should be > \
+                     max(resource_costs) ({max_resource_cost}) (both $/(m³/s·h)) -- {count} \
+                     hydro(s) affected, worst case: Hydro {}",
                     worst.1, worst.0
-                ),
-            );
-        }
-    }
-
-    {
-        let max_cv = |h: &Hydro| {
-            let p = &h.penalties;
-            p.turbined_violation_below_cost
-                .max(p.outflow_violation_below_cost)
-                .max(p.outflow_violation_above_cost)
-                .max(p.generation_violation_below_cost)
-                .max(p.evaporation_violation_cost)
-                .max(p.water_withdrawal_violation_cost)
-        };
-
-        let max_constraint_cost: f64 = data
-            .hydros
-            .iter()
-            .map(max_cv)
-            .fold(f64::NEG_INFINITY, f64::max)
-            .max(0.0);
-
-        if !data.hydros.is_empty()
-            && max_deficit_cost <= max_constraint_cost
-            && let Some(worst_hydro) = data.hydros.iter().max_by(|a, b| {
-                max_cv(a)
-                    .partial_cmp(&max_cv(b))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-        {
-            ctx.add_warning(
-                ErrorKind::ModelQuality,
-                "penalties.json",
-                None::<&str>,
-                format!(
-                    "Penalty ordering violation: max(deficit_segment_costs) \
-                     ({max_deficit_cost}) should be > max(constraint_violation_costs) \
-                     ({max_constraint_cost}) -- 1 hydro(s) affected, worst case: Hydro {}",
-                    worst_hydro.id.0
-                ),
-            );
-        }
-    }
-
-    {
-        let min_cv = |h: &Hydro| {
-            let p = &h.penalties;
-            p.turbined_violation_below_cost
-                .min(p.outflow_violation_below_cost)
-                .min(p.outflow_violation_above_cost)
-                .min(p.generation_violation_below_cost)
-                .min(p.evaporation_violation_cost)
-                .min(p.water_withdrawal_violation_cost)
-        };
-
-        let min_constraint_cost: f64 = data.hydros.iter().map(min_cv).fold(f64::INFINITY, f64::min);
-
-        let max_resource_cost: f64 = data
-            .hydros
-            .iter()
-            .map(|h| h.penalties.spillage_cost.max(h.penalties.diversion_cost))
-            .fold(f64::NEG_INFINITY, f64::max)
-            .max(0.0);
-
-        if min_constraint_cost <= max_resource_cost
-            && let Some(worst_hydro) = data.hydros.iter().min_by(|a, b| {
-                min_cv(a)
-                    .partial_cmp(&min_cv(b))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-        {
-            ctx.add_warning(
-                ErrorKind::ModelQuality,
-                "penalties.json",
-                None::<&str>,
-                format!(
-                    "Penalty ordering violation: min(constraint_violation_costs) \
-                     ({min_constraint_cost}) should be > max(resource_costs) \
-                     ({max_resource_cost}) -- 1 hydro(s) affected, worst case: Hydro {}",
-                    worst_hydro.id.0
                 ),
             );
         }
@@ -1266,114 +1207,59 @@ mod tests {
         }
     }
 
-    // ── Rules 6-7: Penalty ordering ───────────────────────────────────────────
+    // ── Rules 8-10: Penalty ordering ──────────────────────────────────────────
 
-    /// Check 6: `filling_target_violation_cost` (100) >= `max_deficit_cost` (50)
-    /// produces a `ModelQuality` warning that filling is not below load deficit.
+    /// A $/hm³ storage cost is never compared with a $/MWh deficit cost.
     #[test]
-    fn test_5b_penalty_ordering_filling_not_below_deficit_warns() {
+    fn test_5b_penalty_ordering_never_compares_storage_costs_with_deficit_costs() {
         let mut hydro = make_hydro_ordered_penalties(7);
         hydro.penalties.filling_target_violation_cost = 100.0;
-        let data = make_data_5b(
-            vec![hydro],
-            make_stages_5b(vec![0]),
-            vec![make_bus_with_deficit(1, 50.0)],
-            vec![],
-            vec![],
-            None,
-        );
-        let mut ctx = ValidationContext::new();
-        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
-        assert!(
-            !ctx.has_errors(),
-            "penalty-ordering checks are non-blocking warnings, not errors"
-        );
-        let warnings = ctx.warnings();
-        let check6: Vec<_> = warnings
-            .iter()
-            .filter(|w| {
-                w.kind == ErrorKind::ModelQuality && w.message.contains("should be < deficit_cost")
-            })
-            .collect();
-        assert_eq!(
-            check6.len(),
-            1,
-            "exactly 1 Check-6 ModelQuality warning expected"
-        );
-        let msg = &check6[0].message;
-        assert!(
-            msg.contains("filling_target_violation_cost"),
-            "message should contain 'filling_target_violation_cost', got: {msg}"
-        );
-        assert!(
-            msg.contains("not as hard as load shedding"),
-            "message should contain 'not as hard as load shedding', got: {msg}"
-        );
-    }
-
-    /// Check 6: `filling_target_violation_cost` (50) < `max_deficit_cost` (100)
-    /// emits no warning -- the fill schedule is softer than load shedding.
-    #[test]
-    fn test_5b_penalty_ordering_filling_below_deficit_no_warn() {
-        let mut hydro = make_hydro_ordered_penalties(7);
-        hydro.penalties.filling_target_violation_cost = 50.0;
-        let data = make_data_5b(
-            vec![hydro],
-            make_stages_5b(vec![0]),
-            vec![make_bus_with_deficit(1, 100.0)],
-            vec![],
-            vec![],
-            None,
-        );
-        let mut ctx = ValidationContext::new();
-        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
-        let warnings = ctx.warnings();
-        let check6 = warnings
-            .iter()
-            .filter(|w| w.message.contains("should be < deficit_cost"))
-            .count();
-        assert_eq!(check6, 0, "no Check-6 warning expected, got {check6}");
-    }
-
-    /// Check 6: with no bus deficit segments (`max_deficit_cost == 0.0`) the check is
-    /// skipped -- there is no deficit comparand even though filling cost is high.
-    #[test]
-    fn test_5b_penalty_ordering_no_deficit_segment_skips_check6() {
-        let mut hydro = make_hydro_ordered_penalties(7);
-        hydro.penalties.filling_target_violation_cost = 1000.0;
-        let data = make_data_5b(
-            vec![hydro],
-            make_stages_5b(vec![0]),
-            vec![],
-            vec![],
-            vec![],
-            None,
-        );
-        let mut ctx = ValidationContext::new();
-        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
-        let warnings = ctx.warnings();
-        let check6 = warnings
-            .iter()
-            .filter(|w| w.message.contains("should be < deficit_cost"))
-            .count();
-        assert_eq!(
-            check6, 0,
-            "Check 6 must be skipped when max_deficit_cost == 0.0, got {check6}"
-        );
-    }
-
-    /// Check 7: `storage_violation_below_cost` (5) <= `max_deficit_cost` (10)
-    /// produces a `ModelQuality` warning that storage-below should outrank load deficit.
-    #[test]
-    fn test_5b_penalty_storage_below_deficit_warns() {
-        let mut hydro = make_hydro_ordered_penalties(7);
         hydro.penalties.storage_violation_below_cost = 5.0;
-        // Keep filling below deficit so this isolates the Check-7 warning.
-        hydro.penalties.filling_target_violation_cost = 5.0;
         let data = make_data_5b(
             vec![hydro],
             make_stages_5b(vec![0]),
-            vec![make_bus_with_deficit(1, 10.0)],
+            vec![make_bus_with_deficit(1, 60.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(!ctx.has_errors());
+        let all = ctx.warnings();
+        let ordering: Vec<_> = all
+            .iter()
+            .filter(|w| w.message.starts_with("Penalty ordering violation:"))
+            .collect();
+        assert!(
+            ordering.is_empty(),
+            "no cross-unit penalty-ordering warning expected, got: {ordering:?}"
+        );
+    }
+
+    /// Deficit costs are compared only with `generation_violation_below_cost`,
+    /// the one other $/MWh cost.
+    #[test]
+    fn test_5b_penalty_ordering_compares_deficit_only_with_generation_violation_cost() {
+        let rule8 = |ctx: &ValidationContext| -> Vec<String> {
+            ctx.warnings()
+                .iter()
+                .filter(|w| {
+                    w.message
+                        .starts_with("Penalty ordering violation: max(deficit_segment_costs)")
+                })
+                .map(|w| w.message.clone())
+                .collect()
+        };
+
+        let mut hydro = make_hydro_ordered_penalties(7);
+        hydro.penalties.evaporation_violation_cost = 5000.0;
+        hydro.penalties.evaporation_violation_pos_cost = 5000.0;
+        hydro.penalties.evaporation_violation_neg_cost = 5000.0;
+        let data = make_data_5b(
+            vec![hydro],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 60.0)],
             vec![],
             vec![],
             None,
@@ -1381,22 +1267,204 @@ mod tests {
         let mut ctx = ValidationContext::new();
         validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
         assert!(
-            !ctx.has_errors(),
-            "penalty-ordering checks are non-blocking warnings, not errors"
+            rule8(&ctx).is_empty(),
+            "a $/(m3/s.h) cost must not be compared with a deficit cost, got: {:?}",
+            rule8(&ctx)
         );
-        let warnings = ctx.warnings();
-        let check7: Vec<_> = warnings
+
+        let mut hydro_a = make_hydro_ordered_penalties(3);
+        hydro_a.penalties.generation_violation_below_cost = 2000.0;
+        let mut hydro_b = make_hydro_ordered_penalties(9);
+        hydro_b.penalties.generation_violation_below_cost = 3000.0;
+        let data = make_data_5b(
+            vec![hydro_a, hydro_b],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 60.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let warnings = rule8(&ctx);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "exactly one rule-8 warning: {warnings:?}"
+        );
+        let msg = &warnings[0];
+        for expected in [
+            "generation_violation_below_cost (3000)",
+            "(both $/MWh)",
+            "2 hydro(s) affected",
+            "worst case: Hydro 9",
+        ] {
+            assert!(msg.contains(expected), "missing {expected:?} in: {msg}");
+        }
+    }
+
+    /// Resource costs are compared only with the $/(m³/s·h) flow-violation
+    /// costs, so `generation_violation_below_cost` ($/MWh) is not among them.
+    #[test]
+    fn test_5b_penalty_ordering_compares_resource_costs_only_with_flow_violation_costs() {
+        let rule9 = |ctx: &ValidationContext| -> Vec<String> {
+            ctx.warnings()
+                .iter()
+                .filter(|w| {
+                    w.message
+                        .starts_with("Penalty ordering violation: min(flow_violation_costs)")
+                })
+                .map(|w| w.message.clone())
+                .collect()
+        };
+
+        let mut hydro = make_hydro_ordered_penalties(7);
+        hydro.penalties.generation_violation_below_cost = 0.5;
+        let data = make_data_5b(
+            vec![hydro],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 60.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(
+            rule9(&ctx).is_empty(),
+            "a $/MWh cost must not be compared with a resource cost, got: {:?}",
+            rule9(&ctx)
+        );
+
+        let mut hydro = make_hydro_ordered_penalties(4);
+        hydro.penalties.turbined_violation_below_cost = 0.5;
+        let data = make_data_5b(
+            vec![hydro],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 60.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let warnings = rule9(&ctx);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "exactly one rule-9 warning: {warnings:?}"
+        );
+        let msg = &warnings[0];
+        for expected in [
+            "min(flow_violation_costs) (0.5)",
+            "max(resource_costs) (1)",
+            "(both $/(m³/s·h))",
+            "1 hydro(s) affected",
+            "worst case: Hydro 4",
+        ] {
+            assert!(msg.contains(expected), "missing {expected:?} in: {msg}");
+        }
+    }
+
+    /// A non-positive spillage or diversion cost is still flagged.
+    #[test]
+    fn test_5b_penalty_ordering_warns_on_non_positive_resource_cost() {
+        let mut hydro = make_hydro_ordered_penalties(7);
+        hydro.penalties.spillage_cost = 0.0;
+        let data = make_data_5b(
+            vec![hydro],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 60.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let all = ctx.warnings();
+        let warnings: Vec<_> = all
             .iter()
             .filter(|w| {
-                w.kind == ErrorKind::ModelQuality
-                    && w.message.contains("storage_violation_below_cost")
-                    && w.message.contains("max(deficit_segment_costs)")
+                w.message
+                    .starts_with("Penalty ordering violation: min(resource_costs)")
             })
             .collect();
-        assert_eq!(
-            check7.len(),
-            1,
-            "exactly 1 Check-7 ModelQuality warning expected"
+        assert_eq!(warnings.len(), 1, "exactly one rule-10 warning");
+        assert!(
+            warnings[0]
+                .message
+                .contains("min(resource_costs) (0) should be > 0"),
+            "got: {}",
+            warnings[0].message
+        );
+    }
+
+    /// The flow-violation costs are the directional evaporation and withdrawal
+    /// costs the LP prices, not the symmetric costs that only fill them in.
+    #[test]
+    fn test_5b_penalty_ordering_compares_the_priced_directional_costs_not_their_symmetric_fallbacks()
+     {
+        let flow_warnings = |ctx: &ValidationContext| -> Vec<String> {
+            ctx.warnings()
+                .iter()
+                .filter(|w| w.message.starts_with("Penalty ordering violation: min("))
+                .map(|w| w.message.clone())
+                .collect()
+        };
+
+        let hydros: Vec<Hydro> = (1..=4)
+            .map(|id| {
+                let mut h = make_hydro_ordered_penalties(id);
+                h.penalties.evaporation_violation_cost = 5000.0;
+                h.penalties.water_withdrawal_violation_cost = 5000.0;
+                match id {
+                    1 => h.penalties.water_withdrawal_violation_pos_cost = 0.5,
+                    2 => h.penalties.water_withdrawal_violation_neg_cost = 0.6,
+                    3 => h.penalties.evaporation_violation_pos_cost = 0.7,
+                    _ => h.penalties.evaporation_violation_neg_cost = 0.8,
+                }
+                h
+            })
+            .collect();
+        let data = make_data_5b(
+            hydros,
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 60.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let warnings = flow_warnings(&ctx);
+        assert_eq!(warnings.len(), 1, "exactly one warning: {warnings:?}");
+        let msg = &warnings[0];
+        for expected in [
+            "min(flow_violation_costs) (0.5)",
+            "max(resource_costs) (1)",
+            "4 hydro(s) affected",
+            "worst case: Hydro 1",
+        ] {
+            assert!(msg.contains(expected), "missing {expected:?} in: {msg}");
+        }
+
+        let mut hydro = make_hydro_ordered_penalties(7);
+        hydro.penalties.evaporation_violation_cost = 0.5;
+        hydro.penalties.water_withdrawal_violation_cost = 0.5;
+        let data = make_data_5b(
+            vec![hydro],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 60.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        assert!(
+            flow_warnings(&ctx).is_empty(),
+            "a symmetric fallback no LP column prices must not warn, got: {:?}",
+            flow_warnings(&ctx)
         );
     }
 

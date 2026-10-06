@@ -90,10 +90,10 @@
 //! | 3  | Cyclic graph: `annual_discount_rate > 0.0`                              | `stages.json`                                  | `InvalidValue`           |
 //! | 4  | *(retired — enforced at the parse layer by `stages.rs`'s `validate_block_hours` / `validate_risk_measure`; number never reused)* | — | — |
 //! | 5  | *(retired — enforced at the parse layer by `stages.rs`'s `validate_block_hours` / `validate_risk_measure`; number never reused)* | — | — |
-//! | 6  | `max(deficit_segment_costs) > filling_target_violation_cost`            | `penalties.json`                               | `ModelQuality` (warning) |
-//! | 7  | `storage_violation_below_cost > max(deficit_segment_costs)`             | `penalties.json`                               | `ModelQuality` (warning) |
-//! | 8  | `max(deficit_segment_costs) > max(constraint_violation_costs)`          | `penalties.json`                               | `ModelQuality` (warning) |
-//! | 9  | `min(constraint_violation_costs) > max(resource_costs)`                 | `penalties.json`                               | `ModelQuality` (warning) |
+//! | 6  | *(retired — compared a $/hm³ cost with a $/`MWh` cost, which needs plant productivity; number never reused)* | — | — |
+//! | 7  | *(retired — compared a $/hm³ cost with a $/`MWh` cost, which needs plant productivity; number never reused)* | — | — |
+//! | 8  | `max(deficit_segment_costs) > generation_violation_below_cost` (both $/`MWh`) | `penalties.json`                               | `ModelQuality` (warning) |
+//! | 9  | `min(flow_violation_costs) > max(resource_costs)` (both $/(m³/s·h))     | `penalties.json`                               | `ModelQuality` (warning) |
 //! |10  | `min(resource_costs) > 0`                                               | `penalties.json`                               | `ModelQuality` (warning) |
 //! |11  | FPHA hydros: `turbined_cost >= 0`                                  | `penalties.json`                               | `BusinessRuleViolation`  |
 //! |12  | `std_m3s >= 0.0`; warn when `== 0.0` (deterministic inflow) — suppressed for a class whose resolved scheme is External | `scenarios/inflow_seasonal_stats.parquet` | `ModelQuality` (warning) |

@@ -78,10 +78,10 @@ def test_validate_emits_penalty_ordering_warning() -> None:
     Rather than relying on a shipped example happening to violate the penalty
     hierarchy (which is curated to be well-formed), this constructs a case that
     deliberately re-inverts the ordering: the bus deficit-segment cost is set
-    BELOW the maximum hydro constraint-violation cost (``evaporation_violation_cost``
-    stays at 5000). That trips semantic "Check 8"
-    (``max(deficit_segment_costs) <= max(constraint_violation_costs)``), which
-    emits a ``ModelQuality`` penalty-ordering warning.
+    BELOW ``generation_violation_below_cost`` (1000 in penalties.json). That
+    trips the same-unit check of the deficit costs against
+    ``generation_violation_below_cost`` (both $/MWh), which emits a
+    ``ModelQuality`` penalty-ordering warning.
 
     This pins the warnings plumbing (semantic layer → ReportEntry → Python dict)
     end-to-end and is robust to future curation of the shipped example. A
@@ -92,15 +92,16 @@ def test_validate_emits_penalty_ordering_warning() -> None:
     case_dir = copy_case_to_tempdir(VALID_CASE_1DTOY)
     try:
         # Re-invert the penalty hierarchy: drive the bus deficit-segment cost
-        # below the max constraint-violation cost (evaporation_violation_cost =
-        # 5000 in penalties.json). 1dtoy carries an entity-level deficit segment
-        # on its single bus, so system/buses.json is the resolved cost source.
+        # below generation_violation_below_cost (1000 in penalties.json), the
+        # same-unit ($/MWh) comparand. 1dtoy carries an entity-level deficit
+        # segment on its single bus, so system/buses.json is the resolved cost
+        # source.
         buses_path = case_dir / "system" / "buses.json"
         with buses_path.open() as f:
             buses = json.load(f)
         for bus in buses["buses"]:
             for segment in bus["deficit_segments"]:
-                segment["cost"] = 1000.0
+                segment["cost"] = 500.0
         with buses_path.open("w") as f:
             json.dump(buses, f, indent=2)
 

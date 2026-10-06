@@ -137,8 +137,7 @@ are consumed for **filling-phase** hydros: `fill_filling_target_columns`
 target-shortfall slack at every Filling stage, and
 `fill_filled_min_storage_floor_columns` writes `storage_violation_below_cost` on
 the `σ^{v-}` operating-floor slack at every Operating stage of a filling hydro;
-the paired soft `≥` rows live in `lp/builder/rows.rs`, and the penalty ordering
-is validated (a filling-target penalty must exceed the max deficit cost). They
+the paired soft `≥` rows live in `lp/builder/rows.rs`. They
 are unconsumed only for ordinary non-filling hydros, whose storage bounds are
 HARD so no slack column exists — the case a prior note over-generalized to
 "always 0". Consumed, not reserved: deliberately absent from the register above.
@@ -610,6 +609,32 @@ CLI exits 1 and `cobre.write_policy_checkpoint` raises `ValidationError`.
 **Owner.** The Python bindings owner.
 
 **Trigger.** Python's training-output writes return typed errors.
+
+### Energy-equivalent penalty ordering
+
+**What it is.** The load-time penalty-ordering warnings
+(`check_penalty_ordering`, `crates/cobre-io/src/validation/semantic/scenarios.rs`)
+compare only costs that share a unit. The documented priority ordering
+compares every cost as an energy-equivalent $/MWh, which turns a $/hm³
+storage cost or a $/(m³/s·h) flow cost into $/MWh through the plant's
+accumulated productivity. Validation runs before any productivity is known,
+so the storage-violation and filling-target costs are not checked against
+deficit, the flow-violation costs are not checked against deficit, and the
+flow-versus-resource check compares the costs of different plants as raw
+numbers. The check reads each plant's resolved costs, before any stage
+override: stage-tier `penalty_overrides_hydro` values, which can reprice any
+of these costs for a stage, are never ordering-checked. The `cobre-docs`
+penalty-system and error-code pages still list the retired
+storage-versus-deficit warnings and describe the checks as raw comparisons of
+every tier.
+
+**Owner.** The input-validation owner; the `cobre-docs` methodology owner for
+the two pages.
+
+**Trigger.** An energy-equivalent ordering check is requested, a setup
+stage that already holds each plant's accumulated productivity gains a
+validation pass, or a stage override inverts the ordering in a reported
+study. For `cobre-docs`, the next revision of the penalty-system page.
 
 ## Deferred-debt register — whole-lifecycle audit findings
 

@@ -1046,8 +1046,12 @@ pub(crate) fn build_study_setup(
         format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write model provenance: {e}")
     })?;
 
-    let stochastic_summary =
-        build_stochastic_summary(&system, &setup.inputs.stochastic, estimation_report.as_ref(), seed);
+    let stochastic_summary = build_stochastic_summary(
+        &system,
+        &setup.inputs.stochastic,
+        estimation_report.as_ref(),
+        seed,
+    );
     let hydro_models_summary = build_hydro_model_summary(&setup.hydro_models, &system);
 
     let hydro_models_path = output_dir.join("training/hydro_models.json");
@@ -1130,8 +1134,9 @@ fn validate_loaded_policy(
         slots: &current_manifest,
         graph: &current_graph,
     };
-    let proof = validate_policy_load::<FullFcf>(checkpoint.metadata.written_by(), &source, &current)
-        .map_err(|e| format!("{POLICY_VALIDATION_ERROR_PREFIX}: {e}"))?;
+    let proof =
+        validate_policy_load::<FullFcf>(checkpoint.metadata.written_by(), &source, &current)
+            .map_err(|e| format!("{POLICY_VALIDATION_ERROR_PREFIX}: {e}"))?;
 
     for msg in &proof.warnings {
         eprintln!("cobre-python: policy validation warning: {msg}");
@@ -1180,9 +1185,12 @@ fn seed_warm_start_basis_cache(
     checkpoint: &cobre_io::PolicyCheckpoint,
 ) -> Result<(), String> {
     if !checkpoint.stage_bases.is_empty() {
-        let basis_cache =
-            build_basis_cache_from_checkpoint(&checkpoint.stage_bases, &checkpoint.stage_cuts, setup)
-                .map_err(|e| format!("{POLICY_VALIDATION_ERROR_PREFIX}: {e}"))?;
+        let basis_cache = build_basis_cache_from_checkpoint(
+            &checkpoint.stage_bases,
+            &checkpoint.stage_cuts,
+            setup,
+        )
+        .map_err(|e| format!("{POLICY_VALIDATION_ERROR_PREFIX}: {e}"))?;
         setup.set_warm_start_basis_cache(basis_cache);
     }
     Ok(())

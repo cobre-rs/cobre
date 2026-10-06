@@ -11,7 +11,7 @@ use predicates::prelude::*;
 use tempfile::TempDir;
 
 mod common;
-use common::PENALTIES_JSON;
+use common::{PENALTIES_JSON, copy_dir_recursive};
 
 // ── fixture helpers ───────────────────────────────────────────────────────────
 
@@ -915,20 +915,6 @@ fn fpha_hydro_without_production_models_json_stdout_mentions_file() {
 }
 
 // ── non-boundary scalar-parameter presence guard ───────────────────────────────
-
-fn copy_dir_recursive(src: &Path, dst: &Path) {
-    fs::create_dir_all(dst).unwrap();
-    for entry in fs::read_dir(src).unwrap() {
-        let entry = entry.unwrap();
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_dir_recursive(&from, &to);
-        } else {
-            fs::copy(&from, &to).unwrap();
-        }
-    }
-}
 
 /// A non-boundary deck whose scalar-parameter table has a resolution gap (a
 /// `seasonal` param with no entry for the resolved season) exits 1, honoring

@@ -21,7 +21,9 @@ use predicates::prelude::*;
 use tempfile::TempDir;
 
 mod common;
-use common::{case_dir, cobre, make_valid_case, restamp_policy_version, write_file};
+use common::{
+    case_dir, cobre, copy_dir_recursive, make_valid_case, restamp_policy_version, write_file,
+};
 
 #[test]
 fn valid_case_exits_0() {
@@ -1282,20 +1284,6 @@ fn run_produces_deterministic_end_block_and_metadata() {
 }
 
 // ── Stored-basis dimension mismatch at simulation-only load ──────────────────
-
-fn copy_dir_recursive(src: &Path, dst: &Path) {
-    fs::create_dir_all(dst).unwrap();
-    for entry in fs::read_dir(src).unwrap() {
-        let entry = entry.unwrap();
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to);
-        } else {
-            fs::copy(&from, &to).unwrap();
-        }
-    }
-}
 
 /// `examples/1dtoy`'s two thermals plus a third on the same bus: adds LP
 /// columns but no state, so a policy trained on this variant passes every

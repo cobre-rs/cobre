@@ -26,10 +26,17 @@ pub struct TrainingConfig {
     /// List of stopping rule configurations.
     ///
     /// **Mandatory** — no default. Must contain at least one `iteration_limit` rule.
-    #[cfg_attr(feature = "schema", schemars(required))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            required,
+            extend("contains" = {"required": ["type"], "properties": {"type": {"const": "iteration_limit"}}})
+        )
+    )]
     pub stopping_rules: Option<Vec<StoppingRuleConfig>>,
 
-    /// How multiple stopping rules combine: `any` (OR) or `all` (AND).
+    /// How multiple stopping rules combine: `any` (OR) or `all` (AND over every
+    /// rule except `iteration_limit`, which caps the run).
     #[serde(default)]
     pub stopping_mode: StoppingMode,
 
@@ -110,7 +117,8 @@ pub enum StoppingMode {
     /// Stop when any configured rule triggers (OR).
     #[default]
     Any,
-    /// Stop when all configured rules trigger at the same iteration (AND).
+    /// Stop when every configured rule other than `iteration_limit` triggers at
+    /// the same iteration (AND); the largest `iteration_limit` caps the run.
     All,
 }
 

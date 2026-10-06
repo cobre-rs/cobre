@@ -72,8 +72,8 @@ pub use node_graph::{
     OpeningSource, StageIdx, Traversal, TypedVec,
 };
 pub use params::{
-    BoundaryStateRequirements, DEFAULT_COST_SCALE_FACTOR, DEFAULT_FORWARD_PASSES,
-    DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, SimulationEnumeratedRequest, StudyParams,
+    BoundaryStateRequirements, DEFAULT_COST_SCALE_FACTOR, DEFAULT_FORWARD_PASSES, DEFAULT_SEED,
+    SimulationEnumeratedRequest, StudyParams,
 };
 pub use scenario_library_set::{PhaseLibraries, ScenarioLibraries};
 pub use solve_inputs::SolveInputs;
@@ -1652,7 +1652,9 @@ fn build_checked_node_graph(
 /// # Errors
 ///
 /// Propagates [`resolve_enumerated_training_count`]'s and
-/// [`resolve_enumerated_simulation_count`]'s admissibility and overflow errors.
+/// [`resolve_enumerated_simulation_count`]'s admissibility and overflow errors,
+/// and [`max_iterations_from_rules`]'s error for a rule set with no
+/// `IterationLimit` rule.
 fn resolve_phase_configs(
     node_graph: &NodeGraph,
     config: &StudyParams,
@@ -1679,7 +1681,7 @@ fn resolve_phase_configs(
         SimulationEnumeratedRequest::Enumerated => resolve_enumerated_simulation_count(node_graph)?,
         SimulationEnumeratedRequest::Sampled => config.n_scenarios,
     };
-    let max_iterations = max_iterations_from_rules(&config.stopping_rule_set);
+    let max_iterations = max_iterations_from_rules(&config.stopping_rule_set)?;
 
     Ok((
         LoopParams {
@@ -2137,11 +2139,12 @@ fn assert_external_library_widths(
     Ok(())
 }
 
-/// Return the maximum iteration budget from the stopping rule set.
+/// The run's iteration budget: the largest `IterationLimit` limit. Used for FCF pre-sizing.
 ///
-/// Used for FCF pre-sizing. If no iteration limit is present, returns
-/// [`DEFAULT_MAX_ITERATIONS`].
-fn max_iterations_from_rules(rules: &StoppingRuleSet) -> u64 {
+/// # Errors
+///
+/// Returns [`SddpError::Validation`] when the rule set has no `IterationLimit` rule.
+fn max_iterations_from_rules(rules: &StoppingRuleSet) -> Result<u64, SddpError> {
     rules
         .rules
         .iter()
@@ -2153,7 +2156,12 @@ fn max_iterations_from_rules(rules: &StoppingRuleSet) -> u64 {
             }
         })
         .max()
-        .unwrap_or(DEFAULT_MAX_ITERATIONS)
+        .ok_or_else(|| {
+            SddpError::Validation(
+                "the stopping rule set has no iteration_limit rule; every run needs one for its iteration budget"
+                    .to_string(),
+            )
+        })
 }
 
 /// Build the per-study-stage risk measures from the system's stage risk configs.

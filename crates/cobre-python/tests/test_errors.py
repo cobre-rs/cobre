@@ -202,7 +202,12 @@ def test_setup_validation_failure_raises_validation_error(tmp_path: pathlib.Path
     if not case_dir.exists():
         pytest.skip(f"examples/1dtoy not found at {case_dir}")
 
-    overrides = {"training.stopping_rules": [{"type": "gap", "tolerance": 1000.0}]}
+    overrides = {
+        "training.stopping_rules": [
+            {"type": "iteration_limit", "limit": 1},
+            {"type": "gap", "tolerance": 1000.0},
+        ]
+    }
 
     with pytest.raises(cobre.errors.ValidationError, match="gap stopping rule is inadmissible"):
         cobre.run.run(str(case_dir), output_dir=str(tmp_path), config_overrides=overrides)

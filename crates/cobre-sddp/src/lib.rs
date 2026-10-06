@@ -125,9 +125,9 @@ pub use production::hydro_models::{
 #[cfg(any(test, feature = "test-support"))]
 pub use setup::lp_build_inputs::build_stage_templates_resolving_layout;
 pub use setup::{
-    BoundaryStateRequirements, DEFAULT_COST_SCALE_FACTOR, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED,
-    PrepareStochasticResult, StudyParams, StudySetup, build_stochastic_context_for_study,
-    prepare_stochastic, study_horizon_end, validate_generic_constraint_parameters,
+    BoundaryStateRequirements, DEFAULT_COST_SCALE_FACTOR, DEFAULT_SEED, PrepareStochasticResult,
+    StudyParams, StudySetup, build_stochastic_context_for_study, prepare_stochastic,
+    study_horizon_end, validate_generic_constraint_parameters,
 };
 pub use simulation::{
     ScenarioCategoryCosts, SimulationError, SimulationHydroResult, SimulationScenarioResult,

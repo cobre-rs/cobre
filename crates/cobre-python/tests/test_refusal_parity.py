@@ -149,6 +149,20 @@ def _historical_forward_scheme_with_a_zero_deviation_season(
     )
 
 
+def _time_limit_only_stopping_rules(case: pathlib.Path) -> None:
+    def edit(config: Any) -> None:
+        config["training"]["stopping_rules"] = [{"type": "time_limit", "seconds": 600}]
+
+    _edit_json(case / "config.json", edit)
+
+
+def _empty_stopping_rules(case: pathlib.Path) -> None:
+    def edit(config: Any) -> None:
+        config["training"]["stopping_rules"] = []
+
+    _edit_json(case / "config.json", edit)
+
+
 ROWS = [
     _row(
         name="travel_time_negative",
@@ -236,6 +250,24 @@ ROWS = [
         mutate=_historical_forward_scheme_with_a_zero_deviation_season,
         outcome="PlainRefusal",
         fragment="V2.3: historical library contains non-finite eta",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="stopping_rules_without_iteration_limit_rule",
+        base_case="deterministic/d01-thermal-dispatch",
+        mutate=_time_limit_only_stopping_rules,
+        outcome="BracketedRefusal",
+        kind="SchemaViolation",
+        fragment="field training.stopping_rules: must contain an iteration_limit rule",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="empty_stopping_rules",
+        base_case="deterministic/d01-thermal-dispatch",
+        mutate=_empty_stopping_rules,
+        outcome="BracketedRefusal",
+        kind="SchemaViolation",
+        fragment="field training.stopping_rules: must contain an iteration_limit rule",
         error_class_name="ValidationError",
     ),
 ]

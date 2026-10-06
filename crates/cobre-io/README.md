@@ -83,7 +83,8 @@ impl — the latter would lose the path context every diagnostic needs.
 
 `training.selection` and `training.stopping_rules` (must include at least one
 `iteration_limit` rule) have no defaults; `parse_config` returns
-`LoadError::SchemaError` if either is absent or `null`.
+`LoadError::SchemaError` if either is absent or `null`, or if
+`training.stopping_rules` has no `iteration_limit` rule.
 
 `training.stopping_rules` accepts four internally-tagged (`"type"`) rule
 variants — `iteration_limit { limit }`, `time_limit { seconds }`,

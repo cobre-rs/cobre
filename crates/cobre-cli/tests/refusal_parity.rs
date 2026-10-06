@@ -147,6 +147,24 @@ const ROWS: &[ParityRow] = &[
         outcome: Outcome::PlainRefusal,
         fragment: "V2.3: historical library contains non-finite eta",
     },
+    ParityRow {
+        name: "stopping_rules_without_iteration_limit_rule",
+        base_case: "deterministic/d01-thermal-dispatch",
+        mutate: time_limit_only_stopping_rules,
+        outcome: Outcome::BracketedRefusal {
+            kind: "SchemaViolation",
+        },
+        fragment: "field training.stopping_rules: must contain an iteration_limit rule",
+    },
+    ParityRow {
+        name: "empty_stopping_rules",
+        base_case: "deterministic/d01-thermal-dispatch",
+        mutate: empty_stopping_rules,
+        outcome: Outcome::BracketedRefusal {
+            kind: "SchemaViolation",
+        },
+        fragment: "field training.stopping_rules: must contain an iteration_limit rule",
+    },
 ];
 
 fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) {
@@ -259,6 +277,18 @@ fn write_inflow_seasonal_stats_with_zero_deviation_at_stage_3(path: &Path) {
     let mut writer = ArrowWriter::try_new(fs::File::create(path).unwrap(), schema, None).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
+}
+
+fn time_limit_only_stopping_rules(case: &Path) {
+    edit_json(&case.join("config.json"), |config| {
+        config["training"]["stopping_rules"] = json!([{"type": "time_limit", "seconds": 600}]);
+    });
+}
+
+fn empty_stopping_rules(case: &Path) {
+    edit_json(&case.join("config.json"), |config| {
+        config["training"]["stopping_rules"] = json!([]);
+    });
 }
 
 struct Observed<'a> {

@@ -107,13 +107,14 @@ pub struct Config {
 ///
 /// # Errors
 ///
-/// | Condition                         | Error variant                 |
-/// | --------------------------------- | ----------------------------- |
-/// | File not found / read failure     | [`LoadError::IoError`]        |
-/// | Invalid JSON syntax               | [`LoadError::ParseError`]     |
-/// | `training.selection` missing      | [`LoadError::SchemaError`]    |
-/// | `training.stopping_rules` missing | [`LoadError::SchemaError`]    |
-/// | Unknown stopping rule `"type"`    | [`LoadError::SchemaError`]    |
+/// | Condition                                              | Error variant              |
+/// | ------------------------------------------------------ | -------------------------- |
+/// | File not found / read failure                          | [`LoadError::IoError`]     |
+/// | Invalid JSON syntax                                    | [`LoadError::ParseError`]  |
+/// | `training.selection` missing                           | [`LoadError::SchemaError`] |
+/// | `training.stopping_rules` missing                      | [`LoadError::SchemaError`] |
+/// | No `iteration_limit` rule in `training.stopping_rules` | [`LoadError::SchemaError`] |
+/// | Unknown stopping rule `"type"`                         | [`LoadError::SchemaError`] |
 ///
 /// # Examples
 ///
@@ -156,8 +157,9 @@ fn extract_field_from_serde_msg(msg: &str) -> String {
     "<unknown>".to_string()
 }
 
-/// Post-deserialization validation that the mandatory `training.selection` and
-/// `training.stopping_rules` fields are present.
+/// Post-deserialization validation that `training.selection` resolves a
+/// forward-pass count and `training.stopping_rules` is present and holds an
+/// `iteration_limit` rule.
 pub(crate) fn validate_config(config: &Config, path: &Path) -> Result<(), LoadError> {
     if config.resolve_forward_passes().is_none() {
         return Err(LoadError::SchemaError {
@@ -167,11 +169,22 @@ pub(crate) fn validate_config(config: &Config, path: &Path) -> Result<(), LoadEr
         });
     }
 
-    if config.training.stopping_rules.is_none() {
+    let Some(rules) = &config.training.stopping_rules else {
         return Err(LoadError::SchemaError {
             path: path.to_path_buf(),
             field: "training.stopping_rules".to_string(),
             message: "required field is missing".to_string(),
+        });
+    };
+
+    if !rules
+        .iter()
+        .any(|r| matches!(r, StoppingRuleConfig::IterationLimit { .. }))
+    {
+        return Err(LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: "training.stopping_rules".to_string(),
+            message: "must contain an iteration_limit rule".to_string(),
         });
     }
 
@@ -691,6 +704,47 @@ mod tests {
                 other => panic!("expected SchemaError for training {training}, got: {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn stopping_rules_without_an_iteration_limit_rule_are_rejected_at_load() {
+        fn assert_refused(result: Result<Config, LoadError>, case: &str) {
+            match result {
+                Err(LoadError::SchemaError { field, message, .. }) => {
+                    assert_eq!(field, "training.stopping_rules", "case: {case}");
+                    assert!(
+                        message.contains("iteration_limit"),
+                        "case {case}: message should name iteration_limit, got: {message}"
+                    );
+                }
+                other => panic!("case {case}: expected SchemaError, got: {other:?}"),
+            }
+        }
+
+        for rules in [
+            r#"[{"type": "time_limit", "seconds": 60.0}]"#,
+            "[]",
+            r#"[{"type": "gap", "tolerance": 1.0}, {"type": "bound_stalling", "iterations": 5, "tolerance": 0.01}]"#,
+        ] {
+            let f = write_config(&format!(
+                r#"{{"training": {{"selection": {{"method": "sampled", "forward_passes": 1}}, "stopping_rules": {rules}}}}}"#
+            ));
+            assert_refused(parse_config(f.path()), rules);
+        }
+
+        let overrides = override_map(&[("training.stopping_rules", serde_json::json!([]))]);
+        assert_refused(
+            Config::with_overrides(&base_value(OVERRIDE_BASE_CONFIG), &overrides),
+            "override to []",
+        );
+    }
+
+    #[test]
+    fn stopping_rules_with_an_iteration_limit_rule_in_any_position_load() {
+        let f = write_config(
+            r#"{"training": {"selection": {"method": "sampled", "forward_passes": 1}, "stopping_rules": [{"type": "time_limit", "seconds": 60.0}, {"type": "iteration_limit", "limit": 3}]}}"#,
+        );
+        parse_config(f.path()).unwrap();
     }
 
     /// Nonexistent file → IoError with matching path.

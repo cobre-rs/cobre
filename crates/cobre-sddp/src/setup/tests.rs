@@ -1548,7 +1548,7 @@ fn study_params_from_config_defaults() {
         training: TrainingConfig {
             enabled: true,
             tree_seed: None,
-            stopping_rules: None,
+            stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 7 }]),
             stopping_mode: cobre_io::config::StoppingMode::Any,
             cut_selection: RowSelectionConfig::default(),
             solver: TrainingSolverConfig::default(),
@@ -1573,17 +1573,13 @@ fn study_params_from_config_defaults() {
         params.forward_passes, DEFAULT_FORWARD_PASSES,
         "forward_passes should default to DEFAULT_FORWARD_PASSES"
     );
-    assert_eq!(
-        params.stopping_rule_set.rules.len(),
-        1,
-        "expected exactly 1 default stopping rule"
-    );
     assert!(
         matches!(
-            params.stopping_rule_set.rules[0],
-            StoppingRule::IterationLimit { .. }
+            params.stopping_rule_set.rules.as_slice(),
+            [StoppingRule::IterationLimit { limit: 7 }]
         ),
-        "default rule should be IterationLimit"
+        "expected exactly the configured IterationLimit rule: {:?}",
+        params.stopping_rule_set.rules
     );
     assert!(
         matches!(params.stopping_rule_set.mode, StoppingMode::Any),
@@ -1597,6 +1593,42 @@ fn study_params_from_config_defaults() {
         params.cut_selection.is_none(),
         "cut_selection should be None by default"
     );
+}
+
+#[test]
+fn iteration_budget_is_the_largest_iteration_limit_rule() {
+    use crate::stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet};
+
+    for mode in [StoppingMode::Any, StoppingMode::All] {
+        let rules = StoppingRuleSet {
+            rules: vec![
+                StoppingRule::IterationLimit { limit: 30 },
+                StoppingRule::TimeLimit { seconds: 60.0 },
+                StoppingRule::IterationLimit { limit: 80 },
+            ],
+            mode,
+        };
+        let budget = super::max_iterations_from_rules(&rules);
+        assert!(matches!(budget, Ok(80)), "mode {mode:?}: {budget:?}");
+    }
+}
+
+#[test]
+fn rule_set_without_an_iteration_limit_rule_has_no_iteration_budget() {
+    use crate::stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet};
+
+    for rules in [vec![], vec![StoppingRule::TimeLimit { seconds: 60.0 }]] {
+        let rules = StoppingRuleSet {
+            rules,
+            mode: StoppingMode::Any,
+        };
+        match super::max_iterations_from_rules(&rules) {
+            Err(SddpError::Validation(msg)) => {
+                assert!(msg.contains("iteration_limit"), "message: {msg}");
+            }
+            other => panic!("expected SddpError::Validation, got {other:?}"),
+        }
+    }
 }
 
 #[test]

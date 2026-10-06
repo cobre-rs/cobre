@@ -740,6 +740,23 @@ order and the round trip with the matching input file.
 **Trigger.** A column of one of these schemas is added, renamed or redefined,
 so that the same edit is needed in the dictionary and in a module doc.
 
+### Training metadata `max_iterations` reports the first `iteration_limit` rule
+
+**What it is.** `training/metadata.json` records `configuration.max_iterations`
+(`MetadataConfiguration`, `crates/cobre-io/src/output/manifest.rs`) as the
+limit of the first `iteration_limit` rule in `training.stopping_rules`
+(`extract_max_iterations`, `crates/cobre-io/src/output/results_writer.rs`).
+The run's iteration budget is the largest such limit
+(`max_iterations_from_rules`, `crates/cobre-sddp/src/setup/mod.rs`), which
+sizes the cut pool and ends the training loop. With one `iteration_limit`
+rule the two agree; with several they can differ.
+
+**Owner.** The output-contract owner.
+
+**Trigger.** A supported case lists more than one `iteration_limit` rule, or
+a consumer of `training/metadata.json` reads `max_iterations` as the run's
+iteration budget.
+
 ## Deferred-debt register — whole-lifecycle audit findings
 
 Findings of the full `cobre run` lifecycle read, described by behavior. Each

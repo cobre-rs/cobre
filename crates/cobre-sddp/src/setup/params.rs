@@ -34,9 +34,6 @@ pub enum SimulationEnumeratedRequest {
 /// Default number of forward-pass trajectories when not specified in config.
 pub const DEFAULT_FORWARD_PASSES: u32 = 1;
 
-/// Default maximum iterations when no stopping rule specifies an iteration limit.
-pub const DEFAULT_MAX_ITERATIONS: u64 = 100;
-
 /// Default random seed for stochastic scenario generation.
 pub const DEFAULT_SEED: u64 = 42;
 
@@ -207,12 +204,7 @@ impl StudyParams {
             Some(ForwardPassesResolution::Enumerated) => (DEFAULT_FORWARD_PASSES, true),
         };
 
-        let rule_configs = match &config.training.stopping_rules {
-            Some(rules) if !rules.is_empty() => rules.clone(),
-            _ => vec![StoppingRuleConfig::IterationLimit {
-                limit: u32::try_from(DEFAULT_MAX_ITERATIONS).unwrap_or(u32::MAX),
-            }],
-        };
+        let rule_configs = config.training.stopping_rules.clone().unwrap_or_default();
 
         let stopping_rules: Vec<StoppingRule> = rule_configs
             .into_iter()
@@ -480,30 +472,39 @@ mod tests {
     /// `relative_tolerance` set.
     fn config_with_gap_stopping_rule_neither_field() -> Config {
         let mut config = base_test_config();
-        config.training.stopping_rules = Some(vec![StoppingRuleConfig::Gap {
-            tolerance: None,
-            relative_tolerance: None,
-        }]);
+        config.training.stopping_rules = Some(vec![
+            StoppingRuleConfig::IterationLimit { limit: 1 },
+            StoppingRuleConfig::Gap {
+                tolerance: None,
+                relative_tolerance: None,
+            },
+        ]);
         config
     }
 
     /// Stopping rules containing a well-formed absolute-only `Gap` entry.
     fn config_with_gap_stopping_rule() -> Config {
         let mut config = base_test_config();
-        config.training.stopping_rules = Some(vec![StoppingRuleConfig::Gap {
-            tolerance: Some(1000.0),
-            relative_tolerance: None,
-        }]);
+        config.training.stopping_rules = Some(vec![
+            StoppingRuleConfig::IterationLimit { limit: 1 },
+            StoppingRuleConfig::Gap {
+                tolerance: Some(1000.0),
+                relative_tolerance: None,
+            },
+        ]);
         config
     }
 
     /// A relative-only `Gap` entry with no user `BoundStalling`.
     fn config_with_gap_relative_only() -> Config {
         let mut config = base_test_config();
-        config.training.stopping_rules = Some(vec![StoppingRuleConfig::Gap {
-            tolerance: None,
-            relative_tolerance: Some(0.01),
-        }]);
+        config.training.stopping_rules = Some(vec![
+            StoppingRuleConfig::IterationLimit { limit: 1 },
+            StoppingRuleConfig::Gap {
+                tolerance: None,
+                relative_tolerance: Some(0.01),
+            },
+        ]);
         config
     }
 
@@ -512,6 +513,7 @@ mod tests {
     fn config_with_gap_relative_and_user_bound_stalling() -> Config {
         let mut config = base_test_config();
         config.training.stopping_rules = Some(vec![
+            StoppingRuleConfig::IterationLimit { limit: 1 },
             StoppingRuleConfig::Gap {
                 tolerance: None,
                 relative_tolerance: Some(0.01),
@@ -530,6 +532,21 @@ mod tests {
         let mut config = base_test_config();
         config.modeling.cost_scale_factor = value;
         config
+    }
+
+    #[test]
+    fn from_config_adds_no_rule_to_an_absent_or_empty_list() {
+        for stopping_rules in [None, Some(Vec::new())] {
+            let mut config = base_test_config();
+            config.training.stopping_rules = stopping_rules;
+            let params = StudyParams::from_config(&config, Vec::new())
+                .expect("an absent or empty rule list maps without error");
+            assert!(
+                params.stopping_rule_set.rules.is_empty(),
+                "no rule may be added: {:?}",
+                params.stopping_rule_set.rules
+            );
+        }
     }
 
     /// An absent `modeling.cost_scale_factor` resolves to

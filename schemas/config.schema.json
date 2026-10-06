@@ -1015,7 +1015,7 @@
         },
         {
           "const": "all",
-          "description": "Stop when all configured rules trigger at the same iteration (AND).",
+          "description": "Stop when every configured rule other than `iteration_limit` triggers at\nthe same iteration (AND); the largest `iteration_limit` caps the run.",
           "type": "string"
         }
       ]
@@ -1217,9 +1217,19 @@
         "stopping_mode": {
           "$ref": "#/$defs/StoppingMode",
           "default": "any",
-          "description": "How multiple stopping rules combine: `any` (OR) or `all` (AND)."
+          "description": "How multiple stopping rules combine: `any` (OR) or `all` (AND over every\nrule except `iteration_limit`, which caps the run)."
         },
         "stopping_rules": {
+          "contains": {
+            "properties": {
+              "type": {
+                "const": "iteration_limit"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
           "description": "List of stopping rule configurations.\n\n**Mandatory** — no default. Must contain at least one `iteration_limit` rule.",
           "items": {
             "$ref": "#/$defs/StoppingRuleConfig"

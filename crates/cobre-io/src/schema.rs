@@ -372,6 +372,23 @@ mod tests {
     }
 
     #[test]
+    fn config_schema_requires_an_iteration_limit_stopping_rule() {
+        let schemas = generate_schemas().unwrap();
+        let (_, config_schema) = schemas
+            .iter()
+            .find(|(name, _)| name == "config.schema.json")
+            .unwrap_or_else(|| panic!("config.schema.json not found in schemas"));
+
+        assert_eq!(
+            config_schema.pointer("/$defs/TrainingConfig/properties/stopping_rules/contains"),
+            Some(&serde_json::json!({
+                "required": ["type"],
+                "properties": {"type": {"const": "iteration_limit"}}
+            }))
+        );
+    }
+
+    #[test]
     fn test_all_expected_schema_filenames_present() {
         let schemas = generate_schemas().unwrap();
         let names: Vec<&str> = schemas.iter().map(|(n, _)| n.as_str()).collect();

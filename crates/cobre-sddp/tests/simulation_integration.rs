@@ -14,8 +14,9 @@
 // seam from `common::builders` — a no-op today, not dead code.
 #![allow(clippy::needless_update)]
 
-use cobre_io::config::{SimulationSelection, TrainingSelection};
+use cobre_io::config::{SimulationSelection, StoppingRuleConfig, TrainingSelection};
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 use std::sync::mpsc;
 
 use chrono::NaiveDate;
@@ -51,7 +52,7 @@ use cobre_io::{
 use cobre_sddp::{
     CapturedBasis, Phase, PrepareHydroModelsResult, ResolvedParameters, SimulationSummary,
     SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    aggregate_simulation, build_training_output,
+    aggregate_simulation, build_basis_cache_from_checkpoint, build_training_output,
     config::{CutManagementConfig, EventConfig, LoopConfig},
     context::TrainingContext,
     cut::FutureCostFunction,
@@ -61,6 +62,7 @@ use cobre_sddp::{
     inflow_method::InflowNonNegativityMethod,
     lead_time::AnticipatedResolution,
     lp::builder::{PatchBuffer, StageGeometry},
+    policy::orchestration::{CheckpointParams, write_checkpoint},
     risk_measure::RiskMeasure,
     setup::{
         SimulationEnumeratedRequest, StudySetup,
@@ -86,6 +88,7 @@ mod common;
 use common::Rank0Of2;
 use common::StubComm;
 use common::builders::{BusSpec, HydroSpec, StageSpec, make_bus, make_hydro, make_stage};
+use common::fresh_system_and_setup_with;
 
 /// Mirrors the gated `test_support::state_layout_for` via the public
 /// [`StateSpace::new`] constructor: this external test crate cannot see the parent
@@ -1725,6 +1728,43 @@ struct WarmStartRun {
     per_scenario_cost_bits: Vec<(u32, u64)>,
     basis_offered: u64,
     basis_consistency_failures: u64,
+    /// The scenario-sorted results as JSON, whose shortest round-trip float
+    /// text tells every finite `f64` bit pattern apart.
+    results_json: Vec<u8>,
+    per_scenario_counters: Vec<(u32, i32, Vec<u64>)>,
+}
+
+fn solver_counters(delta: &SolverStatsDelta) -> Vec<u64> {
+    let SolverStatsDelta {
+        lp_solves,
+        lp_successes,
+        first_try_successes,
+        lp_failures,
+        retry_attempts,
+        basis_offered,
+        basis_consistency_failures,
+        simplex_iterations,
+        solve_time_ms: _,
+        load_model_count,
+        load_model_time_ms: _,
+        set_bounds_time_ms: _,
+        basis_set_time_ms: _,
+        retry_level_histogram,
+    } = delta;
+    [
+        *lp_solves,
+        *lp_successes,
+        *first_try_successes,
+        *lp_failures,
+        *retry_attempts,
+        *basis_offered,
+        *basis_consistency_failures,
+        *simplex_iterations,
+        *load_model_count,
+    ]
+    .into_iter()
+    .chain(retry_level_histogram.iter().copied())
+    .collect()
 }
 
 /// Census `simulate()` with a caller-supplied warm-start cache, measuring the
@@ -1746,7 +1786,7 @@ fn run_census_with_bases<C: Communicator>(
 
     let n_scenarios = setup.simulation_config().n_scenarios.max(1) as usize;
     let (result_tx, result_rx) = mpsc::sync_channel(n_scenarios);
-    setup
+    let sim_run_result = setup
         .simulate(
             &mut pool.workspaces,
             comm,
@@ -1775,6 +1815,12 @@ fn run_census_with_bases<C: Communicator>(
             .collect(),
         basis_offered,
         basis_consistency_failures,
+        results_json: serde_json::to_vec(&results).expect("scenario results must serialize"),
+        per_scenario_counters: sim_run_result
+            .solver_stats
+            .iter()
+            .map(|(scenario_id, opening, delta)| (*scenario_id, *opening, solver_counters(delta)))
+            .collect(),
     }
 }
 
@@ -1845,6 +1891,84 @@ fn enumerated_census_pool_fill_warms_previously_cold_leaves() {
     assert_eq!(
         filled.per_scenario_cost_bits, filled_4.per_scenario_cost_bits,
         "per-scenario cost must be bit-identical at threads=1 vs threads=4"
+    );
+}
+
+/// Nodes 1 and 2 get a stored basis one column wider than their LP, so the load
+/// drops them while nodes 0 and 3 keep theirs.
+#[test]
+fn simulation_only_with_partly_dropped_stored_bases_is_bit_identical_across_thread_counts() {
+    let case_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/1dtoy");
+    let (system, mut setup) = fresh_system_and_setup_with(&case_dir, |config| {
+        config.training.stopping_rules =
+            Some(vec![StoppingRuleConfig::IterationLimit { limit: 3 }]);
+        config.simulation.selection = Some(SimulationSelection::Sampled { num_scenarios: 16 });
+    });
+    let mut solver = ActiveSolver::new().expect("ActiveSolver::new must succeed");
+    let outcome = setup
+        .train(&mut solver, &StubComm, 1, ActiveSolver::new, None, None)
+        .expect("training must return Ok");
+    assert!(
+        outcome.error.is_none(),
+        "training must not error: {:?}",
+        outcome.error
+    );
+
+    let policy_dir = tempfile::TempDir::new().expect("TempDir::new");
+    let params = CheckpointParams {
+        max_iterations: setup.loop_params.max_iterations,
+        forward_passes: setup.loop_params.forward_passes,
+        seed: setup.loop_params.seed,
+        export_states: false,
+    };
+    write_checkpoint(policy_dir.path(), &setup, &system, &outcome.result, &params)
+        .expect("write_checkpoint must succeed");
+    let checkpoint =
+        read_policy_checkpoint(policy_dir.path()).expect("read_policy_checkpoint must succeed");
+
+    let mut records = checkpoint.stage_bases.clone();
+    for record in records.iter_mut().filter(|r| matches!(r.stage_id, 1 | 2)) {
+        let code = record.column_status[0];
+        record.column_status.push(code);
+    }
+    let load = build_basis_cache_from_checkpoint(&records, &checkpoint.stage_cuts, &setup);
+    let unused = load
+        .unused
+        .as_ref()
+        .expect("the widened records must be reported unused");
+    assert_eq!(
+        unused.count, 2,
+        "exactly the two widened records are dropped"
+    );
+    assert!(
+        0 < unused.count && unused.count < unused.total,
+        "some but not all stored bases are dropped: {} of {}",
+        unused.count,
+        unused.total
+    );
+    assert!(
+        load.cache[1].is_none() && load.cache[2].is_none(),
+        "the dropped nodes must have no cached basis"
+    );
+
+    let one = run_census_with_bases(&setup, &StubComm, 1, &load.cache);
+    let four = run_census_with_bases(&setup, &StubComm, 4, &load.cache);
+
+    assert_eq!(
+        one.per_scenario_counters, four.per_scenario_counters,
+        "per-scenario solver counters must be equal at threads=1 vs threads=4"
+    );
+    assert!(
+        one.results_json == four.results_json,
+        "scenario results must be bit-identical at threads=1 vs threads=4"
+    );
+    assert!(
+        one.basis_offered > 0,
+        "the fitting nodes must warm-start from their stored bases"
+    );
+    assert_eq!(
+        one.basis_consistency_failures, 0,
+        "every offered stored basis must be accepted"
     );
 }
 

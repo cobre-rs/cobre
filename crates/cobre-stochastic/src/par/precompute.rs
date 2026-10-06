@@ -48,7 +48,7 @@ use std::collections::{HashMap, HashSet};
 use cobre_core::{
     EntityId,
     scenario::InflowModel,
-    temporal::{SeasonMap, Stage},
+    temporal::{SeasonCycles, SeasonMap, Stage},
 };
 
 use crate::{StochasticError, season_cast::StitchedSeasonMap};
@@ -77,6 +77,19 @@ fn resolve_season_id(stage_id: i32, n_seasons: usize, season_offset: usize) -> u
 
 fn laid_out_stages(stages: &[Stage]) -> impl Iterator<Item = &Stage> {
     stages.iter().filter(|s| s.id >= 0)
+}
+
+fn cross_resolution_lag_season(
+    cycles: &SeasonCycles,
+    stage_season: usize,
+    lag_stage_season: usize,
+    steps: usize,
+) -> Option<usize> {
+    let level = cycles.group_of(stage_season)?;
+    if cycles.group_of(lag_stage_season)? == level {
+        return None;
+    }
+    (0..steps).try_fold(stage_season, |season, _| cycles.predecessor(season))
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +452,10 @@ struct StageArrayBuffers<'a> {
 /// Fill `bufs` for every laid-out (stage, hydro) pair.
 ///
 /// A lag stage whose exact `inflow_models` lookup misses takes its season's
-/// statistics under the rule [`PrecomputedPar::build`] documents.
+/// statistics under the rule [`PrecomputedPar::build`] documents. A lag that
+/// reaches back across a change of resolution instead reads the statistics of
+/// the season its stage's own [`SeasonCycles`] level steps back to (the quarter
+/// a quarterly stage's lag aggregates), when some stage carries that season.
 ///
 /// # Errors
 ///
@@ -478,6 +494,7 @@ fn fill_stage_arrays(
         .unwrap_or(0);
 
     let stitched = season_map.map(|sm| StitchedSeasonMap::build(stages, sm, max_order));
+    let cycles = season_map.map(SeasonCycles::new);
 
     let stage_to_season: HashMap<i32, usize> = stages
         .iter()
@@ -499,7 +516,20 @@ fn fill_stage_arrays(
             .or_insert((stage_id, stats));
     }
 
-    let lag_stats = |h_idx: usize, lag_stage_id: i32| -> (f64, f64) {
+    let lag_stats = |h_idx: usize, stage_season: Option<usize>, lag_stage_id: i32, steps: usize| {
+        let cross_resolution_season = cycles
+            .as_ref()
+            .zip(stage_season)
+            .filter(|_| lag_stage_id >= 0)
+            .and_then(|(cycles, season)| {
+                let &lag_stage_season = stage_to_season.get(&lag_stage_id)?;
+                cross_resolution_lag_season(cycles, season, lag_stage_season, steps)
+            });
+        if let Some(&(_, stats)) =
+            cross_resolution_season.and_then(|sid| season_stats.get(&(h_idx, sid)))
+        {
+            return stats;
+        }
         if let Some(&stats) = model_stats.get(&(h_idx, lag_stage_id)) {
             return stats;
         }
@@ -557,7 +587,8 @@ fn fill_stage_arrays(
                         // lag is 0-based: index 0 is lag ℓ=1.
                         let lag_stage_id = stage_id - i32::try_from(lag + 1).unwrap_or(i32::MAX);
 
-                        let (mu_lag, s_lag) = lag_stats(h_idx, lag_stage_id);
+                        let (mu_lag, s_lag) =
+                            lag_stats(h_idx, stage.season_id, lag_stage_id, lag + 1);
 
                         // φ̂ = 0 beyond the AR order; s_lag == 0 also yields 0 (the
                         // caller must validate that AR-order-bearing lag stages have
@@ -612,7 +643,8 @@ mod tests {
 
     use super::{PrecomputedPar, resolve_season_id};
     use crate::test_support::{
-        InflowModelSpec, MonthlyLabels, monthly_season_map, sparse_ring_season_map,
+        InflowModelSpec, MonthlyLabels, monthly_quarterly_season_map, monthly_season_map,
+        sparse_ring_season_map,
     };
 
     fn make_stage(index: usize, id: i32, season_id: Option<usize>) -> Stage {
@@ -1982,5 +2014,143 @@ mod tests {
             "lag 6 of stage 0 (season 13) must use the std of declared stage -1, got psi = {psi}"
         );
         assert_eq!(lp.n_stages(), 5);
+    }
+
+    fn monthly_then_quarterly_stages() -> Vec<Stage> {
+        vec![
+            dated_stage(0, date(2024, 4, 1), date(2024, 5, 1), 3),
+            dated_stage(1, date(2024, 5, 1), date(2024, 6, 1), 4),
+            dated_stage(2, date(2024, 6, 1), date(2024, 7, 1), 5),
+            dated_stage(3, date(2024, 7, 1), date(2024, 10, 1), 12),
+            dated_stage(4, date(2024, 10, 1), date(2025, 1, 1), 13),
+            dated_stage(5, date(2025, 1, 1), date(2025, 4, 1), 14),
+            dated_stage(6, date(2025, 4, 1), date(2025, 7, 1), 15),
+        ]
+    }
+
+    fn monthly_then_quarterly_models() -> Vec<InflowModel> {
+        vec![
+            make_model(1, 0, 100.0, 20.0, vec![], 1.0),
+            make_model(1, 1, 100.0, 20.0, vec![], 1.0),
+            make_model(1, 2, 50.0, 10.0, vec![], 1.0),
+            make_model(1, 3, 100.0, 30.0, vec![0.5], 1.0),
+            make_model(1, 4, 100.0, 30.0, vec![0.5, 0.5], 1.0),
+            make_model(1, 5, 100.0, 20.0, vec![], 1.0),
+            make_model(1, 6, 200.0, 60.0, vec![], 1.0),
+        ]
+    }
+
+    #[test]
+    fn cross_resolution_lags_read_the_coarse_season_statistics() {
+        let layered = monthly_quarterly_season_map();
+        let lp = PrecomputedPar::build(
+            &monthly_then_quarterly_models(),
+            &monthly_then_quarterly_stages(),
+            &[EntityId(1)],
+            Some(&layered),
+        )
+        .unwrap();
+
+        let stage_3 = (lp.psi_slice(3, 0)[0], lp.deterministic_base(3, 0));
+        let stage_4 = (lp.psi_slice(4, 0), lp.deterministic_base(4, 0));
+        assert!(
+            f64_bits_eq(stage_3.0, 0.25)
+                && f64_bits_eq(stage_3.1, 50.0)
+                && matches!(stage_4.0, [lag_1, lag_2]
+                    if f64_bits_eq(*lag_1, 0.5) && f64_bits_eq(*lag_2, 0.25))
+                && f64_bits_eq(stage_4.1, 0.0),
+            "quarterly lags reaching back into the monthly stages must use the statistics of \
+             season 15: got stage 3 (lag-1 psi, base) = {stage_3:?}, \
+             stage 4 (psi, base) = {stage_4:?}"
+        );
+    }
+
+    #[test]
+    fn single_group_maps_keep_the_lag_stage_statistics() {
+        let ring = sparse_ring_season_map();
+        let ring_models = vec![
+            make_model(1, 0, 100.0, 10.0, vec![], 1.0),
+            make_model(1, 1, 100.0, 20.0, vec![], 1.0),
+            make_model(1, 2, 100.0, 40.0, vec![], 1.0),
+            make_model(1, 3, 100.0, 30.0, vec![0.5], 1.0),
+            make_model(1, 4, 100.0, 50.0, vec![], 1.0),
+        ];
+        let lp = PrecomputedPar::build(
+            &ring_models,
+            &sparse_ring_study_stages(),
+            &[EntityId(1)],
+            Some(&ring),
+        )
+        .unwrap();
+        let psi = lp.psi_slice(3, 0)[0];
+        assert!(
+            f64_bits_eq(psi, 0.5 * 30.0 / 40.0),
+            "lag 1 of the Apr-Jun stage must use March's std, got psi = {psi}"
+        );
+
+        let monthly = monthly_season_map(MonthlyLabels::ZeroBased);
+        let stages: Vec<Stage> = (0..14_i32)
+            .map(|id| {
+                let start = date(2024 + id / 12, u32::try_from(id % 12 + 1).unwrap(), 1);
+                let end = start.checked_add_months(Months::new(1)).unwrap();
+                dated_stage(id, start, end, usize::try_from(id % 12).unwrap())
+            })
+            .collect();
+        let monthly_models = vec![
+            make_model(1, 0, 100.0, 10.0, vec![], 1.0),
+            make_model(1, 12, 100.0, 40.0, vec![], 1.0),
+            make_model(1, 13, 100.0, 30.0, vec![0.5], 1.0),
+        ];
+        let lp = PrecomputedPar::build(&monthly_models, &stages, &[EntityId(1)], Some(&monthly))
+            .unwrap();
+        let psi = lp.psi_slice(13, 0)[0];
+        assert!(
+            f64_bits_eq(psi, 0.5 * 30.0 / 40.0),
+            "lag 1 of February 2025 must use January 2025's std, got psi = {psi}"
+        );
+    }
+
+    #[test]
+    fn cross_resolution_lag_without_coarse_statistics_keeps_the_lag_stage_statistics() {
+        let layered = monthly_quarterly_season_map();
+        let mut stages = monthly_then_quarterly_stages();
+        stages.truncate(4);
+        let mut models = monthly_then_quarterly_models();
+        models.truncate(4);
+        let lp = PrecomputedPar::build(&models, &stages, &[EntityId(1)], Some(&layered)).unwrap();
+
+        let stage_3 = (lp.psi_slice(3, 0)[0], lp.deterministic_base(3, 0));
+        assert!(
+            f64_bits_eq(stage_3.0, 1.5) && f64_bits_eq(stage_3.1, 25.0),
+            "with no stage carrying season 15, lag 1 of stage 3 must use June's statistics: \
+             got (psi, base) = {stage_3:?}"
+        );
+    }
+
+    #[test]
+    fn pre_study_lags_keep_their_stage_statistics_across_levels() {
+        let layered = monthly_quarterly_season_map();
+        let stages = vec![
+            dated_stage(-1, date(2024, 6, 1), date(2024, 7, 1), 5),
+            dated_stage(0, date(2024, 7, 1), date(2024, 10, 1), 12),
+            dated_stage(1, date(2024, 10, 1), date(2025, 1, 1), 13),
+            dated_stage(2, date(2025, 1, 1), date(2025, 4, 1), 14),
+            dated_stage(3, date(2025, 4, 1), date(2025, 7, 1), 15),
+        ];
+        let models = vec![
+            make_model(1, -1, 50.0, 10.0, vec![], 1.0),
+            make_model(1, 0, 100.0, 30.0, vec![0.5], 1.0),
+            make_model(1, 1, 100.0, 30.0, vec![], 1.0),
+            make_model(1, 2, 100.0, 30.0, vec![], 1.0),
+            make_model(1, 3, 200.0, 60.0, vec![], 1.0),
+        ];
+        let lp = PrecomputedPar::build(&models, &stages, &[EntityId(1)], Some(&layered)).unwrap();
+
+        let stage_0 = (lp.psi_slice(0, 0)[0], lp.deterministic_base(0, 0));
+        assert!(
+            f64_bits_eq(stage_0.0, 1.5) && f64_bits_eq(stage_0.1, 25.0),
+            "lag 1 of stage 0 must use the statistics of declared stage -1, not season 15's: \
+             got (psi, base) = {stage_0:?}"
+        );
     }
 }

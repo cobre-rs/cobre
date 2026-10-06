@@ -603,6 +603,13 @@ impl SeasonCycles {
         })
     }
 
+    /// The level that contains `season_id`, counted finest first. `None` when
+    /// `season_id` belongs to no level.
+    #[must_use]
+    pub fn group_of(&self, season_id: usize) -> Option<usize> {
+        self.position(season_id).map(|(level, _)| level)
+    }
+
     /// The two lowest ids among the seasons of one level that cover the first
     /// shared calendar day, scanning the levels finest first and the year from
     /// January 1. `None` when no two seasons of a level share a day.
@@ -1176,6 +1183,32 @@ mod tests {
             );
         }
         assert_eq!(layered.position(99), None);
+    }
+
+    #[test]
+    fn season_cycles_group_monthly_and_quarterly_seasons_apart() {
+        let layered = SeasonCycles::new(&d30_shaped_season_map());
+        for season_id in 0..12 {
+            assert_eq!(layered.group_of(season_id), Some(0), "season {season_id}");
+        }
+        for season_id in 12..16 {
+            assert_eq!(layered.group_of(season_id), Some(1), "season {season_id}");
+        }
+
+        let ring = SeasonCycles::new(&custom_map(vec![
+            custom_season(0, (1, 1), (1, 31)),
+            custom_season(1, (2, 1), (2, 28)),
+            custom_season(2, (3, 1), (3, 31)),
+            custom_season(12, (4, 1), (6, 30)),
+            custom_season(13, (7, 1), (9, 30)),
+        ]));
+        for season_id in [0, 1, 2, 12, 13] {
+            assert_eq!(ring.group_of(season_id), Some(0), "season {season_id}");
+        }
+
+        for cycles in [&layered, &ring] {
+            assert_eq!(cycles.group_of(99), None);
+        }
     }
 
     #[test]

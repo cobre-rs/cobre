@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use cobre_core::{EntityId, Hydro};
 
-use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::super::{ValidationContext, rules, schema::ParsedData};
 use super::envelope_tolerance;
 
 /// Rule 1: the hydro cascade graph must be acyclic.
@@ -59,8 +59,8 @@ pub(super) fn check_cascade_acyclic(data: &ParsedData, ctx: &mut ValidationConte
             .collect();
         cycle_participants.sort_unstable();
 
-        ctx.add_error(
-            ErrorKind::CycleDetected,
+        ctx.emit(
+            &rules::SEMANTIC_HYDRO_CASCADE_CYCLE,
             "system/hydros.json",
             None::<&str>,
             format!(
@@ -82,8 +82,8 @@ pub(super) fn check_hydro_bounds(data: &ParsedData, ctx: &mut ValidationContext)
         let entity_str = format!("Hydro {}", hydro.id.0);
 
         if hydro.min_storage_hm3 > hydro.max_storage_hm3 {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_HYDRO_STORAGE_BOUNDS_INVERTED,
                 "system/hydros.json",
                 Some(&entity_str),
                 format!(
@@ -94,8 +94,8 @@ pub(super) fn check_hydro_bounds(data: &ParsedData, ctx: &mut ValidationContext)
         }
 
         if hydro.min_turbined_m3s > hydro.max_turbined_m3s {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_HYDRO_TURBINED_BOUNDS_INVERTED,
                 "system/hydros.json",
                 Some(&entity_str),
                 format!(
@@ -108,8 +108,8 @@ pub(super) fn check_hydro_bounds(data: &ParsedData, ctx: &mut ValidationContext)
         if let Some(max_outflow) = hydro.max_outflow_m3s
             && hydro.min_outflow_m3s > max_outflow
         {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_HYDRO_OUTFLOW_BOUNDS_INVERTED,
                 "system/hydros.json",
                 Some(&entity_str),
                 format!(
@@ -120,8 +120,8 @@ pub(super) fn check_hydro_bounds(data: &ParsedData, ctx: &mut ValidationContext)
         }
 
         if hydro.min_generation_mw > hydro.max_generation_mw {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_HYDRO_GENERATION_BOUNDS_INVERTED,
                 "system/hydros.json",
                 Some(&entity_str),
                 format!(
@@ -162,8 +162,8 @@ pub(super) fn check_diversion_floor_requires_channel(
         }
 
         let entity_str = format!("Hydro {}", hydro.id.0);
-        ctx.add_error(
-            ErrorKind::InvalidValue,
+        ctx.emit(
+            &rules::SEMANTIC_HYDRO_DIVERSION_FLOOR_WITHOUT_CHANNEL,
             "constraints/hydro_bounds.parquet",
             Some(&entity_str),
             format!(
@@ -188,8 +188,8 @@ fn check_entry_precedes_exit(
         && entry >= exit
     {
         let entity_str = format!("{entity_kind} {id}");
-        ctx.add_error(
-            ErrorKind::InvalidValue,
+        ctx.emit(
+            &rules::LIFECYCLE_ENTRY_NOT_BEFORE_EXIT,
             file,
             Some(&entity_str),
             format!(
@@ -295,8 +295,8 @@ pub(super) fn check_filling_config(data: &ParsedData, ctx: &mut ValidationContex
             && !study_stage_ids.contains(&filling.start_stage_id)
         {
             let entity_str = format!("Hydro {}", hydro.id.0);
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_FILLING_START_STAGE_UNKNOWN,
                 "system/hydros.json",
                 Some(&entity_str),
                 format!(
@@ -319,10 +319,9 @@ pub(super) fn check_filling_config(data: &ParsedData, ctx: &mut ValidationContex
 ///    alternative — `filling` without an entry — leaves the reservoir filling toward
 ///    nothing.
 /// 2. `start_stage_id < entry_stage_id` — else the `Filling` phase is empty.
-/// 3. `entry_stage_id >= horizon` (study stage count) is a `ModelQuality`
-///    WARNING, not an error: the plant fills throughout and never operates
-///    within this study (a longer study reuses the same system file). It must
-///    still load.
+/// 3. `entry_stage_id >= horizon` (study stage count) warns rather than
+///    rejects: the plant fills throughout and never operates within this study
+///    (a longer study reuses the same system file). It must still load.
 /// 4. the `filling_storage` seed lies in `[0, min_storage_hm3)` — strictly below
 ///    the dead volume. Equality with `min_storage_hm3` belongs to neither the
 ///    filling range nor the operating `.storage` range `[min_storage,
@@ -341,8 +340,8 @@ pub(super) fn check_filling_guards(data: &ParsedData, ctx: &mut ValidationContex
         let entity_str = format!("Hydro {}", hydro.id.0);
 
         if hydro.filling.is_some() && hydro.entry_stage_id.is_none() {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_FILLING_GUARD_VIOLATED,
                 "system/hydros.json",
                 Some(&entity_str),
                 format!(
@@ -363,8 +362,8 @@ pub(super) fn check_filling_guards(data: &ParsedData, ctx: &mut ValidationContex
             if let Some(entry) = hydro.entry_stage_id
                 && filling.start_stage_id >= entry
             {
-                ctx.add_error(
-                    ErrorKind::InvalidValue,
+                ctx.emit(
+                    &rules::SEMANTIC_FILLING_GUARD_VIOLATED,
                     "system/hydros.json",
                     Some(&entity_str),
                     format!(
@@ -378,8 +377,8 @@ pub(super) fn check_filling_guards(data: &ParsedData, ctx: &mut ValidationContex
             if let Some(entry) = hydro.entry_stage_id
                 && entry >= horizon
             {
-                ctx.add_warning(
-                    ErrorKind::ModelQuality,
+                ctx.emit(
+                    &rules::SEMANTIC_FILLING_NEVER_OPERATES,
                     "system/hydros.json",
                     Some(&entity_str),
                     format!(
@@ -393,8 +392,8 @@ pub(super) fn check_filling_guards(data: &ParsedData, ctx: &mut ValidationContex
             if let Some(seed) = seed
                 && !(seed.value_hm3 >= 0.0 && seed.value_hm3 < hydro.min_storage_hm3)
             {
-                ctx.add_error(
-                    ErrorKind::InvalidValue,
+                ctx.emit(
+                    &rules::SEMANTIC_FILLING_GUARD_VIOLATED,
                     "system/hydros.json",
                     Some(&entity_str),
                     format!(
@@ -407,8 +406,8 @@ pub(super) fn check_filling_guards(data: &ParsedData, ctx: &mut ValidationContex
             }
 
             if let Some(exit) = hydro.exit_stage_id {
-                ctx.add_error(
-                    ErrorKind::InvalidValue,
+                ctx.emit(
+                    &rules::SEMANTIC_FILLING_GUARD_VIOLATED,
                     "system/hydros.json",
                     Some(&entity_str),
                     format!(
@@ -423,8 +422,8 @@ pub(super) fn check_filling_guards(data: &ParsedData, ctx: &mut ValidationContex
                 && let Some(seed) = seed
                 && seed.value_hm3 != 0.0
             {
-                ctx.add_error(
-                    ErrorKind::InvalidValue,
+                ctx.emit(
+                    &rules::SEMANTIC_FILLING_GUARD_VIOLATED,
                     "system/hydros.json",
                     Some(&entity_str),
                     format!(
@@ -473,8 +472,8 @@ pub(super) fn check_geometry_monotonicity(data: &ParsedData, ctx: &mut Validatio
             // no arithmetic upstream, so there is no computed-vs-computed
             // residual for a tolerance to absorb.
             if curr.volume_hm3 <= prev.volume_hm3 {
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::GEOMETRY_VOLUME_NOT_INCREASING,
                     "system/hydro_geometry.parquet",
                     Some(&entity_str),
                     format!(
@@ -486,8 +485,8 @@ pub(super) fn check_geometry_monotonicity(data: &ParsedData, ctx: &mut Validatio
 
             let height_tolerance = envelope_tolerance(prev.height_m);
             if curr.height_m < prev.height_m - height_tolerance {
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::GEOMETRY_HEIGHT_DECREASING,
                     "system/hydro_geometry.parquet",
                     Some(&entity_str),
                     format!(
@@ -499,8 +498,8 @@ pub(super) fn check_geometry_monotonicity(data: &ParsedData, ctx: &mut Validatio
 
             let area_tolerance = envelope_tolerance(prev.area_km2);
             if curr.area_km2 < prev.area_km2 - area_tolerance {
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::GEOMETRY_AREA_DECREASING,
                     "system/hydro_geometry.parquet",
                     Some(&entity_str),
                     format!(
@@ -522,8 +521,8 @@ pub(super) fn check_evaporation_geometry_coverage(data: &ParsedData, ctx: &mut V
     for hydro in &data.hydros {
         if hydro.evaporation_coefficients_mm.is_some() && !geometry_hydro_ids.contains(&hydro.id.0)
         {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_HYDRO_EVAPORATION_WITHOUT_GEOMETRY,
                 "system/hydros.json",
                 Some(format!("Hydro {} (id={})", hydro.name, hydro.id.0)),
                 format!(
@@ -548,8 +547,8 @@ pub(super) fn check_fpha_constraints(data: &ParsedData, ctx: &mut ValidationCont
         let entity_str = format!("Hydro {}", row.hydro_id.0);
 
         if row.gamma_v < 0.0 {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_FPHA_PLANE_COEFFICIENT_SIGN,
                 "system/fpha_hyperplanes.parquet",
                 Some(&entity_str),
                 format!(
@@ -563,8 +562,8 @@ pub(super) fn check_fpha_constraints(data: &ParsedData, ctx: &mut ValidationCont
         }
 
         if row.gamma_s > 0.0 {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_FPHA_PLANE_COEFFICIENT_SIGN,
                 "system/fpha_hyperplanes.parquet",
                 Some(&entity_str),
                 format!(
@@ -597,8 +596,8 @@ pub(super) fn check_fpha_constraints(data: &ParsedData, ctx: &mut ValidationCont
         if plane_count < 1 {
             let entity_str = format!("Hydro {current_hydro_id}");
             let stage_label = current_stage_id.map_or_else(|| "all".to_string(), |s| s.to_string());
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_FPHA_STAGE_WITHOUT_PLANES,
                 "system/fpha_hyperplanes.parquet",
                 Some(&entity_str),
                 format!(
@@ -635,8 +634,8 @@ pub(super) fn check_hydro_unit_groups(data: &ParsedData, ctx: &mut ValidationCon
         let mut seen_group_ids: HashSet<i32> = HashSet::new();
         for group in &hydro.unit_groups {
             if !seen_group_ids.insert(group.id.0) {
-                ctx.add_error(
-                    ErrorKind::DuplicateId,
+                ctx.emit(
+                    &rules::UNIT_GROUP_DUPLICATE_ID,
                     "system/hydros.json",
                     Some(&entity_str),
                     format!(
@@ -652,8 +651,8 @@ pub(super) fn check_hydro_unit_groups(data: &ParsedData, ctx: &mut ValidationCon
             let group_str = format!("{entity_str} unit group {}", group.id.0);
 
             if group.min_turbined_m3s > group.max_turbined_m3s {
-                ctx.add_error(
-                    ErrorKind::InvalidValue,
+                ctx.emit(
+                    &rules::UNIT_GROUP_BOUNDS_INVERTED,
                     "system/hydros.json",
                     Some(&group_str),
                     format!(
@@ -665,8 +664,8 @@ pub(super) fn check_hydro_unit_groups(data: &ParsedData, ctx: &mut ValidationCon
             }
 
             if group.min_generation_mw > group.max_generation_mw {
-                ctx.add_error(
-                    ErrorKind::InvalidValue,
+                ctx.emit(
+                    &rules::UNIT_GROUP_BOUNDS_INVERTED,
                     "system/hydros.json",
                     Some(&group_str),
                     format!(
@@ -681,8 +680,8 @@ pub(super) fn check_hydro_unit_groups(data: &ParsedData, ctx: &mut ValidationCon
         let turbined_sum: f64 = hydro.unit_groups.iter().map(|g| g.max_turbined_m3s).sum();
         let turbined_tolerance = envelope_tolerance(hydro.max_turbined_m3s);
         if turbined_sum > hydro.max_turbined_m3s + turbined_tolerance {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::UNIT_GROUP_MAXIMA_EXCEED_PLANT,
                 "system/hydros.json",
                 Some(&entity_str),
                 format!(
@@ -699,8 +698,8 @@ pub(super) fn check_hydro_unit_groups(data: &ParsedData, ctx: &mut ValidationCon
         let generation_sum: f64 = hydro.unit_groups.iter().map(|g| g.max_generation_mw).sum();
         let generation_tolerance = envelope_tolerance(hydro.max_generation_mw);
         if generation_sum > hydro.max_generation_mw + generation_tolerance {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::UNIT_GROUP_MAXIMA_EXCEED_PLANT,
                 "system/hydros.json",
                 Some(&entity_str),
                 format!(
@@ -721,8 +720,8 @@ pub(super) fn check_hydro_unit_groups(data: &ParsedData, ctx: &mut ValidationCon
         let min_turbined_sum: f64 = hydro.unit_groups.iter().map(|g| g.min_turbined_m3s).sum();
         let min_turbined_tolerance = envelope_tolerance(hydro.min_turbined_m3s);
         if min_turbined_sum < hydro.min_turbined_m3s - min_turbined_tolerance {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::UNIT_GROUP_MINIMA_BELOW_PLANT,
                 "system/hydros.json",
                 Some(&entity_str),
                 format!(
@@ -738,8 +737,8 @@ pub(super) fn check_hydro_unit_groups(data: &ParsedData, ctx: &mut ValidationCon
         let min_generation_sum: f64 = hydro.unit_groups.iter().map(|g| g.min_generation_mw).sum();
         let min_generation_tolerance = envelope_tolerance(hydro.min_generation_mw);
         if min_generation_sum < hydro.min_generation_mw - min_generation_tolerance {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::UNIT_GROUP_MINIMA_BELOW_PLANT,
                 "system/hydros.json",
                 Some(&entity_str),
                 format!(

@@ -22,7 +22,7 @@ use cobre_core::{
     BlockMode, EntityId, Hydro, Stage, window_period_reach_depth, window_reaches_any_period,
 };
 
-use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::super::{ValidationContext, rules, schema::ParsedData};
 
 /// Below this `max_t(t_v/h_t)` ratio, cross-stage transport carries a
 /// mass-fraction small enough to treat as negligible.
@@ -39,8 +39,8 @@ pub(super) fn validate_travel_time(data: &ParsedData, ctx: &mut ValidationContex
         let hydro_id = hydro.id.0;
 
         if !t.is_finite() || t < 0.0 {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::TRAVEL_TIME_INVALID,
                 "system/hydros.json",
                 Some(format!("Hydro {hydro_id}")),
                 format!("Hydro {hydro_id}: travel_time_hours must be finite and >= 0.0, got {t}"),
@@ -49,8 +49,8 @@ pub(super) fn validate_travel_time(data: &ParsedData, ctx: &mut ValidationContex
         }
 
         if t == 0.0 {
-            ctx.add_warning(
-                ErrorKind::ModelQuality,
+            ctx.emit(
+                &rules::TRAVEL_TIME_ZERO,
                 "system/hydros.json",
                 Some(format!("Hydro {hydro_id}")),
                 format!(
@@ -128,8 +128,8 @@ fn check_recourse_downstream_not_operating(
                 continue;
             }
             let window_end = anchor + arrival_depth(t, anchor, study_durations);
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::TRAVEL_TIME_DOWNSTREAM_NOT_OPERATING,
                 "system/hydros.json",
                 Some(format!("Hydro {}", downstream_id.0)),
                 format!(
@@ -196,8 +196,8 @@ fn check_chronological_confluence_heterogeneous_travel_time(
             .map(|(id, t)| format!("hydro {id} (travel_time_hours={t})"))
             .collect::<Vec<_>>()
             .join(", ");
-        ctx.add_error(
-            ErrorKind::NotImplemented,
+        ctx.emit(
+            &rules::TRAVEL_TIME_HETEROGENEOUS_CONFLUENCE,
             "system/hydros.json",
             Some(format!("Hydro {downstream_id}")),
             format!(
@@ -250,8 +250,8 @@ fn check_negligible_ratio(
     if max_ratio >= NEGLIGIBLE_RATIO_THRESHOLD {
         return;
     }
-    ctx.add_warning(
-        ErrorKind::ModelQuality,
+    ctx.emit(
+        &rules::TRAVEL_TIME_NEGLIGIBLE,
         "system/hydros.json",
         Some(format!("Hydro {hydro_id}")),
         format!(
@@ -281,8 +281,8 @@ fn check_horizon_inertness(
         if window_reaches_any_period(t, future[0], future) {
             continue;
         }
-        ctx.add_warning(
-            ErrorKind::ModelQuality,
+        ctx.emit(
+            &rules::TRAVEL_TIME_BEYOND_HORIZON,
             "system/hydros.json",
             Some(format!("Hydro {hydro_id}")),
             format!(
@@ -340,8 +340,8 @@ fn check_defluence_coverage(
         .filter(|e| e.hydro_id.0 == hydro_id)
     {
         if w.end_date > start_0 {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::TRAVEL_TIME_DEFLUENCE_FUTURE_DATED,
                 "initial_conditions.json",
                 Some(format!("Hydro {hydro_id}")),
                 format!(
@@ -372,8 +372,8 @@ fn check_defluence_coverage(
         return;
     }
 
-    ctx.add_error(
-        ErrorKind::BusinessRuleViolation,
+    ctx.emit(
+        &rules::TRAVEL_TIME_DEFLUENCES_UNCOVERED,
         "initial_conditions.json",
         Some(format!("Hydro {hydro_id}")),
         format!(
@@ -399,6 +399,7 @@ mod tests {
     use super::*;
     use crate::stages::StagesData;
     use crate::test_support::*;
+    use crate::validation::ErrorKind;
     use cobre_core::entities::Hydro;
     use cobre_core::temporal::{Block, PolicyGraphType, Stage};
     use cobre_core::{EntityId, HorizonGraph, HydroPastDefluence};

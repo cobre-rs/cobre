@@ -176,6 +176,118 @@ declare_rules! {
     DIMENSIONAL_GEOMETRY_ROWS = "dimensional.7",
         Dimensional, DimensionMismatch, Error,
         "An FPHA or linearized-head hydro has too few hydro_geometry.parquet rows (at least 1 for FPHA, 2 otherwise)";
+    SEMANTIC_HYDRO_CASCADE_CYCLE = "semantic.5a.1",
+        Semantic, CycleDetected, Error,
+        "The hydro cascade formed by downstream links contains a cycle";
+    SEMANTIC_HYDRO_STORAGE_BOUNDS_INVERTED = "semantic.5a.2",
+        Semantic, InvalidValue, Error,
+        "A hydro's min_storage_hm3 exceeds its max_storage_hm3";
+    SEMANTIC_HYDRO_TURBINED_BOUNDS_INVERTED = "semantic.5a.3",
+        Semantic, InvalidValue, Error,
+        "A hydro's min_turbined_m3s exceeds its max_turbined_m3s";
+    SEMANTIC_HYDRO_OUTFLOW_BOUNDS_INVERTED = "semantic.5a.4",
+        Semantic, InvalidValue, Error,
+        "A hydro's min_outflow_m3s exceeds its max_outflow_m3s";
+    SEMANTIC_HYDRO_GENERATION_BOUNDS_INVERTED = "semantic.5a.5",
+        Semantic, InvalidValue, Error,
+        "A hydro's min_generation_mw exceeds its max_generation_mw";
+    LIFECYCLE_ENTRY_NOT_BEFORE_EXIT = "semantic.5a.6",
+        Semantic, InvalidValue, Error,
+        "An entity's entry_stage_id is not before its exit_stage_id";
+    SEMANTIC_FILLING_START_STAGE_UNKNOWN = "semantic.5a.7",
+        Semantic, InvalidValue, Error,
+        "A filling hydro's start_stage_id is not a study stage";
+    SEMANTIC_FILLING_GUARD_VIOLATED = "semantic.5a.7a",
+        Semantic, InvalidValue, Error,
+        "A filling hydro has no entry_stage_id, starts filling at or after it, declares an exit_stage_id, or has a filling_storage seed outside its allowed range";
+    SEMANTIC_FILLING_NEVER_OPERATES = "semantic.5a.7b",
+        Semantic, ModelQuality, Warning,
+        "A filling hydro's entry_stage_id is at or beyond the study horizon, so it never operates within the study";
+    GEOMETRY_VOLUME_NOT_INCREASING = "semantic.5a.8",
+        Semantic, BusinessRuleViolation, Error,
+        "A hydro's hydro_geometry.parquet volume_hm3 values are not strictly increasing";
+    GEOMETRY_HEIGHT_DECREASING = "semantic.5a.9",
+        Semantic, BusinessRuleViolation, Error,
+        "A hydro's hydro_geometry.parquet height_m decreases as volume increases";
+    GEOMETRY_AREA_DECREASING = "semantic.5a.10",
+        Semantic, BusinessRuleViolation, Error,
+        "A hydro's hydro_geometry.parquet area_km2 decreases as volume increases";
+    SEMANTIC_FPHA_STAGE_WITHOUT_PLANES = "semantic.5a.11",
+        Semantic, BusinessRuleViolation, Error,
+        "An FPHA hydro has no hyperplanes for a stage";
+    SEMANTIC_FPHA_PLANE_COEFFICIENT_SIGN = "semantic.5a.12",
+        Semantic, BusinessRuleViolation, Error,
+        "An FPHA hyperplane has a negative gamma_v or a positive gamma_s";
+    // The ids are valid, so the kind is InvalidValue, not InvalidReference.
+    SEMANTIC_PUMPING_SAME_ENDPOINTS = "semantic.5a.19",
+        Semantic, InvalidValue, Error,
+        "A pumping station's source and destination hydro are the same";
+    SEMANTIC_INFLOW_SEED_ANNUAL_COMPONENT_NOT_MONTHLY = "semantic.5a.29",
+        Semantic, BusinessRuleViolation, Error,
+        "Inflow annual components are supplied under a season cycle other than Monthly";
+    SEMANTIC_INFLOW_SEED_READ_SLOT_UNCOVERED = "semantic.5a.30",
+        Semantic, BusinessRuleViolation, Error,
+        "An inflow lag slot that the model reads is not fully covered by realized inflow records";
+    SEMANTIC_INFLOW_SEED_UNREAD_SLOT_UNCOVERED = "semantic.5a.31",
+        Semantic, ModelQuality, Warning,
+        "An inflow lag slot that the model never reads is not fully covered by realized inflow records";
+    SEMANTIC_INFLOW_SEED_CONDITIONING_PAST_STUDY_START = "semantic.5a.32",
+        Semantic, InvalidValue, Error,
+        "A recent_observations window extends past the study start";
+    SEMANTIC_INFLOW_SEED_PARTIAL_CURRENT_PERIOD = "semantic.5a.33",
+        Semantic, ModelQuality, Warning,
+        "The in-progress period before the study start is only partly covered by realized inflow records";
+    SEMANTIC_INFLOW_SEED_FIRST_SEASON_UNRESOLVED = "semantic.5a.34",
+        Semantic, ModelQuality, Warning,
+        "The first study stage's season cannot be resolved while inflow lag seeding is active";
+    SEMANTIC_INFLOW_SEED_NEGATIVE_RECORD = "semantic.5a.34a",
+        Semantic, ModelQuality, Warning,
+        "A realized inflow record is negative; it is accepted as incremental inflow";
+    UNIT_GROUP_DUPLICATE_ID = "semantic.5a.39",
+        Semantic, DuplicateId, Error,
+        "A hydro declares the same unit group id more than once";
+    UNIT_GROUP_BOUNDS_INVERTED = "semantic.5a.40",
+        Semantic, InvalidValue, Error,
+        "A unit group's minimum turbined flow or generation exceeds its maximum";
+    UNIT_GROUP_MAXIMA_EXCEED_PLANT = "semantic.5a.41",
+        Semantic, InvalidValue, Error,
+        "A hydro's unit group maxima sum above the plant's own max_turbined_m3s or max_generation_mw";
+    UNIT_GROUP_MINIMA_BELOW_PLANT = "semantic.5a.44",
+        Semantic, InvalidValue, Error,
+        "A hydro's unit group minima sum below the plant's own min_turbined_m3s or min_generation_mw";
+    SEMANTIC_HYDRO_DIVERSION_FLOOR_WITHOUT_CHANNEL = "semantic.5a.46",
+        Semantic, InvalidValue, Error,
+        "A hydro_bounds row sets min_diversion_m3s for a hydro that declares no diversion channel";
+    SEMANTIC_HYDRO_EVAPORATION_WITHOUT_GEOMETRY = "semantic.5a.50",
+        Semantic, BusinessRuleViolation, Error,
+        "A hydro with evaporation coefficients has no rows in hydro_geometry.parquet";
+    SEMANTIC_PUMPING_ENDPOINT_NOT_OPERATING = "semantic.5a.52",
+        Semantic, BusinessRuleViolation, Error,
+        "A pumping station is active at a study stage where its source or destination hydro is not operating";
+    TRAVEL_TIME_INVALID = "travel_time.1",
+        Semantic, InvalidValue, Error,
+        "A hydro's travel_time_hours is negative or not finite";
+    TRAVEL_TIME_ZERO = "travel_time.2",
+        Semantic, ModelQuality, Warning,
+        "A hydro's travel_time_hours is zero, so no travel-time arc is created";
+    TRAVEL_TIME_NEGLIGIBLE = "travel_time.3",
+        Semantic, ModelQuality, Warning,
+        "A hydro's travel time is negligible relative to every study stage length";
+    TRAVEL_TIME_BEYOND_HORIZON = "travel_time.4",
+        Semantic, ModelQuality, Warning,
+        "A hydro's travel time exceeds the remaining study horizon from some stage";
+    TRAVEL_TIME_DEFLUENCES_UNCOVERED = "travel_time.5",
+        Semantic, BusinessRuleViolation, Error,
+        "A travel-time arc's past_defluences windows do not cover the water in transit at the study start";
+    TRAVEL_TIME_DEFLUENCE_FUTURE_DATED = "travel_time.5b",
+        Semantic, InvalidValue, Error,
+        "A past_defluences window ends after the study start";
+    TRAVEL_TIME_HETEROGENEOUS_CONFLUENCE = "travel_time.6",
+        Semantic, NotImplemented, Error,
+        "Travel-time arcs with different travel times feed one downstream hydro while a study stage is chronological";
+    TRAVEL_TIME_DOWNSTREAM_NOT_OPERATING = "travel_time.12",
+        Semantic, BusinessRuleViolation, Error,
+        "A travel-time arc releases at a stage where its downstream hydro is not yet operating";
     PRODUCTIVITY_SUPPLIED_TWICE = "productivity_resolution.1",
         ProductivityResolution, SchemaViolation, Error,
         "A hydro's stage productivity is supplied by both hydro_production_models.json and hydro_energy_productivity.parquet";

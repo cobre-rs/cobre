@@ -23,7 +23,7 @@ use cobre_stochastic::season_cast::{
     RealizedWindow, cast, merge_layered_windows, nth_previous_occurrence, season_period_window,
 };
 
-use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::super::{ValidationContext, rules, schema::ParsedData};
 
 /// Rules 29-34 (see the module table above for the row-to-check mapping).
 pub(super) fn validate_inflow_seeding(data: &ParsedData, ctx: &mut ValidationContext) {
@@ -48,8 +48,8 @@ fn report_negative_realized_inflows(data: &ParsedData, ctx: &mut ValidationConte
             return;
         };
         let count = negatives.len();
-        ctx.add_warning(
-            ErrorKind::ModelQuality,
+        ctx.emit(
+            &rules::SEMANTIC_INFLOW_SEED_NEGATIVE_RECORD,
             file,
             None::<String>,
             format!(
@@ -99,8 +99,8 @@ fn check_annual_component_monthly_only(data: &ParsedData, ctx: &mut ValidationCo
         SeasonCycleType::Monthly => return,
     };
 
-    ctx.add_error(
-        ErrorKind::BusinessRuleViolation,
+    ctx.emit(
+        &rules::SEMANTIC_INFLOW_SEED_ANNUAL_COMPONENT_NOT_MONTHLY,
         "scenarios/inflow_annual_component.parquet",
         None::<String>,
         format!(
@@ -308,8 +308,8 @@ fn check_slot_coverage(
             .join(", ");
 
         if k <= full_coverage_upper {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_INFLOW_SEED_READ_SLOT_UNCOVERED,
                 "scenarios/inflow_history.parquet",
                 None::<String>,
                 format!(
@@ -319,8 +319,8 @@ fn check_slot_coverage(
                 ),
             );
         } else {
-            ctx.add_warning(
-                ErrorKind::ModelQuality,
+            ctx.emit(
+                &rules::SEMANTIC_INFLOW_SEED_UNREAD_SLOT_UNCOVERED,
                 "scenarios/inflow_history.parquet",
                 None::<String>,
                 format!(
@@ -343,8 +343,8 @@ fn check_conditioning_window_bound(data: &ParsedData, ctx: &mut ValidationContex
         if obs.end_date <= study_start {
             continue;
         }
-        ctx.add_error(
-            ErrorKind::InvalidValue,
+        ctx.emit(
+            &rules::SEMANTIC_INFLOW_SEED_CONDITIONING_PAST_STUDY_START,
             "initial_conditions.json",
             Some(format!("Hydro {}", obs.hydro_id.0)),
             format!(
@@ -388,8 +388,8 @@ fn check_inprogress_partial_coverage(
             continue;
         }
         let hydro_id = hydro.id.0;
-        ctx.add_warning(
-            ErrorKind::ModelQuality,
+        ctx.emit(
+            &rules::SEMANTIC_INFLOW_SEED_PARTIAL_CURRENT_PERIOD,
             "scenarios/inflow_history.parquet",
             Some(format!("Hydro {hydro_id}")),
             format!(
@@ -429,8 +429,8 @@ fn warn_unresolvable_first_stage_season(data: &ParsedData, ctx: &mut ValidationC
         .map(|h| format!("hydro {}", h.id.0))
         .collect::<Vec<_>>()
         .join(", ");
-    ctx.add_warning(
-        ErrorKind::ModelQuality,
+    ctx.emit(
+        &rules::SEMANTIC_INFLOW_SEED_FIRST_SEASON_UNRESOLVED,
         "initial_conditions.json",
         None::<String>,
         format!(
@@ -453,6 +453,7 @@ mod tests {
     use super::*;
     use crate::scenarios::InflowAnnualComponentRow;
     use crate::test_support::*;
+    use crate::validation::ErrorKind;
     use cobre_core::{RecentObservation, SeasonCycleType, SeasonMap};
 
     fn d(y: i32, m: u32, day: u32) -> chrono::NaiveDate {

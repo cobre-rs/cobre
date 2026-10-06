@@ -8,21 +8,20 @@
 use cobre_core::commissioning::{commissioning_active, hydro_operating_active};
 use cobre_core::{Hydro, PumpingStation};
 
-use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::super::{ValidationContext, rules, schema::ParsedData};
 
 /// Rule 19: rejects pumping stations whose source and destination hydros are identical.
 ///
 /// A `source_hydro_id == destination_hydro_id` station passes referential
 /// validation (the ID resolves) yet models a degenerate self-transfer: a
 /// self-cancelling `+τ`/`−τ` pair on one water-balance row while still drawing
-/// power — a silent modeling error, not a dangling reference. The IDs are valid,
-/// so the kind is [`ErrorKind::InvalidValue`], not `InvalidReference`.
+/// power — a silent modeling error, not a dangling reference.
 pub(super) fn check_pumping_semantics(data: &ParsedData, ctx: &mut ValidationContext) {
     for station in &data.pumping_stations {
         if station.source_hydro_id == station.destination_hydro_id {
             let entity_str = format!("PumpingStation {}", station.id.0);
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_PUMPING_SAME_ENDPOINTS,
                 "system/pumping_stations.json",
                 Some(&entity_str),
                 format!(
@@ -57,8 +56,8 @@ pub(super) fn check_pumping_operating_window(data: &ParsedData, ctx: &mut Valida
                 continue;
             };
             let entity_str = format!("PumpingStation {}", station.id.0);
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_PUMPING_ENDPOINT_NOT_OPERATING,
                 "system/pumping_stations.json",
                 Some(&entity_str),
                 format!(

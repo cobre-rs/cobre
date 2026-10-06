@@ -37,6 +37,7 @@
 use std::time::Instant;
 
 use crate::{
+    config::ShutdownSource,
     forward::SyncResult,
     stopping_rule::{MonitorState, StopDecision, StoppingRuleSet, relative_gap_denominator},
 };
@@ -57,12 +58,14 @@ pub struct ConvergenceMonitor {
     gap: f64,
     lower_bound_history: Vec<f64>,
     iteration_count: u64,
+    iteration_budget: u64,
     start_time: Instant,
-    shutdown_requested: bool,
+    shutdown: Option<ShutdownSource>,
 }
 
 impl ConvergenceMonitor {
-    /// Create a new convergence monitor with the given stopping rule set.
+    /// Create a new convergence monitor with the given stopping rule set and no
+    /// iteration budget.
     ///
     /// The lower-bound history grows on demand; [`Self::with_iteration_budget`]
     /// reserves it up front.
@@ -77,30 +80,51 @@ impl ConvergenceMonitor {
             gap: 0.0,
             lower_bound_history: Vec::new(),
             iteration_count: 0,
+            iteration_budget: u64::MAX,
             start_time: Instant::now(),
-            shutdown_requested: false,
+            shutdown: None,
         }
     }
 
-    /// Create a monitor whose lower-bound history is reserved for the run's
-    /// absolute iteration budget, so [`Self::update`] never reallocates it.
+    /// Create a monitor for the run's absolute iteration budget: the decision
+    /// at iteration `max_iterations` carries [`StopMask::BUDGET_EXHAUSTED`], and
+    /// the lower-bound history is reserved so [`Self::update`] never reallocates
+    /// it.
     ///
     /// A resumed run that restores earlier entries stays within the budget,
     /// because restored plus remaining iterations never exceed `max_iterations`.
+    ///
+    /// [`StopMask::BUDGET_EXHAUSTED`]: crate::StopMask::BUDGET_EXHAUSTED
     #[must_use]
     pub fn with_iteration_budget(rule_set: StoppingRuleSet, max_iterations: u64) -> Self {
         let mut monitor = Self::new(rule_set);
+        monitor.iteration_budget = max_iterations;
         monitor
             .lower_bound_history
             .reserve_exact(usize::try_from(max_iterations).unwrap_or(0));
         monitor
     }
 
+    /// Seed the iteration counter of a resumed run, so the next [`Self::update`]
+    /// evaluates iteration `completed_iterations + 1` and `IterationLimit` and
+    /// the budget fire at absolute iteration numbers.
+    ///
+    /// Call it once, before the first `update`, in the same restore that
+    /// restores the lower-bound history.
+    pub fn resume_at(&mut self, completed_iterations: u64) {
+        self.iteration_count = completed_iterations;
+    }
+
     /// Update bound statistics and evaluate stopping rules.
     ///
-    /// Returns the [`StopDecision`]. Gap is normalized by the LOWER bound
-    /// (`max(1.0, |LB|)` denominator, shared with the `Gap` stopping rule) to
-    /// guard against division by zero.
+    /// Returns the [`StopDecision`], with [`StopMask::SIGNAL`] added for a
+    /// signal shutdown and [`StopMask::BUDGET_EXHAUSTED`] at the last budgeted
+    /// iteration. Gap is normalized by the LOWER bound (`max(1.0, |LB|)`
+    /// denominator, shared with the `Gap` stopping rule) to guard against
+    /// division by zero.
+    ///
+    /// [`StopMask::SIGNAL`]: crate::StopMask::SIGNAL
+    /// [`StopMask::BUDGET_EXHAUSTED`]: crate::StopMask::BUDGET_EXHAUSTED
     pub fn update(&mut self, lb: f64, sync_result: &SyncResult) -> StopDecision {
         self.lower_bound = lb;
         self.upper_bound = sync_result.global_ub_mean;
@@ -120,18 +144,25 @@ impl ConvergenceMonitor {
             lower_bound: self.lower_bound,
             upper_bound: self.upper_bound,
             lower_bound_history: history,
-            shutdown_requested: self.shutdown_requested,
+            shutdown_requested: self.shutdown.is_some(),
         };
 
-        let result = self.rule_set.evaluate(&state);
+        let mut decision = self.rule_set.evaluate(&state);
         self.lower_bound_history = state.lower_bound_history;
-        result
+        if self.shutdown == Some(ShutdownSource::Signal) {
+            decision = decision.with_signal_source();
+        }
+        if self.iteration_count >= self.iteration_budget {
+            decision = decision.with_budget_exhausted();
+        }
+        decision
     }
 
-    /// Signal a graceful shutdown request; the next [`ConvergenceMonitor::update`]
-    /// returns a decision that stops and carries `StopMask::SHUTDOWN`.
-    pub fn set_shutdown(&mut self) {
-        self.shutdown_requested = true;
+    /// Record a shutdown request from `source`, keeping the stronger of it and
+    /// any earlier request; the next [`ConvergenceMonitor::update`] returns a
+    /// decision that stops and carries `StopMask::SHUTDOWN`.
+    pub fn set_shutdown(&mut self, source: ShutdownSource) {
+        self.shutdown = self.shutdown.max(Some(source));
     }
 
     /// Current lower bound.
@@ -179,6 +210,7 @@ impl ConvergenceMonitor {
 mod tests {
     use super::ConvergenceMonitor;
     use crate::{
+        config::ShutdownSource,
         forward::SyncResult,
         stopping_rule::{StopMask, StoppingMode, StoppingRule, StoppingRuleSet},
     };
@@ -303,11 +335,12 @@ mod tests {
             mode: StoppingMode::Any,
         };
         let mut monitor = ConvergenceMonitor::new(rule_set);
-        monitor.set_shutdown();
+        monitor.set_shutdown(ShutdownSource::Cooperative);
         let decision = monitor.update(100.0, &default_sync());
         assert!(decision.should_stop(), "should stop after shutdown signal");
         assert!(decision.mask().contains(StopMask::SHUTDOWN));
-        assert_eq!(decision.first_triggered(), Some("graceful_shutdown"));
+        assert!(!decision.mask().contains(StopMask::SIGNAL));
+        assert_eq!(decision.termination_reason(), Some("graceful_shutdown"));
     }
 
     #[test]
@@ -327,7 +360,7 @@ mod tests {
             decision.should_stop(),
             "gap 30 within tolerance 1000 must stop"
         );
-        assert_eq!(decision.first_triggered(), Some("gap"));
+        assert_eq!(decision.termination_reason(), Some("gap"));
         assert!(decision.mask().contains(StopMask::GAP));
     }
 
@@ -365,7 +398,7 @@ mod tests {
             "should stop at iteration 3 (limit reached)"
         );
         assert!(decision3.mask().contains(StopMask::ITERATION_LIMIT));
-        assert_eq!(decision3.first_triggered(), Some("iteration_limit"));
+        assert_eq!(decision3.termination_reason(), Some("iteration_limit"));
     }
 
     #[test]
@@ -420,7 +453,7 @@ mod tests {
             "third update must trigger IterationLimit(3)"
         );
         assert!(decision.mask().contains(StopMask::ITERATION_LIMIT));
-        assert_eq!(decision.first_triggered(), Some("iteration_limit"));
+        assert_eq!(decision.termination_reason(), Some("iteration_limit"));
     }
 
     #[test]
@@ -456,11 +489,11 @@ mod tests {
             mode: StoppingMode::Any,
         };
         let mut monitor = ConvergenceMonitor::new(rule_set);
-        monitor.set_shutdown();
+        monitor.set_shutdown(ShutdownSource::Cooperative);
         let decision = monitor.update(100.0, &default_sync());
         assert!(decision.should_stop());
         assert!(decision.mask().contains(StopMask::SHUTDOWN));
-        assert_eq!(decision.first_triggered(), Some("graceful_shutdown"));
+        assert_eq!(decision.termination_reason(), Some("graceful_shutdown"));
     }
 
     #[test]
@@ -475,5 +508,96 @@ mod tests {
             monitor.lower_bound()
         );
         assert_eq!(monitor.iteration_count(), 2);
+    }
+
+    #[test]
+    fn exhausted_budget_wins_over_a_signal_shutdown() {
+        let mut monitor = ConvergenceMonitor::with_iteration_budget(
+            make_rule_set(StoppingRule::IterationLimit { limit: 100 }),
+            2,
+        );
+        assert!(!monitor.update(100.0, &default_sync()).should_stop());
+
+        monitor.set_shutdown(ShutdownSource::Signal);
+        let decision = monitor.update(100.0, &default_sync());
+        assert!(!decision.configured_stop());
+        assert!(!decision.mask().contains(StopMask::ITERATION_LIMIT));
+        assert!(decision.mask().contains(StopMask::BUDGET_EXHAUSTED));
+        assert!(decision.mask().contains(StopMask::SHUTDOWN));
+        assert!(decision.mask().contains(StopMask::SIGNAL));
+        assert_eq!(decision.termination_reason(), Some("iteration_limit"));
+        assert!(!decision.ended_by_shutdown());
+    }
+
+    #[test]
+    fn exhausted_budget_without_a_configured_stop_reports_iteration_limit() {
+        let rule_set = StoppingRuleSet {
+            rules: vec![
+                StoppingRule::IterationLimit { limit: 3 },
+                StoppingRule::BoundStalling {
+                    tolerance: 1e-12,
+                    iterations: 50,
+                },
+            ],
+            mode: StoppingMode::All,
+        };
+        let mut monitor = ConvergenceMonitor::with_iteration_budget(rule_set, 3);
+        for iteration in 1..=2 {
+            let decision = monitor.update(100.0, &default_sync());
+            assert!(!decision.should_stop(), "iteration {iteration}");
+            assert!(!decision.mask().contains(StopMask::BUDGET_EXHAUSTED));
+        }
+
+        let decision = monitor.update(100.0, &default_sync());
+        assert!(!decision.configured_stop());
+        assert!(decision.mask().contains(StopMask::BUDGET_EXHAUSTED));
+        assert!(!decision.mask().contains(StopMask::SHUTDOWN));
+        assert!(decision.should_stop());
+        assert_eq!(decision.termination_reason(), Some("iteration_limit"));
+        assert!(!decision.ended_by_shutdown());
+    }
+
+    #[test]
+    fn monitor_without_a_budget_never_reports_one_exhausted() {
+        let mut monitor =
+            ConvergenceMonitor::new(make_rule_set(StoppingRule::TimeLimit { seconds: 1e9 }));
+        for _ in 0..5 {
+            let decision = monitor.update(100.0, &default_sync());
+            assert!(!decision.mask().contains(StopMask::BUDGET_EXHAUSTED));
+            assert!(!decision.should_stop());
+        }
+    }
+
+    #[test]
+    fn resumed_monitor_fires_the_iteration_limit_at_the_absolute_iteration() {
+        let mut monitor = ConvergenceMonitor::with_iteration_budget(
+            make_rule_set(StoppingRule::IterationLimit { limit: 7 }),
+            7,
+        );
+        monitor.resume_at(5);
+
+        let first = monitor.update(100.0, &default_sync());
+        assert_eq!(monitor.iteration_count(), 6);
+        assert!(!first.should_stop());
+        assert_eq!(first.termination_reason(), None);
+
+        let second = monitor.update(100.0, &default_sync());
+        assert_eq!(monitor.iteration_count(), 7);
+        assert!(second.configured_stop());
+        assert!(second.mask().contains(StopMask::ITERATION_LIMIT));
+        assert_eq!(second.termination_reason(), Some("iteration_limit"));
+    }
+
+    #[test]
+    fn cooperative_shutdown_after_a_signal_keeps_the_signal_source() {
+        let mut monitor =
+            ConvergenceMonitor::new(make_rule_set(StoppingRule::IterationLimit { limit: 100 }));
+        monitor.set_shutdown(ShutdownSource::Signal);
+        monitor.set_shutdown(ShutdownSource::Cooperative);
+        let decision = monitor.update(100.0, &default_sync());
+        assert!(decision.mask().contains(StopMask::SHUTDOWN));
+        assert!(decision.mask().contains(StopMask::SIGNAL));
+        assert_eq!(decision.termination_reason(), Some("graceful_shutdown"));
+        assert!(decision.ended_by_shutdown());
     }
 }

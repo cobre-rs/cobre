@@ -33,7 +33,7 @@
 //! ```
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc::Sender;
 
 use cobre_core::TrainingEvent;
@@ -171,13 +171,48 @@ pub struct EventConfig {
     /// Iterations between checkpoint writes (`iteration % n == 0`); `None` writes none.
     pub checkpoint_interval: Option<u64>,
 
-    /// Shutdown signal checked (`load(Relaxed)`) at each iteration boundary for early exit.
-    pub shutdown_flag: Option<Arc<AtomicBool>>,
+    /// Shutdown request, read once per iteration just before the stop decision.
+    ///
+    /// `0` means no request; otherwise the value is the [`ShutdownSource::level`]
+    /// of the strongest request. Writers only raise it (`fetch_max`, or
+    /// signal-hook's `register_usize` with the signal level) and never lower it,
+    /// and a cooperative writer never stores the signal level.
+    pub shutdown_flag: Option<Arc<AtomicUsize>>,
 
     /// Allocate the visited-states archive for state export. Also forced on when any
     /// [`CutSelectionStrategy`] is enabled — the value-evaluation kernel scores every
     /// cut at every archived state. Default `false`.
     pub export_states: bool,
+}
+
+/// Where a shutdown request came from, ordered from weakest to strongest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ShutdownSource {
+    /// A request from the embedding program, such as a progress callback.
+    Cooperative,
+    /// A process signal.
+    Signal,
+}
+
+impl ShutdownSource {
+    /// The value this source stores in [`EventConfig::shutdown_flag`].
+    #[must_use]
+    pub const fn level(self) -> usize {
+        match self {
+            Self::Cooperative => 1,
+            Self::Signal => 2,
+        }
+    }
+
+    /// The source a stored level stands for; `0` is no request, and a level
+    /// above the signal's reads as a signal.
+    pub(crate) const fn from_level(level: usize) -> Option<Self> {
+        match level {
+            0 => None,
+            1 => Some(Self::Cooperative),
+            _ => Some(Self::Signal),
+        }
+    }
 }
 
 /// Pure-data event parameters stored on [`crate::setup::StudySetup`].

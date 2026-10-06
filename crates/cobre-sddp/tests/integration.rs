@@ -19,7 +19,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 use chrono::NaiveDate;
@@ -42,8 +42,9 @@ use cobre_stochastic::{
 };
 
 use cobre_sddp::{
-    SddpError, SolverProfiles, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    config::{CutManagementConfig, EventConfig, LoopConfig},
+    SddpError, SolverProfiles, StopMask, StoppingMode, StoppingRule, StoppingRuleSet,
+    TrainingConfig,
+    config::{CutManagementConfig, EventConfig, LoopConfig, ShutdownSource},
     context::TrainingContext,
     cut::fcf::FutureCostFunction,
     horizon_mode::HorizonMode,
@@ -81,18 +82,21 @@ fn study_dims() -> StudyDimensions {
     StudyDimensions::default()
 }
 
-/// Communicator wrapper that sets `flag` to `true` on the first `allgatherv`
-/// call, simulating a shutdown signal arriving mid-iteration-1. On subsequent
-/// calls it behaves identically to [`StubComm`].
+/// Communicator wrapper that stores `level` into `flag` on the first
+/// `allgatherv` call (iteration 1's forward sync), simulating a shutdown
+/// request arriving mid-iteration-1. On subsequent calls it behaves
+/// identically to [`StubComm`].
 struct ShutdownComm {
-    flag: Arc<AtomicBool>,
+    flag: Arc<AtomicUsize>,
+    level: usize,
     allgatherv_calls: AtomicUsize,
 }
 
 impl ShutdownComm {
-    fn new(flag: Arc<AtomicBool>) -> Self {
+    fn new(flag: Arc<AtomicUsize>, level: usize) -> Self {
         Self {
             flag,
+            level,
             allgatherv_calls: AtomicUsize::new(0),
         }
     }
@@ -108,7 +112,7 @@ impl Communicator for ShutdownComm {
     ) -> Result<(), CommError> {
         recv[..send.len()].clone_from_slice(send);
         if self.allgatherv_calls.fetch_add(1, Ordering::Relaxed) == 0 {
-            self.flag.store(true, Ordering::Relaxed);
+            self.flag.store(self.level, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -943,20 +947,19 @@ fn train_stops_at_iteration_limit() {
     assert_eq!(result.result.reason, "iteration_limit");
 }
 
-#[test]
-fn train_stops_on_graceful_shutdown() {
+/// Train under the production rule shape (`[IterationLimit{20}]`, no
+/// `GracefulShutdown` entry) with a shutdown request of `level` stored during
+/// iteration 1.
+fn train_with_a_shutdown_during_iteration_1(level: usize) -> cobre_sddp::TrainingOutcome {
     let fx = Fixture::new(2);
     let mut fcf = make_fcf(fx.n_stages);
     let mut solver = MockSolver::with_fixed(100.0);
 
-    let shutdown_flag = Arc::new(AtomicBool::new(false));
-    let comm = ShutdownComm::new(Arc::clone(&shutdown_flag));
+    let shutdown_flag = Arc::new(AtomicUsize::new(0));
+    let comm = ShutdownComm::new(Arc::clone(&shutdown_flag), level);
 
     let rules = StoppingRuleSet {
-        rules: vec![
-            StoppingRule::GracefulShutdown,
-            StoppingRule::IterationLimit { limit: 20 },
-        ],
+        rules: vec![StoppingRule::IterationLimit { limit: 20 }],
         mode: StoppingMode::Any,
     };
 
@@ -964,7 +967,7 @@ fn train_stops_on_graceful_shutdown() {
     let geometry = equipment_free_geometry(&[1usize, 1]);
     let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
-    let result = train(
+    train(
         &mut solver,
         TrainingConfig {
             loop_config: LoopConfig {
@@ -1016,10 +1019,38 @@ fn train_stops_on_graceful_shutdown() {
         None,
         SolverProfiles::default(),
     )
-    .unwrap();
+    .unwrap()
+}
+
+#[test]
+fn train_stops_on_graceful_shutdown() {
+    let result = train_with_a_shutdown_during_iteration_1(ShutdownSource::Cooperative.level());
 
     assert_eq!(result.result.reason, "graceful_shutdown");
-    assert!(result.result.iterations <= 2);
+    assert_eq!(result.result.iterations, 1);
+    assert!(result.result.stop_decision.ended_by_shutdown());
+    assert!(
+        !result
+            .result
+            .stop_decision
+            .mask()
+            .contains(StopMask::SIGNAL)
+    );
+}
+
+#[test]
+fn train_records_a_signal_shutdown_source() {
+    let result = train_with_a_shutdown_during_iteration_1(ShutdownSource::Signal.level());
+
+    assert_eq!(result.result.reason, "graceful_shutdown");
+    assert_eq!(result.result.iterations, 1);
+    assert!(
+        result
+            .result
+            .stop_decision
+            .mask()
+            .contains(StopMask::SIGNAL)
+    );
 }
 
 #[test]

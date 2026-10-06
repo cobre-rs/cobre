@@ -26,7 +26,6 @@ use self::rank_distribution::RankDistribution;
 use self::results::TrainingResults;
 use self::runtime::RuntimeHandles;
 
-use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
@@ -57,7 +56,6 @@ use crate::{
         aggregate_solver_statistics, pack_delta_scalars, unpack_delta_scalars,
     },
     state_exchange::ExchangeBuffers,
-    stopping_rule::RULE_GRACEFUL_SHUTDOWN,
     training::{TrainingOutcome, TrainingResult, broadcast_basis_cache},
     workspace::{BasisStore, NoisePreallocation, WorkspacePool, WorkspaceSizing},
 };
@@ -86,9 +84,10 @@ fn emit(sender: Option<&Sender<TrainingEvent>>, event: TrainingEvent) {
 pub(crate) enum IterationOutcome {
     /// The iteration completed normally; the loop should continue.
     Continue,
-    /// A stopping rule triggered; the loop should break.
+    /// A configured stop was met or the iteration budget ran out; the loop
+    /// should break.
     Converged,
-    /// An external shutdown flag was observed; the loop should break.
+    /// A shutdown request ended training with neither; the loop should break.
     Shutdown,
 }
 
@@ -430,12 +429,6 @@ where
     /// Propagates `SddpError` from forward pass, sync, backward pass, or lower
     /// bound evaluation failures.
     pub(crate) fn run_iteration(&mut self, iteration: u64) -> Result<IterationOutcome, SddpError> {
-        if let Some(flag) = self.runtime.shutdown_flag.as_ref()
-            && flag.load(Ordering::Relaxed)
-        {
-            self.convergence_monitor.set_shutdown();
-        }
-
         let iter_start = Instant::now();
 
         // Snapshot before this iteration's solves so the post-backward delta
@@ -489,6 +482,9 @@ where
 
         let (lb, lb_lp_solves, lb_wall_ms, lb_solve_time_ms) = self.run_lower_bound(iteration)?;
 
+        if let Some(source) = self.runtime.shutdown_requested() {
+            self.convergence_monitor.set_shutdown(source);
+        }
         let decision = self.convergence_monitor.update(lb, &sync_result);
 
         self.results.final_lb = self.convergence_monitor.lower_bound();
@@ -554,13 +550,11 @@ where
 
         self.results.completed_iterations = iteration;
 
-        if decision.should_stop() {
+        if let Some(reason) = decision.termination_reason() {
             self.results.stop_decision = decision;
-            self.results.termination_reason = decision
-                .first_triggered()
-                .map_or_else(|| "unknown".to_string(), str::to_string);
+            self.results.termination_reason = reason.to_string();
 
-            if self.results.termination_reason == RULE_GRACEFUL_SHUTDOWN {
+            if decision.ended_by_shutdown() {
                 return Ok(IterationOutcome::Shutdown);
             }
             return Ok(IterationOutcome::Converged);

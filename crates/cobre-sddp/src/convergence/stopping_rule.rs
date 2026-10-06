@@ -71,7 +71,8 @@ pub struct MonitorState {
     /// Lower bounds from past iterations, chronological: `[i]` is iteration `i + 1`.
     pub lower_bound_history: Vec<f64>,
 
-    /// Whether an external shutdown signal (SIGTERM / SIGINT) has been received.
+    /// Whether a shutdown has been requested, from any
+    /// [`crate::config::ShutdownSource`].
     pub shutdown_requested: bool,
 }
 
@@ -82,14 +83,19 @@ pub struct MonitorState {
 /// Combination mode for [`StoppingRuleSet`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoppingMode {
-    /// Stop when **any** configured rule triggers (OR logic). `GracefulShutdown`
-    /// takes precedence regardless of mode.
+    /// Stop when **any** configured rule triggers (OR logic). A shutdown
+    /// request also stops the run, as the [`StopMask::SHUTDOWN`] bit; a
+    /// configured stop or an exhausted budget at the same iteration is the
+    /// reported reason, and listing `GracefulShutdown` changes nothing.
     Any,
 
     /// Stop when every rule other than `IterationLimit` triggers at the same
     /// iteration (AND logic), with at least one such rule; the run's iteration
     /// budget, the largest `IterationLimit`, caps the run whatever the other
-    /// rules do. `GracefulShutdown` takes precedence regardless of mode.
+    /// rules do. A shutdown request also stops the run, as the
+    /// [`StopMask::SHUTDOWN`] bit; a configured stop or an exhausted budget at
+    /// the same iteration is the reported reason, and listing `GracefulShutdown`
+    /// changes nothing.
     All,
 }
 
@@ -98,10 +104,8 @@ pub enum StoppingMode {
 // ---------------------------------------------------------------------------
 
 /// Individual stopping rule for the SDDP training loop, composed into a
-/// [`StoppingRuleSet`]. [`StoppingRule::GracefulShutdown`] is always evaluated
-/// first and bypasses composition; every set must contain at least one
-/// `IterationLimit` (the safety bound against infinite loops, validated at
-/// config load).
+/// [`StoppingRuleSet`]. Every set must contain at least one `IterationLimit`
+/// (the safety bound against infinite loops, validated at config load).
 #[derive(Debug, Clone)]
 pub enum StoppingRule {
     /// Terminate when the iteration count reaches a fixed limit.
@@ -147,9 +151,10 @@ pub enum StoppingRule {
         relative_tolerance: Option<f64>,
     },
 
-    /// Terminate when an external shutdown signal (SIGTERM / SIGINT) is received.
-    /// Not JSON-configured — always implicitly present and evaluated before the
-    /// composition logic.
+    /// Terminate on a shutdown request. Not JSON-configured: every set treats a
+    /// request as the [`StopMask::SHUTDOWN`] bit, so listing this variant
+    /// changes nothing, and a configured stop or an exhausted budget at the same
+    /// iteration is the reported reason.
     GracefulShutdown,
 }
 
@@ -237,12 +242,15 @@ impl StoppingRule {
 // StopMask / StopDecision
 // ---------------------------------------------------------------------------
 
-/// Bitset of the rule kinds that triggered at one iteration.
+/// Bitset of the rule kinds that triggered at one iteration, plus the
+/// qualifiers only the [`crate::ConvergenceMonitor`] knows.
 ///
 /// A kind bit means "at least one listed rule of this kind triggered", under
 /// either [`StoppingMode`]. [`StopMask::SHUTDOWN`] is also set whenever
 /// [`MonitorState::shutdown_requested`] is true, whether or not a
-/// [`StoppingRule::GracefulShutdown`] rule is listed.
+/// [`StoppingRule::GracefulShutdown`] rule is listed. [`StoppingRuleSet::evaluate`]
+/// never sets [`StopMask::SIGNAL`] or [`StopMask::BUDGET_EXHAUSTED`];
+/// [`crate::ConvergenceMonitor::update`] adds them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StopMask(u32);
 
@@ -257,6 +265,11 @@ impl StopMask {
     pub const GAP: Self = Self(1 << 3);
     /// A shutdown was requested.
     pub const SHUTDOWN: Self = Self(1 << 4);
+    /// The shutdown request came from a process signal; only ever set together
+    /// with [`StopMask::SHUTDOWN`].
+    pub const SIGNAL: Self = Self(1 << 5);
+    /// This iteration is the run's last budgeted iteration.
+    pub const BUDGET_EXHAUSTED: Self = Self(1 << 6);
 
     /// Whether every bit of `other` is set in `self`.
     #[must_use]
@@ -270,7 +283,7 @@ impl StopMask {
 }
 
 /// The outcome of one stop decision: which rule kinds triggered, whether the
-/// configured rules call for a stop, and which rule ended the run.
+/// configured rules call for a stop, and why the run ended.
 ///
 /// `configured_stop` and `first_triggered` come from the per-rule pass, never
 /// from the mask: a per-kind bit cannot tell repeated kinds apart under
@@ -298,18 +311,53 @@ impl StopDecision {
         self.configured_stop
     }
 
-    /// The name of the first triggered rule in declared order among the rules
-    /// the mode decides on: every rule under [`StoppingMode::Any`], every rule
-    /// except `IterationLimit` under [`StoppingMode::All`].
-    #[must_use]
-    pub fn first_triggered(&self) -> Option<&'static str> {
-        self.first_triggered
-    }
-
-    /// Whether training stops: a configured stop or a shutdown request.
+    /// Whether training stops: a configured stop, an exhausted iteration
+    /// budget, or a shutdown request.
     #[must_use]
     pub fn should_stop(&self) -> bool {
-        self.configured_stop || self.mask.contains(StopMask::SHUTDOWN)
+        self.configured_stop
+            || self.mask.contains(StopMask::BUDGET_EXHAUSTED)
+            || self.mask.contains(StopMask::SHUTDOWN)
+    }
+
+    /// Why training stops, or `None` if it does not.
+    ///
+    /// A configured stop names its first triggered rule in declared order among
+    /// the rules the mode decides on (every rule but `GracefulShutdown` under
+    /// [`StoppingMode::Any`], also leaving out `IterationLimit` under
+    /// [`StoppingMode::All`]). Otherwise an exhausted budget is
+    /// [`RULE_ITERATION_LIMIT`], and a shutdown request alone is
+    /// [`RULE_GRACEFUL_SHUTDOWN`].
+    #[must_use]
+    pub fn termination_reason(self) -> Option<&'static str> {
+        if self.configured_stop {
+            self.first_triggered
+        } else if self.mask.contains(StopMask::BUDGET_EXHAUSTED) {
+            Some(RULE_ITERATION_LIMIT)
+        } else if self.mask.contains(StopMask::SHUTDOWN) {
+            Some(RULE_GRACEFUL_SHUTDOWN)
+        } else {
+            None
+        }
+    }
+
+    /// Whether a shutdown request ended training with neither a configured
+    /// stop nor an exhausted budget, so the reason is [`RULE_GRACEFUL_SHUTDOWN`].
+    #[must_use]
+    pub fn ended_by_shutdown(self) -> bool {
+        self.mask.contains(StopMask::SHUTDOWN)
+            && !self.configured_stop
+            && !self.mask.contains(StopMask::BUDGET_EXHAUSTED)
+    }
+
+    pub(crate) fn with_signal_source(mut self) -> Self {
+        self.mask.insert(StopMask::SIGNAL);
+        self
+    }
+
+    pub(crate) fn with_budget_exhausted(mut self) -> Self {
+        self.mask.insert(StopMask::BUDGET_EXHAUSTED);
+        self
     }
 }
 
@@ -351,9 +399,10 @@ impl StopDecision {
 #[derive(Debug, Clone)]
 pub struct StoppingRuleSet {
     /// The individual stopping rules. Must contain at least one
-    /// [`StoppingRule::IterationLimit`] (validated at config load);
-    /// [`StoppingRule::GracefulShutdown`] is evaluated unconditionally regardless
-    /// of its position here.
+    /// [`StoppingRule::IterationLimit`] (validated at config load). A shutdown
+    /// request is the [`StopMask::SHUTDOWN`] bit of every set, reported as the
+    /// reason only without a configured stop or an exhausted budget at the same
+    /// iteration, so a [`StoppingRule::GracefulShutdown`] entry changes nothing.
     pub rules: Vec<StoppingRule>,
 
     /// Combination mode for the rules.
@@ -385,14 +434,13 @@ impl StoppingRuleSet {
             if triggered {
                 mask.insert(rule.stop_bit());
             }
-            if all_mode && matches!(rule, StoppingRule::IterationLimit { .. }) {
+            if matches!(rule, StoppingRule::GracefulShutdown)
+                || (all_mode && matches!(rule, StoppingRule::IterationLimit { .. }))
+            {
                 continue;
             }
             if triggered && first_triggered.is_none() {
                 first_triggered = Some(rule.name());
-            }
-            if matches!(rule, StoppingRule::GracefulShutdown) {
-                continue;
             }
             has_configured = true;
             any_triggered |= triggered;
@@ -417,7 +465,10 @@ impl StoppingRuleSet {
 
 #[cfg(test)]
 mod tests {
-    use super::{MonitorState, StopMask, StoppingMode, StoppingRule, StoppingRuleSet};
+    use super::{
+        MonitorState, RULE_GRACEFUL_SHUTDOWN, RULE_ITERATION_LIMIT, RULE_TIME_LIMIT, StopDecision,
+        StopMask, StoppingMode, StoppingRule, StoppingRuleSet,
+    };
 
     fn make_state(iteration: u64, wall_time: f64, lb: f64, history: Vec<f64>) -> MonitorState {
         MonitorState {
@@ -628,7 +679,7 @@ mod tests {
         let state = make_state(100, 1000.0, 0.0, vec![]);
         let decision = rule_set.evaluate(&state);
         assert!(decision.should_stop());
-        assert_eq!(decision.first_triggered(), Some("iteration_limit"));
+        assert_eq!(decision.termination_reason(), Some("iteration_limit"));
         assert!(decision.mask().contains(StopMask::ITERATION_LIMIT));
         assert!(!decision.mask().contains(StopMask::TIME_LIMIT));
     }
@@ -743,7 +794,7 @@ mod tests {
             mode: StoppingMode::Any,
         };
         let decision = rule_set.evaluate(&make_state(6, 50.0, 0.0, vec![]));
-        assert_eq!(decision.first_triggered(), Some("time_limit"));
+        assert_eq!(decision.termination_reason(), Some("time_limit"));
     }
 
     #[test]
@@ -777,13 +828,14 @@ mod tests {
         let stalled = rule_set.evaluate(&make_state(4, 0.0, 100.0, vec![100.0]));
         assert!(stalled.configured_stop());
         assert!(stalled.should_stop());
-        assert_eq!(stalled.first_triggered(), Some("bound_stalling"));
+        assert_eq!(stalled.termination_reason(), Some("bound_stalling"));
         assert!(stalled.mask().contains(StopMask::BOUND_STALLING));
         assert!(!stalled.mask().contains(StopMask::ITERATION_LIMIT));
 
         let capped = rule_set.evaluate(&make_state(10, 0.0, 100.0, vec![]));
         assert!(!capped.configured_stop());
         assert!(!capped.should_stop());
+        assert_eq!(capped.termination_reason(), None);
         assert!(capped.mask().contains(StopMask::ITERATION_LIMIT));
     }
 
@@ -792,7 +844,7 @@ mod tests {
         let decision =
             stalling_set(StoppingMode::All).evaluate(&make_state(10, 0.0, 100.0, vec![100.0]));
         assert!(decision.configured_stop());
-        assert_eq!(decision.first_triggered(), Some("bound_stalling"));
+        assert_eq!(decision.termination_reason(), Some("bound_stalling"));
     }
 
     #[test]
@@ -814,6 +866,7 @@ mod tests {
                 let decision = rule_set.evaluate(&state);
                 assert!(!decision.configured_stop(), "iteration {iteration}");
                 assert!(!decision.should_stop(), "iteration {iteration}");
+                assert_eq!(decision.termination_reason(), None, "iteration {iteration}");
                 assert!(
                     decision.mask().contains(StopMask::ITERATION_LIMIT),
                     "iteration {iteration}"
@@ -823,6 +876,11 @@ mod tests {
                 let decision = rule_set.evaluate(&state);
                 assert!(decision.should_stop(), "iteration {iteration}");
                 assert!(!decision.configured_stop(), "iteration {iteration}");
+                assert_eq!(
+                    decision.termination_reason(),
+                    Some("graceful_shutdown"),
+                    "iteration {iteration}"
+                );
             }
         }
     }
@@ -886,6 +944,121 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn configured_rule_wins_a_coincident_shutdown() {
+        let rule_set = StoppingRuleSet {
+            rules: vec![
+                StoppingRule::GracefulShutdown,
+                StoppingRule::IterationLimit { limit: 5 },
+            ],
+            mode: StoppingMode::Any,
+        };
+        let state = MonitorState {
+            shutdown_requested: true,
+            ..make_state(5, 0.0, 0.0, vec![])
+        };
+        let decision = rule_set.evaluate(&state);
+        assert!(decision.configured_stop());
+        assert!(decision.mask().contains(StopMask::SHUTDOWN));
+        assert_eq!(decision.termination_reason(), Some("iteration_limit"));
+        assert!(!decision.ended_by_shutdown());
+    }
+
+    #[test]
+    fn all_mode_partial_set_with_a_shutdown_reports_graceful_shutdown() {
+        let rule_set = StoppingRuleSet {
+            rules: vec![
+                StoppingRule::IterationLimit { limit: 100 },
+                StoppingRule::TimeLimit { seconds: 3600.0 },
+                StoppingRule::BoundStalling {
+                    tolerance: 1e-3,
+                    iterations: 1,
+                },
+            ],
+            mode: StoppingMode::All,
+        };
+        let state = MonitorState {
+            shutdown_requested: true,
+            ..make_state(4, 0.0, 100.0, vec![100.0])
+        };
+        let decision = rule_set.evaluate(&state);
+        assert!(decision.mask().contains(StopMask::BOUND_STALLING));
+        assert!(!decision.mask().contains(StopMask::TIME_LIMIT));
+        assert!(!decision.configured_stop());
+        assert!(decision.should_stop());
+        assert_eq!(decision.termination_reason(), Some("graceful_shutdown"));
+        assert!(decision.ended_by_shutdown());
+    }
+
+    #[test]
+    fn shutdown_without_a_configured_stop_reports_graceful_shutdown() {
+        for mode in [StoppingMode::Any, StoppingMode::All] {
+            let rule_set = StoppingRuleSet {
+                rules: vec![
+                    StoppingRule::IterationLimit { limit: 100 },
+                    StoppingRule::TimeLimit { seconds: 3600.0 },
+                ],
+                mode,
+            };
+            let state = MonitorState {
+                shutdown_requested: true,
+                ..make_state(1, 0.0, 0.0, vec![])
+            };
+            let decision = rule_set.evaluate(&state);
+            assert!(!decision.configured_stop(), "{mode:?}");
+            assert_eq!(
+                decision.termination_reason(),
+                Some("graceful_shutdown"),
+                "{mode:?}"
+            );
+            assert!(decision.ended_by_shutdown(), "{mode:?}");
+            assert!(!decision.mask().contains(StopMask::SIGNAL), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn should_stop_equals_a_present_termination_reason() {
+        for bits in 0..16_u8 {
+            let [configured_stop, budget, shutdown, signal] =
+                [0, 1, 2, 3].map(|i| bits >> i & 1 == 1);
+            let mut mask = StopMask::default();
+            for (set, bit) in [
+                (budget, StopMask::BUDGET_EXHAUSTED),
+                (shutdown, StopMask::SHUTDOWN),
+                (signal, StopMask::SIGNAL),
+            ] {
+                if set {
+                    mask.insert(bit);
+                }
+            }
+            let decision = StopDecision {
+                mask,
+                configured_stop,
+                first_triggered: configured_stop.then_some(RULE_TIME_LIMIT),
+            };
+            let expected = if configured_stop {
+                Some(RULE_TIME_LIMIT)
+            } else if budget {
+                Some(RULE_ITERATION_LIMIT)
+            } else if shutdown {
+                Some(RULE_GRACEFUL_SHUTDOWN)
+            } else {
+                None
+            };
+            assert_eq!(decision.termination_reason(), expected, "{decision:?}");
+            assert_eq!(
+                decision.should_stop(),
+                decision.termination_reason().is_some(),
+                "{decision:?}"
+            );
+            assert_eq!(
+                decision.ended_by_shutdown(),
+                decision.termination_reason() == Some(RULE_GRACEFUL_SHUTDOWN),
+                "{decision:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -893,7 +1066,10 @@ mod proptests {
     use proptest::prelude::*;
     use proptest::test_runner::RngSeed;
 
-    use super::{MonitorState, StopMask, StoppingMode, StoppingRule, StoppingRuleSet};
+    use super::{
+        MonitorState, RULE_GRACEFUL_SHUTDOWN, RULE_ITERATION_LIMIT, StopMask, StoppingMode,
+        StoppingRule, StoppingRuleSet,
+    };
 
     fn fixed_config() -> ProptestConfig {
         ProptestConfig {
@@ -961,58 +1137,72 @@ mod proptests {
             )
     }
 
-    /// The two-vector scan the single pass replaces, over the per-rule
-    /// `is_triggered` flags; under `All` it sees the list without its
-    /// `IterationLimit` entries.
-    fn scan_oracle(
+    /// The stop precedence written from the per-rule `is_triggered` flags: a
+    /// configured stop names its first triggered configured rule, else an
+    /// exhausted budget is `iteration_limit`, else a shutdown is
+    /// `graceful_shutdown`. The configured rules leave out `GracefulShutdown`,
+    /// and also `IterationLimit` under `All`.
+    fn precedence_oracle(
         rule_set: &StoppingRuleSet,
         state: &MonitorState,
+        budget_exhausted: bool,
     ) -> (bool, Option<&'static str>) {
-        let rules: Vec<&StoppingRule> = rule_set
+        let configured: Vec<(&'static str, bool)> = rule_set
             .rules
             .iter()
-            .filter(|r| {
-                !(rule_set.mode == StoppingMode::All
-                    && matches!(r, StoppingRule::IterationLimit { .. }))
+            .filter(|r| match r {
+                StoppingRule::GracefulShutdown => false,
+                StoppingRule::IterationLimit { .. } => rule_set.mode == StoppingMode::Any,
+                _ => true,
             })
-            .collect();
-        let results: Vec<(&'static str, bool)> = rules
-            .iter()
             .map(|r| (r.name(), r.is_triggered(state)))
             .collect();
-        let first = results.iter().find(|(_, t)| *t).map(|(n, _)| *n);
-
-        if state.shutdown_requested {
-            return (true, first);
-        }
-
-        let non_shutdown_triggered: Vec<bool> = rules
-            .iter()
-            .zip(results.iter())
-            .filter(|(rule, _)| !matches!(rule, StoppingRule::GracefulShutdown))
-            .map(|(_, result)| result.1)
-            .collect();
-        let should_stop = match rule_set.mode {
-            StoppingMode::Any => non_shutdown_triggered.iter().any(|&t| t),
-            StoppingMode::All => {
-                !non_shutdown_triggered.is_empty() && non_shutdown_triggered.iter().all(|&t| t)
-            }
+        let configured_stop = match rule_set.mode {
+            StoppingMode::Any => configured.iter().any(|(_, t)| *t),
+            StoppingMode::All => !configured.is_empty() && configured.iter().all(|(_, t)| *t),
         };
-        (should_stop, first)
+        let reason = if configured_stop {
+            configured.iter().find(|(_, t)| *t).map(|(n, _)| *n)
+        } else if budget_exhausted {
+            Some(RULE_ITERATION_LIMIT)
+        } else if state.shutdown_requested {
+            Some(RULE_GRACEFUL_SHUTDOWN)
+        } else {
+            None
+        };
+        (configured_stop, reason)
     }
 
     proptest! {
         #![proptest_config(fixed_config())]
 
         #[test]
-        fn stop_decision_reproduces_the_rule_scan_for_any_rule_set_and_state(
+        fn stop_decision_reason_follows_configured_rule_precedence_for_any_rule_set_and_state(
             rule_set in rule_set(),
             state in state(),
+            budget_exhausted in any::<bool>(),
         ) {
-            let decision = rule_set.evaluate(&state);
-            let (should_stop, first_triggered) = scan_oracle(&rule_set, &state);
-            prop_assert_eq!(decision.should_stop(), should_stop);
-            prop_assert_eq!(decision.first_triggered(), first_triggered);
+            let evaluated = rule_set.evaluate(&state);
+            prop_assert!(!evaluated.mask().contains(StopMask::SIGNAL));
+            prop_assert!(!evaluated.mask().contains(StopMask::BUDGET_EXHAUSTED));
+            prop_assert_eq!(
+                evaluated.should_stop(),
+                evaluated.configured_stop() || state.shutdown_requested
+            );
+
+            let decision = if budget_exhausted {
+                evaluated.with_budget_exhausted()
+            } else {
+                evaluated
+            };
+            let (configured_stop, reason) = precedence_oracle(&rule_set, &state, budget_exhausted);
+            prop_assert_eq!(decision.configured_stop(), configured_stop);
+            prop_assert_eq!(decision.termination_reason(), reason);
+            prop_assert_eq!(decision.should_stop(), reason.is_some());
+            prop_assert_eq!(
+                decision.ended_by_shutdown(),
+                reason == Some(RULE_GRACEFUL_SHUTDOWN)
+            );
 
             for bit in [
                 StopMask::ITERATION_LIMIT,

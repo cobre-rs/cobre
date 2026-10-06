@@ -1,7 +1,7 @@
 //! Orchestration methods: train, simulate, and workspace pool construction.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc::{Sender, SyncSender};
 
 use cobre_comm::Communicator;
@@ -45,7 +45,7 @@ impl StudySetup {
         n_threads: usize,
         solver_factory: impl Fn() -> Result<S, SolverError>,
         event_sender: Option<Sender<TrainingEvent>>,
-        shutdown_flag: Option<&Arc<AtomicBool>>,
+        shutdown_flag: Option<&Arc<AtomicUsize>>,
     ) -> Result<TrainingOutcome, SddpError>
     where
         S: SolverInterface<Profile = ActiveProfile> + Send,
@@ -107,7 +107,7 @@ impl StudySetup {
         n_threads: usize,
         solver_factory: impl Fn() -> Result<S, SolverError>,
         event_sender: Option<Sender<TrainingEvent>>,
-        shutdown_flag: Option<&Arc<AtomicBool>>,
+        shutdown_flag: Option<&Arc<AtomicUsize>>,
         solver_profiles: SolverProfiles,
     ) -> Result<TrainingOutcome, SddpError>
     where

@@ -746,6 +746,44 @@ mod tests {
         );
     }
 
+    /// A production rule set lists no `GracefulShutdown` entry, yet a shutdown
+    /// request alone is still reported as `graceful_shutdown`.
+    #[test]
+    fn production_rule_set_reports_graceful_shutdown_on_a_shutdown_request() {
+        use crate::stopping_rule::{MonitorState, StoppingRule};
+
+        let mut config = base_test_config();
+        config.training.stopping_rules =
+            Some(vec![StoppingRuleConfig::IterationLimit { limit: 10 }]);
+        let params = StudyParams::from_config(&config, Vec::new())
+            .expect("the base config maps successfully");
+        let rule_set = &params.stopping_rule_set;
+        assert!(
+            !rule_set
+                .rules
+                .iter()
+                .any(|r| matches!(r, StoppingRule::GracefulShutdown)),
+            "from_config must not list a GracefulShutdown rule: {:?}",
+            rule_set.rules
+        );
+
+        let shutdown_at = |iteration| MonitorState {
+            iteration,
+            wall_time_seconds: 0.0,
+            lower_bound: 0.0,
+            upper_bound: 0.0,
+            lower_bound_history: Vec::new(),
+            shutdown_requested: true,
+        };
+        let first = rule_set.evaluate(&shutdown_at(1));
+        assert_eq!(first.termination_reason(), Some("graceful_shutdown"));
+        assert!(first.ended_by_shutdown());
+
+        let at_limit = rule_set.evaluate(&shutdown_at(10));
+        assert_eq!(at_limit.termination_reason(), Some("iteration_limit"));
+        assert!(!at_limit.ended_by_shutdown());
+    }
+
     /// A user-declared `BoundStalling` alongside a `Gap` rule passes through
     /// unchanged and is never doubled.
     #[test]

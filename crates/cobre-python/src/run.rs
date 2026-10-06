@@ -21,7 +21,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc;
 
 use chrono::NaiveDate;
@@ -102,6 +102,7 @@ use cobre_sddp::build_evaporation_model_rows;
 use cobre_sddp::build_fixed_delivery_rows;
 use cobre_sddp::build_generic_constraint_echo_rows;
 use cobre_sddp::checkpoint_terminal_cost_scale_factor;
+use cobre_sddp::config::ShutdownSource;
 use cobre_sddp::delta_to_stats_row;
 use cobre_sddp::hydro_models::prepare_hydro_models_from_artifacts;
 use cobre_sddp::inject_boundary_cuts;
@@ -356,9 +357,9 @@ pub(crate) fn run_training_phase_py(
 ///
 /// `train` runs on this thread with the GIL released. The callback runs ONLY
 /// inside `Python::attach` in the drain thread, at iteration boundaries — never
-/// in the solver's hot LP loop. The solver loop polls `shutdown_flag` at
-/// iteration boundaries and exits gracefully, writing whatever partial artifacts
-/// it completed.
+/// in the solver's hot LP loop. The solver loop reads `shutdown_flag` once per
+/// iteration, just before its stop decision, and exits gracefully, writing
+/// whatever partial artifacts it completed.
 ///
 /// # Errors
 ///
@@ -379,7 +380,7 @@ pub(crate) fn run_training_phase_py_streaming(
         )
     })?;
     let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
-    let shutdown_flag = Arc::new(AtomicBool::new(false));
+    let shutdown_flag = Arc::new(AtomicUsize::new(0));
 
     let drain_flag = Arc::clone(&shutdown_flag);
     let drain_handle =
@@ -428,7 +429,7 @@ pub(crate) fn run_training_phase_py_streaming(
 /// captured, not unwound.
 fn drain_training_events(
     event_rx: &mpsc::Receiver<TrainingEvent>,
-    shutdown_flag: &Arc<AtomicBool>,
+    shutdown_flag: &Arc<AtomicUsize>,
     on_iteration: &Py<PyAny>,
 ) -> (Vec<TrainingEvent>, Option<PyErr>) {
     use std::sync::atomic::Ordering;
@@ -441,36 +442,37 @@ fn drain_training_events(
         // event is moved into the collection afterward. Once a stop is requested,
         // keep draining (to recover remaining events) but skip GIL reacquisition.
         //
-        // `Relaxed` suffices for `shutdown_flag`: it is a one-way latch (only
-        // flipped `false` -> `true`). Both outcomes — stop now, or one extra
-        // iteration before the store is seen — are correct under the cooperative
-        // contract, so no acquire/release synchronization is needed.
-        if !shutdown_flag.load(Ordering::Relaxed) {
+        // `Relaxed` suffices for `shutdown_flag`: it is a level that is only
+        // raised (`fetch_max`), so one load never splits a request from its
+        // source. Both outcomes — stop now, or one extra iteration before the
+        // store is seen — are correct under the cooperative contract, so no
+        // acquire/release synchronization is needed.
+        if shutdown_flag.load(Ordering::Relaxed) == 0 {
             Python::attach(|py| {
-                let mut request_stop = |err: Option<PyErr>| {
-                    shutdown_flag.store(true, Ordering::Relaxed);
+                let mut request_stop = |source: ShutdownSource, err: Option<PyErr>| {
+                    shutdown_flag.fetch_max(source.level(), Ordering::Relaxed);
                     if let Some(err) = err {
                         captured_pyerr.get_or_insert(err);
                     }
                 };
 
                 if let Err(err) = py.check_signals() {
-                    request_stop(Some(err));
+                    request_stop(ShutdownSource::Signal, Some(err));
                     return;
                 }
 
                 match iteration_summary_to_dict(py, &event) {
                     Ok(Some(dict)) => match on_iteration.bind(py).call1((dict,)) {
                         Ok(ret) => match ret.is_truthy() {
-                            Ok(true) => request_stop(None),
+                            Ok(true) => request_stop(ShutdownSource::Cooperative, None),
                             Ok(false) => {}
-                            Err(err) => request_stop(Some(err)),
+                            Err(err) => request_stop(ShutdownSource::Cooperative, Some(err)),
                         },
-                        Err(err) => request_stop(Some(err)),
+                        Err(err) => request_stop(ShutdownSource::Cooperative, Some(err)),
                     },
                     Ok(None) => {}
                     // Surface a conversion failure rather than silently dropping it.
-                    Err(err) => request_stop(Some(err)),
+                    Err(err) => request_stop(ShutdownSource::Cooperative, Some(err)),
                 }
             });
         }
@@ -1732,7 +1734,11 @@ pub fn run(
 mod tests {
     use std::path::Path;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
 
+    use cobre_sddp::config::ShutdownSource;
     use cobre_sddp::setup::prepare_stochastic;
     use cobre_sddp::{SolverStatsDelta, SolverStatsLogEntry, aggregate_solver_stats_log};
 
@@ -1742,9 +1748,9 @@ mod tests {
     use pyo3::types::PyDict;
 
     use super::{
-        apply_training_policy_mode, build_study_setup, iteration_summary_to_dict,
-        read_policy_checkpoint, reconstruct_policy_from_checkpoint, run_in_scoped_pool,
-        run_via_study,
+        apply_training_policy_mode, build_study_setup, drain_training_events,
+        iteration_summary_to_dict, read_policy_checkpoint, reconstruct_policy_from_checkpoint,
+        run_in_scoped_pool, run_via_study,
     };
 
     fn example_case_dir(relative: &str) -> PathBuf {
@@ -1944,6 +1950,51 @@ mod tests {
                 "WorkerTiming must be filtered"
             );
         });
+    }
+
+    #[test]
+    fn truthy_callback_requests_a_cooperative_shutdown() {
+        Python::initialize();
+
+        let on_iteration: Py<PyAny> = Python::attach(|py| {
+            py.eval(c"lambda _: True", None, None)
+                .expect("the callback must evaluate")
+                .unbind()
+        });
+        let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
+        event_tx
+            .send(TrainingEvent::IterationSummary {
+                iteration: 12,
+                lower_bound: 100.0,
+                upper_bound: 110.0,
+                gap: 0.0909,
+                wall_time_ms: 1000,
+                iteration_time_ms: 200,
+                forward_ms: 80,
+                backward_ms: 100,
+                lp_solves: 240,
+                solve_time_ms: 45.2,
+                lower_bound_eval_ms: 10,
+                fwd_setup_time_ms: 2,
+                fwd_load_imbalance_ms: 2,
+                fwd_scheduling_overhead_ms: 1,
+                rows_in_lp_sum: 720,
+                rows_in_lp_count: 240,
+                rows_in_lp_max: 24,
+            })
+            .expect("the receiver is alive");
+        drop(event_tx);
+        let shutdown_flag = Arc::new(AtomicUsize::new(0));
+
+        let (events, captured_pyerr) =
+            drain_training_events(&event_rx, &shutdown_flag, &on_iteration);
+
+        assert_eq!(
+            shutdown_flag.load(Ordering::Relaxed),
+            ShutdownSource::Cooperative.level()
+        );
+        assert_eq!(events.len(), 1);
+        assert!(captured_pyerr.is_none());
     }
 
     /// Extract a typed value for `key` from a `PyDict`, panicking on absence or

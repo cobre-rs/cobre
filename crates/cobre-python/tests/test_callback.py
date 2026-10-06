@@ -18,6 +18,7 @@ Run with (from the repo root, after building the extension):
 
 from __future__ import annotations
 
+import json
 import pathlib
 from typing import Any
 
@@ -86,14 +87,14 @@ def test_callback_matches_convergence_parquet(tmp_path: pathlib.Path) -> None:
 def test_callback_truthy_return_stops_early(tmp_path: pathlib.Path) -> None:
     """A truthy callback return cooperatively halts training near the trigger.
 
-    This asserts the guarantees the cooperative-async design actually provides,
-    not a literal stop iteration. The drain thread invokes the callback under the
-    GIL at each iteration boundary, but the solver runs GIL-released and polls the
-    shared shutdown flag only at *its* iteration boundaries. Between the boundary
-    at which the callback returns truthy and the boundary at which the solver next
-    observes the flag, the solver may advance a small, bounded number of extra
-    iterations — the GIL-released solver outruns the GIL-reacquiring callback, so
-    the flag is observed at a later boundary. This is the same lag as the CLI's
+    This asserts the guarantees the cooperative-async design actually provides, not
+    a literal stop iteration. The drain thread invokes the callback under the GIL at
+    each iteration boundary, but the solver runs GIL-released and reads the shared
+    shutdown flag once per iteration, just before its stop decision. Between the
+    boundary at which the callback returns truthy and the boundary at which the
+    solver next observes the flag, the solver may advance a small, bounded number of
+    extra iterations — the GIL-released solver outruns the GIL-reacquiring callback,
+    so the flag is observed at a later boundary. This is the same lag as the CLI's
     SIGINT handling, and is why the bound below is a small ceiling rather than an
     exact iteration. Forcing a synchronous stop was rejected (it would violate P2
     and the hot-path no-allocation rules), so the test pins the contract, not the
@@ -137,10 +138,15 @@ def test_callback_truthy_return_stops_early(tmp_path: pathlib.Path) -> None:
         f"{result['iterations']} (calls={calls})"
     )
 
-    # (3) The partial artifacts are still written on a cooperative stop.
-    assert (tmp_path / "training" / "metadata.json").exists(), (
+    # (3) The partial artifacts are still written on a cooperative stop, and the
+    #     metadata records the shutdown as the reason, not as convergence.
+    metadata_path = tmp_path / "training" / "metadata.json"
+    assert metadata_path.exists(), (
         "a cooperatively-stopped run must still write training/metadata.json"
     )
+    convergence = json.loads(metadata_path.read_text())["convergence"]
+    assert convergence["termination_reason"] == "graceful_shutdown", convergence
+    assert convergence["achieved"] is False, convergence
 
     # (4) The cooperative lag is bounded: only a small number of extra callback
     #     invocations may occur after the trigger before the solver observes the

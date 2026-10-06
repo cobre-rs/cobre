@@ -33,6 +33,7 @@ use cobre_sddp::{BoundaryReconciliation, BoundaryReconciliationReport, ErrorClas
 use console::{Term, style};
 use serde::Serialize;
 
+use crate::commands::resolve_output_dir;
 use crate::error::CliError;
 
 /// Arguments for the `cobre validate` subcommand.
@@ -46,6 +47,12 @@ pub struct ValidateArgs {
     /// stdout instead of the human-readable report.
     #[arg(long)]
     pub json: bool,
+
+    /// Output directory whose policy a configured warm-start, resume or
+    /// simulation-only load is checked against (defaults to `<CASE_DIR>/output/`,
+    /// as for `cobre run`).
+    #[arg(long, value_name = "DIR")]
+    pub output: Option<PathBuf>,
 }
 
 /// Success outcome (`configured`/`boundary_date`/`report` populated, `error` None) and error outcome (`configured`/`boundary_date`/`report` None, `error` populated) never overlap.
@@ -287,7 +294,7 @@ pub fn execute(args: &ValidateArgs) -> Result<(), CliError> {
         config: &config,
         system: loaded.system,
         artifacts: loaded.artifacts,
-        output_dir: &args.case_dir.join("output"),
+        output_dir: &resolve_output_dir(&args.case_dir, args.output.as_deref()),
     }) {
         Ok(validated) => validated,
         Err(ValidateFailure::ScenarioSource(err)) => {

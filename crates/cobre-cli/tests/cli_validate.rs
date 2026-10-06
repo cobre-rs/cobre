@@ -1281,3 +1281,133 @@ fn validate_accepts_a_supplied_opening_tree_with_historical_residuals_stages() {
         .stderr(predicate::str::contains("historical windows").not())
         .stderr(predicate::str::contains("V2.").not());
 }
+
+/// `cobre validate --output <DIR>` checks the policy `cobre run --output <DIR>`
+/// loads, where the default `<CASE_DIR>/output/` holds none.
+#[test]
+fn validate_output_flag_checks_the_policy_run_loads_from_that_directory() {
+    let dir = TempDir::new().unwrap();
+    let case = dir.path().to_str().unwrap();
+    let custom = dir.path().join("custom");
+    write_boundary_case(dir.path(), 0);
+    cobre()
+        .args(["run", case, "--output", custom.to_str().unwrap()])
+        .assert()
+        .success();
+    append_warm_start_policy(dir.path());
+    common::restamp_policy_software(&custom.join("policy"), "another-program");
+
+    cobre()
+        .args(["run", case, "--output", custom.to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("written by another-program"));
+
+    let output = cobre()
+        .args([
+            "validate",
+            case,
+            "--output",
+            custom.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["error"]["phase"], "WarmStartIncompatible");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("written by another-program"),
+        "got: {value}"
+    );
+
+    let (output, value) = validate_json(dir.path());
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Policy directory not found"),
+        "got: {value}"
+    );
+}
+
+/// Validate reads `--output` and never creates it, whether or not a policy load
+/// is configured.
+#[test]
+fn validate_output_flag_never_creates_the_directory() {
+    let dir = TempDir::new().unwrap();
+    make_valid_case(&dir);
+    let absent = dir.path().join("absent");
+
+    cobre()
+        .args([
+            "validate",
+            dir.path().to_str().unwrap(),
+            "--output",
+            absent.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert!(!absent.exists());
+
+    append_warm_start_policy(dir.path());
+    cobre()
+        .args([
+            "validate",
+            dir.path().to_str().unwrap(),
+            "--output",
+            absent.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("Policy directory not found"));
+    assert!(!absent.exists());
+}
+
+/// A relative `--output` resolves against the working directory in `validate`,
+/// exactly as in `run`.
+#[test]
+fn validate_output_relative_path_resolves_against_the_working_directory() {
+    let case = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let case_arg = case.path().to_str().unwrap();
+    write_boundary_case(case.path(), 0);
+    cobre()
+        .current_dir(cwd.path())
+        .args(["run", case_arg, "--output", "rel_out"])
+        .assert()
+        .success();
+    append_warm_start_policy(case.path());
+    common::restamp_policy_software(&cwd.path().join("rel_out/policy"), "another-program");
+
+    let output = cobre()
+        .current_dir(cwd.path())
+        .args(["validate", case_arg, "--output", "rel_out", "--json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("written by another-program"),
+        "got: {value}"
+    );
+}
+
+#[test]
+fn validate_help_lists_the_output_flag() {
+    cobre()
+        .args(["validate", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--output"))
+        .stdout(predicate::str::contains("<DIR>"));
+}

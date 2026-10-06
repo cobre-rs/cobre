@@ -7,7 +7,7 @@
 //! non-root ranks independently re-read the case directory from disk
 //! (`prepare_hydro_models`), relying on a shared filesystem instead.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use console::Term;
 
@@ -48,6 +48,7 @@ use crate::error::CliError;
 use crate::commands::broadcast::{
     BroadcastConfig, BroadcastOpeningTree, broadcast_value, stopping_rules_from_broadcast,
 };
+use crate::commands::resolve_output_dir;
 
 use super::{RunArgs, RunContext};
 use crate::banner::print_banner;
@@ -220,10 +221,7 @@ pub(super) fn setup_communicator(
         );
     }
 
-    let output_dir: PathBuf = args
-        .output
-        .clone()
-        .unwrap_or_else(|| args.case_dir.join("output"));
+    let output_dir = resolve_output_dir(&args.case_dir, args.output.as_deref());
     let term_width = resolve_term_width();
     let render_mode = RenderMode::auto();
 

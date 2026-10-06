@@ -9,6 +9,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`training/hydro_models.json` lists the hydro plants that have no turbine
+  capacity.** A new `no_turbine_capacity` key holds one `{hydro_id, name}`
+  entry per plant that requested FPHA but is modeled with zero productivity
+  because its `max_turbined_m3s` is zero, sorted by `hydro_id`. The key is
+  always present and is an empty list when no plant qualifies. These plants
+  are still counted in `n_constant`. The CLI and the Python bindings write the
+  same file.
+
+- **`cobre validate --output <DIR>`.** Validate checks a configured
+  warm-start, resume or simulation-only policy under `<DIR>` instead of
+  `<CASE_DIR>/output/`. The flag takes the same value and default as `cobre
+  run --output`, so `cobre validate <CASE_DIR> --output <DIR>` checks the
+  policy that `cobre run <CASE_DIR> --output <DIR>` would load. Validate never
+  creates the directory.
+
+- **Policy checkpoints record the lower bound of every completed training
+  iteration.** The checkpoint manifest gains `lower_bound_history`
+  (`policy.fbs` field id 21), oldest first, whose last entry is the lower
+  bound of the last completed iteration.
+
+- **Training writes periodic checkpoints.** With
+  `policy.checkpointing.enabled: true`, training writes a policy checkpoint at
+  iteration `initial_iteration` (default `interval_iterations`), then every
+  `interval_iterations` iterations. Iterations are counted in absolute
+  numbers, so a resumed run keeps the schedule of the run it resumes. Each
+  periodic checkpoint replaces the previous one in the policy directory, and
+  the last iteration writes the usual final checkpoint, so a run stopped at
+  its wall-time limit or killed keeps the checkpoint of its last scheduled
+  write. A periodic write that fails stops training at that iteration on every
+  MPI rank, and the run exits with an error.
+
+- **`cobre run` stops training gracefully on SIGTERM or SIGINT.** A signal
+  received while training runs stops training at the next iteration boundary;
+  one received while the training outputs are written lets the writes finish.
+  Either way the training outputs and policy checkpoint are written for the
+  iterations completed. A repeated SIGTERM only repeats the request. In a
+  single-process run a second SIGINT terminates the process by SIGINT. Under
+  MPI a repeated SIGINT only repeats the request, aborting is left to the MPI
+  launcher, and a signal sent to one rank stops every rank at the same
+  iteration. A signal received before training starts, or during a simulation
+  that follows a training run no signal stopped, terminates the process as
+  before.
+
+- **`cobre run` exits 5 when a SIGTERM or SIGINT stops training.** Exit code 5
+  means the run stopped on request after writing its training outputs and
+  policy checkpoint. Under MPI every rank exits 5, so the launcher reports 5.
+  If writing those outputs fails, the run exits with that failure's code
+  instead. A second SIGINT in a single-process run still terminates the
+  process by SIGINT, which shells report as 130.
+
+- **The MPI release archive's `README.txt` explains how to stop training
+  before a SLURM time limit.** Request the signal with `#SBATCH
+  --signal=TERM@<lead>` (without the `B:` prefix) and launch the ranks with
+  `srun`. The README gives the rule for sizing the lead, the interaction with
+  a training `time_limit`, and how to resume the stopped run.
+
 ### Changed
 
 - **BREAKING — `metadata.json` names the software that wrote it as `software`
@@ -20,8 +78,656 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them. Warm-start, resume, simulation-only and boundary-cut loads refuse a
   checkpoint written by a different program even when its version string
   matches, and refuse one that recorded no software name. The error names both
-  programs and versions; retrain the policy, or re-export the boundary policy,
-  with the running version.
+  programs and versions, or says which of the two the checkpoint did not record,
+  and says how to recover: re-run the program that produced the policy with the
+  running version, or, for a converted boundary policy, convert it again. A
+  checkpoint written by 0.17 fails the `format_version` check below before this
+  one, so it reports the version refusal, not a missing software name.
+
+- **BREAKING — a pumping station active at a stage where its source or
+  destination hydro is not operating is now rejected at validation.** A hydro
+  is not operating before its `entry_stage_id`, from its `exit_stage_id` on,
+  and while it is filling. Such a station previously pumped into or out of a
+  plant whose storage the model holds fixed at those stages, which gave wrong
+  results. The error names the station, the hydro and the first such stage;
+  move the station's `entry_stage_id`/`exit_stage_id` inside both hydros'
+  operating windows.
+
+- **BREAKING — two seasons of one resolution level that share a calendar day
+  are now rejected.** On a custom season map that layers several resolutions,
+  seasons whose lengths differ by at most 7 days form one level, and no two
+  seasons of a level may cover the same day. Such a map used to load with an
+  ambiguous lag season. The error names both season ids; remove one of them or
+  make their date ranges disjoint.
+
+- **BREAKING — policy checkpoints are written with `format_version` 3.** Each
+  stored basis now records the number of cut rows it was captured with;
+  earlier versions recorded the size of its node's cut pool at export, which
+  is larger for a basis captured before that iteration's cuts were added. A
+  checkpoint with `format_version` 2 is refused when read for warm-start,
+  resume, simulation-only and boundary-cut loads, with an error naming both
+  versions; re-run the program that produced the policy with the running
+  version, or, for a converted boundary policy, convert it again. Every
+  checkpoint written by 0.17 or earlier has an older `format_version`, so it
+  is refused for that reason, before the software-identity check, and the
+  error does not report a missing software name.
+
+- **BREAKING — a generic-constraint variable that repeats its block argument
+  is refused.** An expression in `constraints/generic_constraints.json`, in a
+  constraint or a named expression, that gives one variable two block indices,
+  such as `hydro_turbined(5, 0, 1)`, now fails validation with `repeated block
+  argument in variable "hydro_turbined"`. Earlier versions kept the last index
+  and ignored the others. Give each variable at most one block index; to cover
+  several blocks, write one term per block.
+
+- **BREAKING — `training.stopping_rules` must contain an `iteration_limit`
+  rule.** `cobre validate` and `cobre run` refuse a `config.json` whose
+  stopping rules have no `iteration_limit` entry, an empty list included, with
+  `[SchemaViolation] config.json: field training.stopping_rules: must contain
+  an iteration_limit rule`. Such a config used to run and stop after 100
+  iterations without saying so. `config.schema.json` states the requirement,
+  so schema-validating editors flag the config too. Add an `iteration_limit`
+  rule with the iteration budget the run needs. Under `"stopping_mode": "all"`
+  that rule caps the run and is not one of the rules that must all hold, so
+  the other rules can still end the run sooner. The limit also sizes the cut
+  storage allocated at setup, so a very large limit used to mean "no limit"
+  can exhaust memory before the first iteration.
+
+- **With `training.stopping_mode: "all"`, the `iteration_limit` rule caps the
+  run instead of being one of the rules that must all hold.** Training stops
+  at the first iteration where every other rule in `training.stopping_rules`
+  holds, and the largest `iteration_limit` caps the run. Earlier versions also
+  waited for the iteration limit, so the `gap`, `time_limit` and
+  `bound_stalling` rules of an `"all"` run that listed an `iteration_limit`
+  could never end it before that limit. A run that reaches the cap before the
+  other rules hold, including one that lists no other rule, records
+  `iteration_limit` as its termination reason. `"any"` is unchanged.
+
+- **`convergence.achieved` in `training/metadata.json` is true when training
+  stopped on its configured stopping rules and a `gap` or `bound_stalling`
+  rule triggered at that iteration.** Earlier versions set it only when
+  `bound_stalling` was the first listed rule to trigger, so a run stopped by
+  the `gap` rule, or by `bound_stalling` together with an earlier-listed rule,
+  reported `false`. It stays `false` when only `iteration_limit` or
+  `time_limit` triggered, and when the iteration limit ran out before the
+  configured rules were met. `iterations.converged_at` and the run summary's
+  "converged at iter N" line follow the same rule;
+  `convergence.termination_reason` is unchanged.
+
+- **`status` in `metadata.json` is `complete` or `partial`, per phase.**
+  `training/metadata.json` reports `partial` when a shutdown request ended
+  training before any configured stopping rule fired and before the last
+  allowed iteration. A stopping rule that fires at the same iteration, or a
+  request that arrives on the last allowed iteration, reports `complete` with
+  that rule as `convergence.termination_reason`. A training that ends on an
+  error also reports `complete`; its `convergence.termination_reason` is
+  `error`. `simulation/metadata.json` reports `complete` for a simulation that
+  ran, including one in which some scenarios failed. No other value is
+  written.
+
+- **A warm-start, resume or simulation-only run no longer refuses a policy
+  whose stored bases do not fit the current LP, for example after a block-mode
+  change.** Each stored basis that fails the fit rule (same column count, row
+  count equal to the template rows plus its recorded cut rows, basic count
+  equal to its row count) is not used, and one warning reports how many and
+  why. Cuts load as before. In 0.17 such a run stopped with "stored basis for
+  node … does not match its LP".
+
+- **Policy checkpoint refusals all give the same remedy.** A checkpoint whose
+  `format_version` this release does not read, one that predates
+  self-describing cuts, one whose pools record no priced date, and a boundary
+  policy with no season descriptor are refused with the advice the
+  software-identity refusal gives: re-run the program that produced it with
+  the running version, or, for a converted boundary policy, convert it again.
+  These errors used to say "re-export it with a current Cobre".
+
+- **`cobre run` reports a missing or unreadable policy by cause.** A
+  warm-start, resume or simulation-only run whose policy directory is missing,
+  has no `manifest.bin`, or holds files this build cannot parse now exits 1 as
+  a validation error. A policy file the process cannot open, for example
+  because permission is denied, exits 2 as an I/O error. Earlier versions
+  reported these as internal errors (exit 4) and asked for a bug report.
+
+- **`cobre validate` now reports a boundary policy whose depth cannot be read
+  like the other boundary failures, with the same exit code as before.** The
+  `Valid case` summary line prints only when every check passes.
+
+- **`cobre validate` now exits with the code of the failure's class, as `cobre
+  run` does:** an input or policy refusal still exits 1, and an I/O, solver or
+  internal failure exits 2, 3 or 4.
+
+- **`cobre validate` checks a configured warm-start, resume or simulation-only
+  policy.** It reads the policy from `<CASE_DIR>/output/`, the directory
+  `cobre run` uses by default, and refuses it for the reasons `cobre run`
+  would: exit 1, or exit 2 when a policy file cannot be opened. The warnings
+  `cobre run` prints while loading the policy, such as stored bases that no
+  longer fit the case, are reported as warnings, and validate still exits 0.
+  With `--json`, a refusal's `error.phase` is `WarmStartIncompatible`
+  (warm-start and simulation-only), `ResumeIncompatible`, or `IoError` for a
+  file that cannot be opened, and a successful check adds a `policy_load`
+  object with the load mode and the number of unused stored bases.
+
+- **`cobre run` refuses to replace a policy directory that holds files it did
+  not write**, with exit 1 and an error naming the first such file (`refusing
+  to write a checkpoint: …, found in …, is not part of a checkpoint`), because
+  a checkpoint write replaces the whole policy directory. With training
+  enabled, `cobre run` and `cobre validate` make this refusal before training
+  starts.
+
+- **A checkpoint write removes the `metadata.json` that releases up to 0.14
+  left in the policy directory.** No release since 0.15 reads it.
+
+- **A `policy.path` that is a symbolic link to a directory is replaced at the
+  link's target, and the link is kept; a regular file at `policy.path` is
+  refused** with exit 1.
+
+- **`cobre run` and `cobre validate` refuse an empty `policy.path`, and one
+  such as `.`, `..`, `a/..` or `/` that names the output directory or a
+  directory above it**, with exit 1 (`[SchemaViolation] config.json: field
+  policy.path: …`), because a checkpoint write replaces the whole policy
+  directory.
+
+- **`cobre run` and `cobre validate` also refuse a `policy.path` that reaches
+  the output directory or a directory above it** by an absolute path or by
+  climbing back into it, such as `../output`, with exit 1.
+
+- **`cobre run` and `cobre validate` refuse a `policy.path` that names or
+  contains a directory a run clears before writing its outputs**, such as
+  `simulation`, `simulation/solver` or `training/solver`, **or that lies
+  inside one the run removes whole**, such as `simulation/costs/p`, with exit
+  1, because the run's output clearing would delete the policy, or the
+  checkpoint write the run's outputs. A policy directory inside one the run
+  cleans file by file, such as `training/solver/policy`, is accepted.
+
+- **A `policy.path` that is a symbolic link is checked by the
+  output-directory and cleared-directory rules above where it sits and where
+  it points.**
+
+- **`cobre validate` now prints a refused scenario source, and the
+  policy-directory refusals above, in its report on stdout**, as it does for
+  every other refusal, instead of only on stderr.
+
+- **`policy.checkpointing.enabled: true` now requires
+  `policy.checkpointing.interval_iterations` of at least 1.** A `config.json`
+  that enables checkpointing without an interval, or with an interval of `0`,
+  is refused at load by `cobre run` and `cobre validate` with exit code 1, and
+  the error names `policy.checkpointing.interval_iterations`. A config that
+  leaves `enabled` absent or `false` loads as before.
+
+- **A SIGTERM or SIGINT that stops training skips the configured simulation.**
+  `simulation/metadata.json` is still written, with `status: "partial"` and 0
+  of the configured scenarios completed, followed by `simulation/_SUCCESS`,
+  and the run exits 5. This also holds when the signal arrives at the
+  iteration where a configured stopping rule ends training, or while the
+  training outputs are being written; training then reports that rule and
+  `status: "complete"`.
+
+- **An unknown `kind` in `constraints/generic_parameters.json` is reported as
+  a parse error.** The error still lists the accepted kinds and exits 1, as
+  before; it now reads `unknown variant` and carries the line and column
+  instead of the `scalar_parameters[i].kind` field path.
+
+- **`scenario_source.seed` is optional for a historical inflow class.** A
+  `training.scenario_source` or `simulation.scenario_source` whose only
+  non-`in_sample` class is a `historical` inflow class no longer needs a
+  `seed`. The historical window draw never read it, so results are unchanged.
+  A `seed` is still required when any class uses `out_of_sample` or
+  `external`.
+
+### Fixed
+
+- **A `cvar` risk measure with `lambda` between 0 and 1 now computes `(1 −
+  lambda)·E[Z] + lambda·CVaR_alpha[Z]`.** It used to compute a pure CVaR at a
+  different confidence level, which weighted the costliest scenarios more
+  heavily than the stated measure. Studies with `0 < lambda < 1` now produce
+  different lower and upper bounds, cuts, policies and simulation costs, and
+  converge to a lower or equal risk-adjusted cost, because the old measure's
+  weights contained the correct ones. Studies with `lambda = 1`, `lambda = 0`
+  or the expectation measure are unchanged.
+
+- **A historical-inflow study with a stage that has no season is refused
+  instead of crashing.** When a study stage had no `season_id` and every
+  inflow model had autoregressive order 0, `cobre run` stopped with an
+  index-out-of-bounds panic while building the historical scenario library. It
+  now reports rule V2.1, naming the stage, before the library is built.
+
+- **Water in transit toward a hydro plant that retires before it arrives now
+  reaches the next operating plant downstream.** When a plant's
+  `exit_stage_id` fell inside the travel time of an upstream release, the part
+  of that release still in transit at the exit was dropped. It now flows on to
+  the first downstream plant that is operating at that stage, or leaves the
+  system when there is none. Bounds, policies and simulation results change
+  for studies with such a cascade; other studies are unchanged. Validation no
+  longer warns that the delivery is dropped.
+
+- **A hydro's `penalties` block no longer discards the directional evaporation
+  and withdrawal costs of `penalties.json`.** A plant whose block in
+  `system/hydros.json` did not set `evaporation_violation_cost` (or
+  `water_withdrawal_violation_cost`) priced both directions at the
+  `penalties.json` symmetric cost, ignoring `evaporation_violation_pos_cost`
+  and `evaporation_violation_neg_cost` (or
+  `water_withdrawal_violation_pos_cost` and
+  `water_withdrawal_violation_neg_cost`). It now takes those directional
+  costs, as a plant without a block does. A plant whose block sets the
+  symmetric cost still prices both directions at it. Results change only for
+  cases that set a directional cost different from its symmetric cost in
+  `penalties.json` and give a plant a `penalties` block without that symmetric
+  cost.
+
+- **A stage row's symmetric evaporation or withdrawal cost in
+  `constraints/penalty_overrides_hydro.parquet` now reaches the LP.** A row's
+  `evaporation_violation_cost` and `water_withdrawal_violation_cost` replaced
+  only a value that no LP cost reads, so the stage kept the plant-level
+  evaporation and withdrawal costs. Each now also sets the two matching
+  directional costs (`evaporation_violation_pos_cost` and
+  `evaporation_violation_neg_cost`, or `water_withdrawal_violation_pos_cost`
+  and `water_withdrawal_violation_neg_cost`) of that hydro and stage, except a
+  direction the row sets itself. Results change for cases whose rows set a
+  symmetric evaporation or withdrawal cost without both matching directional
+  columns, for example a case converted from a NEWAVE deck whose productivity
+  varies by stage.
+
+- **Inflow lag seeds follow the calendar on custom season maps.** The stage-0
+  inflow lag seeds, and the load-time check that `inflow_history` and
+  `recent_observations` cover them, now step back through the calendar periods
+  of the first stage's own resolution level and year. The lag windows, and
+  therefore results, change on custom season maps that layer several
+  resolutions (for example monthly and quarterly seasons), on custom maps
+  whose season ids are not in calendar order, and on custom maps with a season
+  that spans the end of the year. Monthly and weekly season maps, and other
+  custom maps, are unchanged.
+
+- **PAR lag seasons follow the calendar for custom and weekly season maps.**
+  The season a PAR lag reads before the first study stage is now the season of
+  the calendar period that many steps earlier, the rule the stage-0 inflow
+  seed already uses. Studies with a custom season map whose season ids are not
+  consecutive, and weekly studies whose lags reach back across a 53-week ISO
+  year, get different statistics for those lags and different PAR lag
+  coefficients, and therefore different results. Monthly season maps are
+  unchanged.
+
+- **PAR lag statistics no longer change between runs.** A lag before the first
+  study stage that has no inflow statistics of its own now takes them from the
+  earliest stage of its season, including a declared pre-study stage. Before,
+  when several stages of that season carried different statistics, the one
+  used could differ from run to run and between the MPI ranks of one run.
+
+- **Fitted PAR models follow the calendar order of custom seasons.** PAR
+  fitting now takes each season's lags from the seasons before it in the
+  calendar, whatever the season ids. Studies whose custom season ids are not
+  consecutive, or are not numbered in the order the seasons start within the
+  calendar year, get different fitted AR coefficients and seasonal
+  correlations. The exception is a map numbered consecutively in calendar
+  order from a later season, such as a water year numbered from April, whose
+  history starts in that first season: under `pacf`, with a maximum order no
+  larger than the number of seasons, it fits as before. When the ids are not
+  numbered in that order, the derived residual ratios and the stationarity
+  check on user-supplied AR coefficients also follow the calendar order.
+  Monthly maps numbered in month order, weekly maps, and custom maps numbered
+  consecutively in the order their seasons start are unchanged.
+
+- **Inflow history is grouped by the season occurrence it belongs to.** Under
+  a weekly season map, history is grouped by ISO week-numbering year: week 1
+  counts toward its own year even when its Monday falls in late December, and
+  the January days of ISO week 53 count toward that week's year. The
+  inflow-history check therefore no longer reports the first weekly season as
+  missing from a year that has it, and PAR estimation from weekly history
+  gives different fitted models. Under a custom season map, the inflow-history
+  check groups a season that spans 1 January as one occurrence instead of
+  splitting it at the year boundary; the fitted models do not change. Monthly
+  history, and custom maps whose seasons all lie within one calendar year, are
+  unchanged.
+
+- **PAR lags that reach back across a change of resolution use the coarser
+  season's statistics.** On a custom season map that layers several
+  resolutions, for example monthly stages followed by quarterly stages, a
+  quarterly stage's PAR lag that reaches back into the monthly stages is an
+  aggregated quarter. It is now standardized with that quarter's own season
+  statistics instead of those of the last monthly stage before it. Results
+  change for such studies when the two sets of statistics differ. Where no
+  stage carries the quarter's season, the earlier statistics are kept.
+
+- **The monthly-to-quarterly lag aggregation follows season lengths, not
+  season id numbers.** On a custom season map, the PAR lag state is rebuilt
+  from aggregated calendar quarters at the first stage whose season spans a
+  quarter right after a stage whose season spans a month (each within 7 days).
+  It used to start at the first stage whose season id was 12 or higher. Each
+  monthly season now counts toward the quarter of the month its definition
+  starts in. It used to be placed by its id, so monthly seasons not numbered 0
+  for January through 11 for December could count toward the wrong quarter or
+  not at all. Results change for custom maps whose quarterly season ids are
+  below 12, for custom maps where a season numbered 12 or higher does not
+  follow a month-long season or does not span a quarter, and for custom maps
+  with a monthly-to-quarterly step whose monthly seasons are not numbered 0
+  for January through 11 for December. Monthly and weekly season maps are
+  unchanged.
+
+- **PAR estimation pairs each observation with the lag of the right year.**
+  When it fits the autocorrelations, PAR estimation now pairs an observation
+  with the one its lag names in the calendar, for example January with the
+  previous December, wherever the inflow history starts. Earlier versions
+  paired two seasons' observations by their position in each season's list,
+  which is right only when every season's history starts in the same year: a
+  monthly history starting in July paired January with the December two years
+  before it. Studies that estimate PAR from history that does not start at the
+  first season of the year (January for monthly maps, ISO week 1 for weekly
+  maps, the earliest-starting season for custom maps) get different fitted AR
+  coefficients, under both `pacf` and `pacf_annual`. The exception is a custom
+  map numbered consecutively in calendar order from a later season, such as a
+  water year numbered from April, whose history starts in that first season:
+  under `pacf`, with a maximum order no larger than the number of seasons, it
+  fits as before. Under `pacf_annual`, a weekly history also changes when its
+  earliest week 1 observation is dated in late December, which is now counted
+  in its ISO week-numbering year. A lag longer than one full cycle of seasons,
+  possible when the maximum AR order exceeds the number of seasons, now
+  reaches back the right number of years; earlier versions could pair it with
+  an observation one cycle too recent, so those fits can also change wherever
+  the history starts. Fits from histories that start at the first season of
+  the year, with a maximum order no larger than the number of seasons, are
+  unchanged.
+
+- **Historical inflow sampling admits every year whose study-season
+  observations are complete.** A window year used to also need the
+  observations preceding its first study season, one per PAR lag, although
+  nothing in the run reads them: every replayed window starts from the study's
+  own initial inflow lags. The first year of the inflow history, and a year
+  preceded by missing observations, can now be drawn. Studies that use
+  historical inflow sampling or `historical_residuals` openings with a PAR
+  order above zero may draw from more years, so their results change. Studies
+  that do not use historical inflow sampling are unaffected.
+
+- **`training/_SUCCESS` and `simulation/_SUCCESS` are written after every
+  other file of their phase.** Earlier versions wrote `training/_SUCCESS`
+  before the `hydro_models/`, `generic_constraints/`, `anticipated/`,
+  `training/solver/` and `training/cut_selection/` files, and
+  `simulation/_SUCCESS` before `simulation/solver/`,
+  `simulation/paths.parquet` and `simulation/scenario_summary.parquet`, so a
+  run that failed while writing them could leave a marker beside an incomplete
+  directory. A marker now means its phase finished writing; a simulation
+  scenario whose partition could not be written is counted in
+  `scenarios.failed` in `simulation/metadata.json` instead of withholding
+  `simulation/_SUCCESS`.
+
+- **A run into a reused output directory no longer shows the previous run's
+  `_SUCCESS` while it writes.** Before writing any output, `cobre run` removes
+  `training/_SUCCESS` when training is enabled and `simulation/_SUCCESS` when
+  simulation is enabled. Earlier versions left the previous marker in place
+  until the new one was written, and kept it when the new run failed. The
+  marker of a phase the run does not execute is left in place.
+
+- **A run into a reused output directory no longer leaves the previous run's
+  simulation files beside its own.** When simulation is enabled, `cobre run`
+  removes the per-scenario partition directories under `simulation/`
+  (`costs/`, `hydros/` and the other result families),
+  `simulation/solver/iterations.parquet`,
+  `simulation/solver/retry_histogram.parquet`, `simulation/paths.parquet`,
+  `simulation/scenario_summary.parquet` and `simulation/metadata.json` before
+  it writes any output, and then removes `simulation/solver/` if it is left
+  empty. Earlier versions kept them until the new run replaced them, so a run
+  with fewer scenarios, or one that failed, left the previous run's files next
+  to its own, including a `simulation/metadata.json` that described the
+  previous run. They are removed before training starts, so a run whose
+  training fails leaves none of them. Other files under `simulation/`,
+  including any in `simulation/solver/`, are left in place.
+
+- **A run into a reused output directory no longer keeps the previous run's
+  optional training files beside its own.** When training is enabled, `cobre
+  run` removes `training/cut_selection/iterations.parquet`,
+  `training/solver/iterations.parquet`,
+  `training/solver/retry_histogram.parquet`,
+  `hydro_models/fpha_hyperplanes.parquet`,
+  `hydro_models/evaporation_models.parquet`,
+  `hydro_models/fpha_deviation_points.parquet`,
+  `generic_constraints/resolved_echo.parquet` and
+  `anticipated/fixed_deliveries.parquet` before it writes any output, and then
+  removes those directories if they are left empty. A run writes these files
+  only when it has rows for them, so earlier versions kept the previous run's
+  copies next to a new `training/_SUCCESS` after, for example, cut selection
+  was disabled or a plant was switched from FPHA to constant productivity. The
+  policy directory and other files are left in place, and a run with training
+  disabled removes nothing.
+
+- **`training/dictionaries/variables.csv` now describes only files a run
+  writes.** It no longer lists the `rank_timing` rows for
+  `training/timing/mpi_ranks.parquet`, which no run writes, or the
+  `hydro_energy_productivity` rows for the case input
+  `system/hydro_energy_productivity.parquet`, which a run reads but never
+  writes.
+
+- **`training/dictionaries/variables.csv` reports the unit each column holds,
+  and marks the columns whose unit depends on the row.** These `unit` cells
+  changed:
+  - `buses.spot_price` and `contracts.price_per_mwh`: `$/MWh` (were `MW` and
+    `$`);
+  - `pumping_stations.pumped_flow_m3s`: `m3/s` (was `MW`);
+  - `pumping_stations.pumped_volume_hm3`: `hm3` (was `m3/s`);
+  - `convergence.lower_bound`, `convergence.upper_bound` and
+    `convergence.upper_bound_std`: `$` (were empty);
+  - `convergence.gap_percent`: `%` (was empty);
+  - `iteration_timing.forward_wall_ms`, `iteration_timing.backward_wall_ms`,
+    `iteration_timing.cut_sync_ms` and `iteration_timing.lower_bound_ms`: `ms`
+    (were empty);
+  - `generic_violations.slack_value`: `varies` (was empty). Its description
+    now says that its unit is that of the constraint `constraint_id`
+    identifies.
+
+  An empty `unit` means the column has no unit. `varies` means the unit
+  depends on the row, and the column's description names the column that
+  determines it.
+
+- **`training/dictionaries/variables.csv` describes `hydros.inflow_m3s` as the
+  incremental (local) inflow.** The description said the column held the total
+  inflow including upstream contributions; it holds the same value as
+  `incremental_inflow_m3s`.
+
+- **`training/dictionaries/variables.csv` describes `inflow_lags.lag_index` as
+  0-based.** The description said the index was 1-based; the written index
+  starts at 0, and 0 is the most recent past period.
+
+- **A hydro plant with no turbine capacity now survives the computed →
+  precomputed FPHA round trip.** A computed-FPHA run exports no hyperplanes
+  for a plant whose `max_turbined_m3s` is zero, so switching that plant to
+  `source: "precomputed"` with the exported `fpha_hyperplanes.parquet` made
+  `cobre validate` and `cobre run` report that it has no FPHA hyperplanes.
+  Such a plant with no rows in `system/fpha_hyperplanes.parquet` is now
+  accepted and modeled with zero productivity, as on the computed path. A
+  plant with turbine capacity still needs its hyperplane rows.
+
+- **A computed-FPHA plant whose `max_generation_mw` caps its fit now survives
+  the computed → precomputed round trip.** The fit of such a plant includes a
+  flat `generation ≤ capacity` hyperplane with `gamma_q = 0`, and
+  `hydro_models/fpha_hyperplanes.parquet` exports it. Using that file as
+  `system/fpha_hyperplanes.parquet` with `source: "precomputed"` made `cobre
+  validate` and `cobre run` stop with "gamma_q must be > 0". A precomputed
+  hyperplane may now have `gamma_q = 0`, and the plant is modeled with the
+  same hyperplanes as the computed run. Each stage still needs at least one
+  hyperplane with `gamma_q > 0`, and a negative `gamma_q` is still refused.
+
+- **`cobre run` reports stochastic-model data refusals as input errors.** A
+  case whose scenario data the stochastic model refuses, for example a
+  historical inflow scheme with no complete historical window, now exits with
+  code 1 like other refused input. Earlier versions exited with code 4 and
+  asked for a bug report.
+
+- **A training run that hits an infeasible LP exits with code 3.** The error
+  names the stage, iteration and scenario. Earlier versions reported every
+  failure inside the training loop as an internal error with exit code 4; each
+  failure now exits with the code of its kind.
+
+- **`cobre validate` on a case without a boundary policy now builds the study
+  the way `cobre run` does, so it refuses whatever `cobre run` refuses while
+  it builds the study instead of reporting the case valid.** Examples are the
+  historical-scheme scenario data that `cobre run` refuses ("no valid
+  historical windows found", or a `V2.3` non-finite historical noise) and a
+  finite horizon with a single stage. Validating a large case takes longer
+  because the study is built. `--json` reports these failures with the new
+  phase kind `StudySetupError`. A case with a boundary policy already refused
+  them, and still reports them as `BoundaryReconciliationError`.
+
+- **A run killed while writing its policy checkpoint leaves a loadable
+  checkpoint.** The checkpoint is written into `<policy.path>.staging/` and
+  swapped in with two renames, keeping the prior copy in
+  `<policy.path>.previous/` until the swap completes. Warm-start, resume,
+  simulation-only and `cobre validate` read whichever complete copy is present
+  and never change the disk; the next checkpoint write completes or discards
+  the leftovers. The two names `<policy.path>.staging` and
+  `<policy.path>.previous` are reserved for this: a directory under either
+  name that holds only checkpoint files is treated as a leftover of an
+  interrupted write, and is read when `<policy.path>` is missing and removed
+  by the next write. Keep backup copies of a policy under another name.
+
+- **A resumed run's `bound_stalling` rule continues the window the checkpoint
+  recorded.** With `policy.mode: resume`, the rule used to start from an empty
+  history, so it could not fire until `iterations` new iterations had run and
+  never fired when each slice of a sliced run (for example under Slurm) ran
+  fewer. It now reads the lower bounds the checkpoint recorded followed by the
+  new ones, and stops where an uninterrupted run would.
+
+- **A resumed run's `iteration_limit` fires at the configured absolute
+  iteration.** The rule counted iterations from the resume point, so it never
+  fired and the run ended when the iteration range ran out, with no stopping
+  rule in its stop decision. It now stops through the rule at the configured
+  iteration.
+
+- **The refusal for a non-finite value in the historical scenario library
+  names the window year, the stage id and the hydro id.** Rule V2.3 used to
+  print internal 0-based positions, such as `window 2, stage 5, hydro 1`,
+  which match nothing in the case files. It now prints, for example, `window
+  year 1992, stage id 106, hydro id 12`.
+
+- **Generic-constraint errors about a block selector print the whole term.**
+  When a per-block `hydro_evaporation`, `hydro_storage_initial`,
+  `hydro_storage_final`, `hydro_useful_volume_initial` or
+  `hydro_useful_volume_final` term names a block that a stage cannot expose,
+  the error now prints the term as written, with its hydro and block, for
+  example `hydro_evaporation(7, 5)`. It used to print `hydro_evaporation(5)`,
+  which reads as hydro 5.
+
+- **Penalty-ordering warnings compare only costs in the same unit.** `cobre
+  validate` and `cobre run` no longer compare a storage cost in $/hm³
+  (`storage_violation_below_cost`, `filling_target_violation_cost`) or a flow
+  cost in $/(m³/s·h) with a deficit cost in $/MWh; converting one into the
+  other needs each plant's productivity, which validation does not know. The
+  remaining warnings compare the deficit costs with
+  `generation_violation_below_cost` (both $/MWh), compare the flow-violation
+  costs with `spillage_cost` and `diversion_cost` (both $/(m³/s·h)), and still
+  require positive spillage and diversion costs. The flow-violation costs now
+  include the directional evaporation and withdrawal costs
+  (`evaporation_violation_pos_cost`, `evaporation_violation_neg_cost`,
+  `water_withdrawal_violation_pos_cost`,
+  `water_withdrawal_violation_neg_cost`), which are the costs the model
+  actually charges, in place of `evaporation_violation_cost` and
+  `water_withdrawal_violation_cost`, which only supply their defaults. A study
+  whose directional cost sits below `spillage_cost` now gets a warning. Each
+  warning counts every hydro that breaks the ordering.
+
+- **Generic-constraint reference errors name the file the constraint is read
+  from.** A generic constraint that references a missing entity, or a contract
+  stub, is now reported against `constraints/generic_constraints.json`.
+  Earlier versions labelled these findings `system/generic_constraints.json`,
+  a path that does not exist.
+
+- **Input JSON schema descriptions write units in parentheses, without
+  backslashes.** Descriptions in `cobre schema export` output and in
+  `schemas/` showed units such as `\[MW\]` and `\[hm³\]` with literal
+  backslashes, and wrote others as `[m³/s]`; every unit now reads `(MW)`,
+  `(hm³)` or `(m³/s)`. No schema key, type or constraint changed.
+
+- **Input JSON schema descriptions are written for case authors.**
+  Descriptions in `cobre schema export` output and in `schemas/` no longer
+  contain Rust documentation link syntax, LaTeX markup or notes about how the
+  Rust parser is built (such as "serde only, not re-exported"). Each file's
+  root description names the input file. Descriptions of nested objects no
+  longer begin with "Intermediate type for" or "Tagged-union intermediate type
+  for". No schema key, type or constraint changed.
+
+- **The input JSON schemas state the unit of every hydro penalty cost.** In
+  `cobre schema export` output and in `schemas/`, each cost in the `hydro`
+  section of `penalties.json` and each per-plant override under
+  `hydros[].penalties` now states the unit it is priced in: $/(m³/s·h) for the
+  flow costs, including `turbined_cost` and the evaporation and withdrawal
+  costs; $/hm³ for the storage and filling-target costs; $/MWh for
+  `generation_violation_below_cost`. No schema key, type or constraint
+  changed.
+
+- **`stages.schema.json` no longer lists `scenario_source`.** The key moved to
+  `config.json`, and loading a `stages.json` that still sets it already failed
+  with a message naming the new location. A schema-validating editor now
+  reports the key as unexpected too. The loader's message is unchanged.
+
+- **`config.schema.json` marks `training.selection` and
+  `training.stopping_rules` as required, matching the loader.** A config that
+  omits either key, or sets it to `null`, now fails schema validation as well
+  as loading.
+
+- **The exported entity schemas name the `penalties.json` key each penalty
+  override falls back to.** The `non_controllable_sources` and `lines` schemas
+  cited internal names (`ncs_curtailment_cost`, `line_exchange_cost`) instead
+  of `non_controllable_source.curtailment_cost` and `line.exchange_cost`; the
+  `buses` and `hydros` descriptions now name `bus.deficit_segments` and the
+  `hydro` section.
+
+- **The exported `generic_parameters` schema lists every accepted parameter
+  `kind`.** It described four kinds and accepted any string for `kind`; it now
+  enumerates `constant`, `per_stage`, `seasonal`, `computed` and
+  `per_stage_block`.
+
+- **`simulation.scenario_source.seed` now seeds the simulation's out-of-sample
+  draws.** The simulation drew its `out_of_sample` noise from
+  `training.scenario_source.seed` and ignored its own seed. A study whose
+  training section had no seed passed `cobre validate` and then failed after
+  training. Simulation results change for studies whose simulation seed
+  differs from the training seed. Studies without a
+  `simulation.scenario_source` are unchanged.
+
+- **A study that supplies its opening tree from a file is no longer refused
+  over a historical library it does not use.** With
+  `training.scenario_source.openings` set to `{"source": "file"}` and stages
+  using `"sampling_method": "historical_residuals"`, `cobre run` and `cobre
+  validate` still built the historical residual library that only a generated
+  opening tree reads, and refused the study when that library could not be
+  built or failed a V2.x rule (for example, with no inflow history). That
+  library is now built only when the opening tree is generated. A `historical`
+  inflow sampling scheme still builds and checks its own library.
+
+- **`training/dictionaries/variables.csv` describes
+  `solver_iterations.scenario_id` as the simulation trajectory id, NULL on a
+  training row.** The row showed the generic scenario-identifier text.
+
+- **Each historical inflow window now replays the season occurrences of its
+  own year under a `weekly` season map, or under a `custom` map with a season
+  that spans 1 January.** Window discovery and η standardization keyed each
+  `inflow_history.parquet` row by its calendar year, while study stages are
+  dated by the occurrence year. Under a weekly map that is the ISO
+  week-numbering year. Under a season spanning 1 January it is the year the
+  occurrence starts in. As a result, a window could replay the next year's ISO
+  week 1, or the January rows of the occurrence that began the previous
+  December, and a complete ISO year whose week 1 starts in December, which
+  includes every 53-week ISO year, was left out of the window pool. Such years
+  are now admitted; in a 53-week year the last week's value is replayed for
+  the final weekly season. This affects the `historical` inflow scheme and
+  stages whose `noise_method` is `historical_residuals`. Those studies can now
+  discover different windows and produce different bounds, policies and
+  simulation results. Studies without a season map, or with a `monthly` map,
+  are unchanged.
+
+### Migration
+
+- **Policies written by 0.17 or earlier cannot be loaded.** Warm-start,
+  resume, simulation-only and boundary-cut loads refuse them for their
+  `format_version`. Re-run the program that produced the policy with the
+  running version, or convert a boundary policy again.
+
+- **Add an `iteration_limit` rule to `training.stopping_rules`.** A config
+  without one is now refused, and the rule caps the run under
+  `"stopping_mode": "all"`.
+
+- **Move backup copies of a policy out of `<policy.path>.staging` and
+  `<policy.path>.previous`.** A checkpoint write reserves both names. Keep
+  backups under another name.
+
+- **Give `policy.checkpointing.interval_iterations` a value of at least 1**
+  wherever `policy.checkpointing.enabled` is `true`.
 
 ## [0.17.0] - 2026-10-01
 

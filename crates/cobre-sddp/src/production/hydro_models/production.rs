@@ -67,11 +67,12 @@ type ResolveProductionResult = (
 /// | `source: "computed"` with missing tailrace/losses/efficiency    | [`SddpError::Validation`]  |
 /// | `source: "computed"` with no geometry rows for the hydro        | [`SddpError::Validation`]  |
 /// | FPHA fitting pipeline error                                     | [`SddpError::Validation`]  |
-/// | `gamma_v <= 0` for any precomputed hyperplane                   | [`SddpError::Validation`]  |
+/// | `gamma_v < 0` for any precomputed hyperplane                    | [`SddpError::Validation`]  |
 /// | `gamma_s > 0` for any precomputed hyperplane                    | [`SddpError::Validation`]  |
-/// | `gamma_q <= 0` for any precomputed hyperplane                   | [`SddpError::Validation`]  |
+/// | `gamma_q < 0` for any precomputed hyperplane                    | [`SddpError::Validation`]  |
 /// | `kappa` not in `(0, 1]` for precomputed hyperplane              | [`SddpError::Validation`]  |
 /// | Zero hyperplanes for an FPHA hydro at any stage                 | [`SddpError::Validation`]  |
+/// | No precomputed hyperplane with `gamma_q > 0` for an FPHA hydro at a stage | [`SddpError::Validation`]  |
 pub fn resolve_production_models_from_artifacts(
     system: &System,
     artifacts: &CaseArtifacts,
@@ -1067,7 +1068,8 @@ fn resolve_stage<'a>(
 ///
 /// Stage-specific rows `(hydro_id, Some(stage.id))` take priority over the global
 /// `(hydro_id, None)` all-stage rows. Each `FphaPlane` intercept is the pre-scaled
-/// `gamma_0 * kappa`.
+/// `gamma_0 * kappa`. At least one row must have `gamma_q > 0`, otherwise generation
+/// would not depend on turbined flow.
 fn build_fpha_model(
     hydro: &Hydro,
     stage: &Stage,
@@ -1103,6 +1105,14 @@ fn build_fpha_model(
         });
     }
 
+    if !rows.iter().any(|row| row.gamma_q > 0.0) {
+        return Err(SddpError::Validation(format!(
+            "hydro {} (id={}) stage {}: no hyperplane has gamma_q > 0, so generation \
+             would not depend on turbined flow",
+            hydro.name, hydro.id.0, stage.id
+        )));
+    }
+
     Ok(ResolvedProductionModel::Fpha { planes })
 }
 
@@ -1115,7 +1125,8 @@ fn build_fpha_model(
 /// - `gamma_v >= 0` — higher storage must not decrease generation; zero is valid
 ///   for constant-head plants where head does not depend on volume
 /// - `gamma_s <= 0` — spillage reduces generation
-/// - `gamma_q > 0` — more turbined flow → more generation
+/// - `gamma_q >= 0` — more turbined flow must not decrease generation; zero is valid
+///   where the capacity ceiling flattens the surface
 /// - `kappa ∈ (0, 1]` — correction factor range
 fn validate_hyperplane_row(
     hydro: &Hydro,
@@ -1143,9 +1154,9 @@ fn validate_hyperplane_row(
         )));
     }
 
-    if row.gamma_q <= 0.0 {
+    if row.gamma_q < 0.0 {
         return Err(SddpError::Validation(format!(
-            "{ctx}: gamma_q must be > 0 (more turbined flow → more generation), \
+            "{ctx}: gamma_q must be >= 0 (more turbined flow must not decrease generation), \
              got gamma_q = {}",
             row.gamma_q
         )));

@@ -64,7 +64,7 @@
     },
     "CheckpointingConfig": {
       "additionalProperties": false,
-      "description": "Checkpoint settings (`config.json → policy.checkpointing`).",
+      "description": "Periodic checkpoint settings (`config.json → policy.checkpointing`). Each periodic checkpoint replaces the previous one in the policy directory, so only the latest is kept.",
       "properties": {
         "compress": {
           "default": null,
@@ -76,7 +76,7 @@
         },
         "enabled": {
           "default": null,
-          "description": "Enable periodic checkpointing.",
+          "description": "Write periodic checkpoints during training. Off when absent. When true, `interval_iterations` must be at least 1.",
           "type": [
             "boolean",
             "null"
@@ -84,7 +84,7 @@
         },
         "initial_iteration": {
           "default": null,
-          "description": "First iteration to write a checkpoint.",
+          "description": "Iteration that writes the first periodic checkpoint. Defaults to `interval_iterations`. Iteration numbers are absolute: a resumed run continues the numbering of the run it resumes.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -94,7 +94,7 @@
         },
         "interval_iterations": {
           "default": null,
-          "description": "Iterations between checkpoints.",
+          "description": "Iterations between periodic checkpoints, counted from `initial_iteration`. Required, and at least 1, when `enabled` is true.",
           "format": "uint32",
           "minimum": 0,
           "type": [

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use std::fmt;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 /// Policy initialization mode (`config.json → policy.mode`).
@@ -96,20 +97,20 @@ impl Default for PolicyConfig {
     }
 }
 
-/// Checkpoint settings (`config.json → policy.checkpointing`).
+/// Periodic checkpoint settings (`config.json → policy.checkpointing`). Each periodic checkpoint replaces the previous one in the policy directory, so only the latest is kept.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default, deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CheckpointingConfig {
-    /// Enable periodic checkpointing.
+    /// Write periodic checkpoints during training. Off when absent. When true, `interval_iterations` must be at least 1.
     #[serde(default)]
     pub enabled: Option<bool>,
 
-    /// First iteration to write a checkpoint.
+    /// Iteration that writes the first periodic checkpoint. Defaults to `interval_iterations`. Iteration numbers are absolute: a resumed run continues the numbering of the run it resumes.
     #[serde(default)]
     pub initial_iteration: Option<u32>,
 
-    /// Iterations between checkpoints.
+    /// Iterations between periodic checkpoints, counted from `initial_iteration`. Required, and at least 1, when `enabled` is true.
     #[serde(default)]
     pub interval_iterations: Option<u32>,
 
@@ -120,4 +121,60 @@ pub struct CheckpointingConfig {
     /// Compress checkpoint files.
     #[serde(default)]
     pub compress: Option<bool>,
+}
+
+/// Resolved periodic checkpoint schedule; [`Config::checkpoint_schedule`](super::Config::checkpoint_schedule)
+/// is its only producer.
+///
+/// A periodic checkpoint is written at [`Self::first_iteration`] and every
+/// [`Self::interval`] iterations after it. Iteration numbers are absolute, so a
+/// resumed run keeps the schedule of the run it resumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckpointSchedule {
+    pub(super) first_iteration: u64,
+    pub(super) interval: NonZeroU64,
+}
+
+impl CheckpointSchedule {
+    /// Absolute iteration that writes the first periodic checkpoint.
+    #[must_use]
+    pub fn first_iteration(self) -> u64 {
+        self.first_iteration
+    }
+
+    /// Iterations between periodic checkpoints.
+    #[must_use]
+    pub fn interval(self) -> NonZeroU64 {
+        self.interval
+    }
+
+    /// Whether the absolute `iteration` writes a periodic checkpoint.
+    #[must_use]
+    pub fn fires_at(self, iteration: u64) -> bool {
+        iteration >= self.first_iteration && (iteration - self.first_iteration) % self.interval == 0
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::CheckpointSchedule;
+    use std::num::NonZeroU64;
+
+    #[test]
+    fn schedule_fires_at_the_first_iteration_and_every_interval_after() {
+        let schedule = CheckpointSchedule {
+            first_iteration: 3,
+            interval: NonZeroU64::new(2).unwrap(),
+        };
+        for iteration in [3, 5, 7] {
+            assert!(schedule.fires_at(iteration), "must fire at {iteration}");
+        }
+        for iteration in [1, 2, 4, 6] {
+            assert!(
+                !schedule.fires_at(iteration),
+                "must not fire at {iteration}"
+            );
+        }
+    }
 }

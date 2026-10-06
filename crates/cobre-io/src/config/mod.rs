@@ -36,7 +36,9 @@ pub mod training;
 pub use estimation::{EstimationConfig, OrderSelectionMethod};
 pub use exports::ExportsConfig;
 pub use modeling::{InflowNonNegativityConfig, InflowNonNegativityMethod, ModelingConfig};
-pub use policy::{BoundaryPolicy, CheckpointingConfig, PolicyConfig, PolicyMode};
+pub use policy::{
+    BoundaryPolicy, CheckpointSchedule, CheckpointingConfig, PolicyConfig, PolicyMode,
+};
 pub use scenario_source::{
     HistoricalYearRange, Openings, RawClassConfigEntry, RawHistoricalYearsConfig,
     RawSamplingScheme, RawScenarioSourceConfig,
@@ -55,6 +57,7 @@ use cobre_core::scenario::{HistoricalYears, SamplingScheme, ScenarioSource};
 
 use crate::LoadError;
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 /// Top-level deserialized representation of `config.json`.
@@ -175,6 +178,7 @@ pub(crate) fn validate_config(config: &Config, path: &Path) -> Result<(), LoadEr
 
     config.training_scenario_source(path)?;
     config.simulation_scenario_source(path)?;
+    config.checkpoint_schedule(path)?;
 
     Ok(())
 }
@@ -387,6 +391,42 @@ impl Config {
         } else {
             self.training_scenario_source(path)
         }
+    }
+
+    /// Resolve the periodic checkpoint schedule from `policy.checkpointing`, or
+    /// `None` unless `enabled` is `true`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LoadError::SchemaError`] when `enabled` is `true` and
+    /// `interval_iterations` is absent or `0`.
+    pub fn checkpoint_schedule(
+        &self,
+        path: &Path,
+    ) -> Result<Option<CheckpointSchedule>, LoadError> {
+        let checkpointing = &self.policy.checkpointing;
+        if checkpointing.enabled != Some(true) {
+            return Ok(None);
+        }
+
+        let refuse_interval = |found: &str| LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: "policy.checkpointing.interval_iterations".to_string(),
+            message: format!(
+                "must be at least 1 when policy.checkpointing.enabled is true; got {found}"
+            ),
+        };
+        let Some(n) = checkpointing.interval_iterations else {
+            return Err(refuse_interval("no value"));
+        };
+        let Some(interval) = NonZeroU64::new(u64::from(n)) else {
+            return Err(refuse_interval("0"));
+        };
+
+        Ok(Some(CheckpointSchedule {
+            first_iteration: u64::from(checkpointing.initial_iteration.unwrap_or(n)),
+            interval,
+        }))
     }
 
     /// The training-phase `openings` source declaration, or `None` when absent
@@ -1775,7 +1815,7 @@ mod tests {
         "stopping_mode": "any"
       },
       "policy": {
-        "checkpointing": {"enabled": true}
+        "checkpointing": {"enabled": true, "interval_iterations": 5}
       }
     }"#;
 
@@ -1958,6 +1998,95 @@ mod tests {
                 assert!(message.contains("must be a JSON object"));
             }
             other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    // ── policy.checkpointing schedule ─────────────────────────────────────────
+
+    fn with_checkpointing(checkpointing: serde_json::Value) -> Result<Config, LoadError> {
+        let overrides = override_map(&[("policy.checkpointing", checkpointing)]);
+        Config::with_overrides(&base_value(OVERRIDE_BASE_CONFIG), &overrides)
+    }
+
+    fn assert_interval_refused(checkpointing: serde_json::Value, found: &str) {
+        let via_overrides = with_checkpointing(checkpointing.clone()).unwrap_err();
+        let mut merged = base_value(OVERRIDE_BASE_CONFIG);
+        merged["policy"]["checkpointing"] = checkpointing;
+        let f = write_config(&merged.to_string());
+        let via_file = parse_config(f.path()).unwrap_err();
+
+        for err in [via_overrides, via_file] {
+            match &err {
+                LoadError::SchemaError { field, message, .. } => {
+                    assert_eq!(field, "policy.checkpointing.interval_iterations");
+                    assert_eq!(
+                        message,
+                        &format!(
+                            "must be at least 1 when policy.checkpointing.enabled is true; \
+                             got {found}"
+                        )
+                    );
+                }
+                other => panic!("expected SchemaError, got: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn checkpointing_enabled_without_interval_is_rejected() {
+        assert_interval_refused(serde_json::json!({"enabled": true}), "no value");
+    }
+
+    #[test]
+    fn checkpointing_enabled_with_zero_interval_is_rejected() {
+        assert_interval_refused(
+            serde_json::json!({"enabled": true, "interval_iterations": 0}),
+            "0",
+        );
+    }
+
+    #[test]
+    fn checkpointing_initial_iteration_defaults_to_the_interval() {
+        let cfg =
+            with_checkpointing(serde_json::json!({"enabled": true, "interval_iterations": 4}))
+                .unwrap();
+        let schedule = cfg
+            .checkpoint_schedule(Path::new("config.json"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(schedule.first_iteration(), 4);
+        assert_eq!(schedule.interval().get(), 4);
+    }
+
+    #[test]
+    fn checkpointing_explicit_initial_iteration_is_kept_even_when_zero() {
+        let cfg = with_checkpointing(serde_json::json!({
+            "enabled": true, "initial_iteration": 0, "interval_iterations": 3
+        }))
+        .unwrap();
+        let schedule = cfg
+            .checkpoint_schedule(Path::new("config.json"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(schedule.first_iteration(), 0);
+        assert_eq!(schedule.interval().get(), 3);
+    }
+
+    #[test]
+    fn checkpointing_absent_or_disabled_resolves_no_schedule() {
+        let mut without_policy = base_value(OVERRIDE_BASE_CONFIG);
+        without_policy.as_object_mut().unwrap().remove("policy");
+        let configs = [
+            Config::with_overrides(&without_policy, &serde_json::Map::new()).unwrap(),
+            with_checkpointing(serde_json::json!({"enabled": false, "interval_iterations": 0}))
+                .unwrap(),
+            with_checkpointing(serde_json::json!({"interval_iterations": 3})).unwrap(),
+        ];
+        for cfg in &configs {
+            assert_eq!(
+                cfg.checkpoint_schedule(Path::new("config.json")).unwrap(),
+                None
+            );
         }
     }
 

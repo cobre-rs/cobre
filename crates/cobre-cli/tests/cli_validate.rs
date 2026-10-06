@@ -367,6 +367,25 @@ fn invalid_simulation_scenario_source_fails_validate_and_run() {
         .stderr(predicate::str::contains(MSG));
 }
 
+#[test]
+fn checkpointing_enabled_without_interval_exits_1() {
+    let dir = TempDir::new().unwrap();
+    make_valid_case(&dir);
+
+    let mut config: serde_json::Value = serde_json::from_str(CONFIG_JSON).unwrap();
+    config["policy"] = serde_json::json!({ "checkpointing": { "enabled": true } });
+    write_file(dir.path(), "config.json", &config.to_string());
+
+    cobre()
+        .args(["validate", dir.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "policy.checkpointing.interval_iterations",
+        ));
+}
+
 /// An FPHA hydro with no `hydro_production_models.json` entry slips past the
 /// IO pipeline (the Layer-4 dimensional check skips FPHA hydros when
 /// `fpha_hyperplanes.parquet` is absent) and is rejected only at Phase 10 by

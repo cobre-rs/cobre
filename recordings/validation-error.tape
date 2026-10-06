@@ -1,6 +1,6 @@
 # Cobre Validation Error Demo
 # Generates: validation-error.gif
-# Shows cobre validate detecting a schema error and a semantic constraint violation.
+# Shows cobre validate stopping at a schema error before the reference layer runs.
 
 Require cobre
 
@@ -27,8 +27,8 @@ Type "jq '.hydros[0] |= del(.reservoir)' demo/system/hydros.json > tmp.json && m
 Enter
 Sleep 5s
 
-# Semantic error: set a negative max_turbined_m3s to trigger a constraint violation
-Type "jq '.hydros[0].generation.max_turbined_m3s = -5.0' demo/system/hydros.json > tmp.json && mv tmp.json demo/system/hydros.json"
+# Reference error: point the first thermal at a bus that does not exist
+Type "jq '.thermals[0].bus_id = 99' demo/system/thermals.json > tmp.json && mv tmp.json demo/system/thermals.json"
 Enter
 Sleep 5s
 

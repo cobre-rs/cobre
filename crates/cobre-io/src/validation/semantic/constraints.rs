@@ -157,6 +157,18 @@ enum StorageRef {
     Final(Option<usize>),
 }
 
+#[derive(Clone, Copy)]
+struct StorageTerm {
+    accessor: &'static str,
+    hydro_id: EntityId,
+    boundary: StorageRef,
+}
+
+/// The term as an expression writes it: `accessor(hydro_id, block)`.
+fn block_term(accessor: &str, hydro_id: EntityId, block: usize) -> String {
+    format!("{accessor}({hydro_id}, {block})")
+}
+
 fn add_constraint_error(
     ctx: &mut ValidationContext,
     constraint: &GenericConstraint,
@@ -184,34 +196,38 @@ fn validate_block_ref(
     block_mode: BlockMode,
     ctx: &mut ValidationContext,
 ) {
-    if let Some((accessor, storage)) = storage_boundary_ref(variable) {
-        validate_storage_ref(constraint, accessor, storage, k, stage_id, block_mode, ctx);
+    if let Some(term) = storage_boundary_ref(variable) {
+        validate_storage_ref(constraint, term, k, stage_id, block_mode, ctx);
         return;
     }
     match variable {
         VariableRef::HydroEvaporation {
-            block_id: Some(b), ..
+            hydro_id,
+            block_id: Some(b),
         } if *b >= k => {
+            let term = block_term("hydro_evaporation", *hydro_id, *b);
             add_constraint_error(
                 ctx,
                 constraint,
                 format!(
                     "Constraint \"{}\": per-block evaporation reference \
-                     `hydro_evaporation({b})` at stage {stage_id} references block {b} \
+                     `{term}` at stage {stage_id} references block {b} \
                      which does not exist at stage {stage_id} (K = {k})",
                     constraint.name
                 ),
             );
         }
         VariableRef::HydroEvaporation {
-            block_id: Some(b), ..
+            hydro_id,
+            block_id: Some(b),
         } if block_mode == BlockMode::Parallel && k > 1 && *b >= 1 => {
+            let term = block_term("hydro_evaporation", *hydro_id, *b);
             add_constraint_error(
                 ctx,
                 constraint,
                 format!(
                     "Constraint \"{}\": per-block evaporation reference \
-                     `hydro_evaporation({b})` at stage {stage_id} names a block past \
+                     `{term}` at stage {stage_id} names block {b}, past \
                      the stage-level evaporation, which requires chronological block \
                      mode (stage {stage_id} is parallel with {k} blocks); use block 0 \
                      or no block",
@@ -219,16 +235,18 @@ fn validate_block_ref(
                 ),
             );
         }
-        VariableRef::HydroEvaporation { block_id: None, .. }
-            if block_mode == BlockMode::Chronological && k > 1 =>
-        {
+        VariableRef::HydroEvaporation {
+            hydro_id,
+            block_id: None,
+        } if block_mode == BlockMode::Chronological && k > 1 => {
+            let example = block_term("hydro_evaporation", *hydro_id, 0);
             add_constraint_error(
                 ctx,
                 constraint,
                 format!(
-                    "Constraint \"{}\": stage-level `hydro_evaporation` at chronological \
-                     stage {stage_id} is ambiguous — evaporation is per-block there \
-                     (K = {k}); name a block, e.g. `hydro_evaporation(<hydro>, 0)`",
+                    "Constraint \"{}\": stage-level `hydro_evaporation({hydro_id})` at \
+                     chronological stage {stage_id} is ambiguous — evaporation is \
+                     per-block there (K = {k}); name a block, e.g. `{example}`",
                     constraint.name
                 ),
             );
@@ -237,46 +255,58 @@ fn validate_block_ref(
     }
 }
 
-/// The accessor name and boundary of a storage-boundary term, `None` for every
-/// other variant.
-fn storage_boundary_ref(variable: &VariableRef) -> Option<(&'static str, StorageRef)> {
+/// The accessor name, hydro and boundary of a storage-boundary term, `None` for
+/// every other variant.
+fn storage_boundary_ref(variable: &VariableRef) -> Option<StorageTerm> {
     match variable {
-        VariableRef::HydroStorageInitial { block_id, .. } => {
-            Some(("hydro_storage_initial", StorageRef::Initial(*block_id)))
-        }
-        VariableRef::HydroStorageFinal { block_id, .. } => {
-            Some(("hydro_storage_final", StorageRef::Final(*block_id)))
-        }
-        VariableRef::HydroUsefulVolumeInitial { block_id, .. } => Some((
-            "hydro_useful_volume_initial",
-            StorageRef::Initial(*block_id),
-        )),
-        VariableRef::HydroUsefulVolumeFinal { block_id, .. } => {
-            Some(("hydro_useful_volume_final", StorageRef::Final(*block_id)))
-        }
+        VariableRef::HydroStorageInitial { hydro_id, block_id } => Some(StorageTerm {
+            accessor: "hydro_storage_initial",
+            hydro_id: *hydro_id,
+            boundary: StorageRef::Initial(*block_id),
+        }),
+        VariableRef::HydroStorageFinal { hydro_id, block_id } => Some(StorageTerm {
+            accessor: "hydro_storage_final",
+            hydro_id: *hydro_id,
+            boundary: StorageRef::Final(*block_id),
+        }),
+        VariableRef::HydroUsefulVolumeInitial { hydro_id, block_id } => Some(StorageTerm {
+            accessor: "hydro_useful_volume_initial",
+            hydro_id: *hydro_id,
+            boundary: StorageRef::Initial(*block_id),
+        }),
+        VariableRef::HydroUsefulVolumeFinal { hydro_id, block_id } => Some(StorageTerm {
+            accessor: "hydro_useful_volume_final",
+            hydro_id: *hydro_id,
+            boundary: StorageRef::Final(*block_id),
+        }),
         _ => None,
     }
 }
 
 fn validate_storage_ref(
     constraint: &GenericConstraint,
-    accessor: &str,
-    storage: StorageRef,
+    term: StorageTerm,
     k: usize,
     stage_id: i32,
     block_mode: BlockMode,
     ctx: &mut ValidationContext,
 ) {
-    let (StorageRef::Initial(block_id) | StorageRef::Final(block_id)) = storage;
+    let StorageTerm {
+        accessor,
+        hydro_id,
+        boundary,
+    } = term;
+    let (StorageRef::Initial(block_id) | StorageRef::Final(block_id)) = boundary;
 
     if let Some(b) = block_id
         && b >= k
     {
+        let rendered = block_term(accessor, hydro_id, b);
         add_constraint_error(
             ctx,
             constraint,
             format!(
-                "Constraint \"{}\": per-block storage reference `{accessor}({b})` at \
+                "Constraint \"{}\": per-block storage reference `{rendered}` at \
                  stage {stage_id} references block {b} which does not exist at \
                  stage {stage_id} (K = {k})",
                 constraint.name
@@ -291,21 +321,20 @@ fn validate_storage_ref(
             if k <= 1 {
                 return;
             }
-            let interior = match (storage, block_id) {
-                (_, None) => false,
-                (StorageRef::Initial(_), Some(b)) => boundary_is_interior(b, k),
-                (StorageRef::Final(_), Some(b)) => boundary_is_interior(b + 1, k),
+            let Some(b) = block_id else {
+                return;
+            };
+            let interior = match boundary {
+                StorageRef::Initial(_) => boundary_is_interior(b, k),
+                StorageRef::Final(_) => boundary_is_interior(b + 1, k),
             };
             if interior {
-                let block_label = match block_id {
-                    Some(b) => format!("{accessor}({b})"),
-                    None => format!("{accessor}(all blocks)"),
-                };
+                let rendered = block_term(accessor, hydro_id, b);
                 add_constraint_error(
                     ctx,
                     constraint,
                     format!(
-                        "Constraint \"{}\": per-block storage reference `{block_label}` at \
+                        "Constraint \"{}\": per-block storage reference `{rendered}` at \
                          stage {stage_id} resolves to an interior boundary, which requires \
                          chronological block mode (stage {stage_id} is parallel with {k} blocks)",
                         constraint.name
@@ -703,7 +732,7 @@ mod tests {
         assert_eq!(errors.len(), 1, "expected one error, got: {errors:?}");
         let msg = &errors[0].message;
         assert!(
-            msg.contains("hydro_evaporation(2)")
+            msg.contains("hydro_evaporation(1, 2)")
                 && msg.contains("parallel with 3 blocks")
                 && msg.contains("block 0"),
             "message should name the block, the parallel mode and block count, \
@@ -771,9 +800,85 @@ mod tests {
         assert_eq!(errors.len(), 1, "expected one error, got: {errors:?}");
         let msg = &errors[0].message;
         assert!(
-            msg.contains("hydro_evaporation(5)") && msg.contains("block 5 which does not exist"),
+            msg.contains("hydro_evaporation(1, 5)") && msg.contains("block 5 which does not exist"),
             "message should be the evaporation out-of-range message, got: {msg}"
         );
+    }
+
+    fn sole_error_for_hydro_7(block_mode: BlockMode, variable: VariableRef) -> String {
+        let mut data = make_data_storage_ref(block_mode, 3, variable);
+        data.hydros = vec![make_hydro(7, None)];
+        let errors = interior_errors(&data);
+        assert_eq!(errors.len(), 1, "expected one error, got: {errors:?}");
+        errors[0].message.clone()
+    }
+
+    fn evaporation_of_hydro_7(block_id: Option<usize>) -> VariableRef {
+        VariableRef::HydroEvaporation {
+            hydro_id: EntityId::from(7),
+            block_id,
+        }
+    }
+
+    #[test]
+    fn evaporation_block_messages_name_the_hydro_and_the_block() {
+        let out_of_range =
+            sole_error_for_hydro_7(BlockMode::Parallel, evaporation_of_hydro_7(Some(5)));
+        assert!(
+            out_of_range.contains("`hydro_evaporation(7, 5)`") && out_of_range.contains("block 5"),
+            "got: {out_of_range}"
+        );
+
+        let past_the_slot =
+            sole_error_for_hydro_7(BlockMode::Parallel, evaporation_of_hydro_7(Some(2)));
+        assert!(
+            past_the_slot.contains("`hydro_evaporation(7, 2)`")
+                && past_the_slot.contains("names block 2"),
+            "got: {past_the_slot}"
+        );
+
+        let bare = sole_error_for_hydro_7(BlockMode::Chronological, evaporation_of_hydro_7(None));
+        assert!(
+            bare.contains("`hydro_evaporation(7)`") && bare.contains("`hydro_evaporation(7, 0)`"),
+            "got: {bare}"
+        );
+
+        for msg in [&out_of_range, &past_the_slot] {
+            assert!(
+                !msg.contains("hydro_evaporation(5)") && !msg.contains("hydro_evaporation(2)"),
+                "block rendered as a hydro id: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn storage_block_messages_name_the_hydro_and_the_block() {
+        for (variable, term) in [
+            (
+                VariableRef::HydroStorageInitial {
+                    hydro_id: EntityId::from(7),
+                    block_id: Some(5),
+                },
+                "`hydro_storage_initial(7, 5)`",
+            ),
+            (
+                VariableRef::HydroStorageInitial {
+                    hydro_id: EntityId::from(7),
+                    block_id: Some(1),
+                },
+                "`hydro_storage_initial(7, 1)`",
+            ),
+            (
+                VariableRef::HydroStorageFinal {
+                    hydro_id: EntityId::from(7),
+                    block_id: Some(0),
+                },
+                "`hydro_storage_final(7, 0)`",
+            ),
+        ] {
+            let msg = sole_error_for_hydro_7(BlockMode::Parallel, variable);
+            assert!(msg.contains(term), "expected {term}, got: {msg}");
+        }
     }
 
     // ── check_productivity_tag_pairing ──────────────────────────────────────

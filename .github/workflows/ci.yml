@@ -244,6 +244,7 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
+      - run: cargo fmt --manifest-path crates/cobre-python/Cargo.toml -- --check
 
   quality-scripts:
     name: Quality Scripts

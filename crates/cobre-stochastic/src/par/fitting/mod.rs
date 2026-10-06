@@ -8,6 +8,7 @@
 mod annual;
 mod ar_coefficients;
 mod correlation;
+mod cycle_positions;
 mod estimation;
 mod order_selection;
 mod partitioned_covariance;

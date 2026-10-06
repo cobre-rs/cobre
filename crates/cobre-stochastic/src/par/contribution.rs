@@ -40,6 +40,9 @@ fn denormalized_contribution(
 /// Under PAR(p)-A, `coefficients_by_season[m]` may have length 12 (annual ψ̂/12
 /// added to each lag slot); the recursion operates on it unchanged.
 ///
+/// Season indices are positions in the season cycle: index `(m + n − 1) % n` is
+/// season `m`'s predecessor.
+///
 /// # Algorithm
 ///
 /// 1. **Denormalize** each AR coefficient into a transfer factor

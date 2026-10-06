@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use cobre_core::EntityId;
 use cobre_core::scenario::InflowModel;
-use cobre_core::temporal::{SeasonMap, Stage};
+use cobre_core::temporal::{SeasonCycles, SeasonMap, Stage};
 use cobre_stochastic::par::{
     AnnualParams, derive_residual_std_ratios, derive_residual_std_ratios_annual,
 };
@@ -168,8 +168,8 @@ pub fn populate_derived_residual_ratios(
 /// slice.
 ///
 /// `stage_to_season`'s values are **dense** 0-based ordinals — the rank of each
-/// raw `season_id` among the distinct ids in ascending order — never the raw
-/// `season_id` itself. This is required because [`populate_derived_residual_ratios`]
+/// raw `season_id` among the distinct ids — never the raw `season_id` itself.
+/// This is required because [`populate_derived_residual_ratios`]
 /// (and every other caller of this map) indexes fixed-size `Vec`s of length
 /// `n_seasons` by season; a season-definitions cycle with sparse or
 /// non-contiguous ids (e.g. `Weekly` season ids `21`/`26` for a 2-season cycle)
@@ -179,12 +179,13 @@ pub fn populate_derived_residual_ratios(
 /// `precompute.rs`'s own arrays are indexed by stage position, not by season, so
 /// it never needed densification; every caller of this shared helper does.
 ///
-/// Prefers the registered `season_map`'s declared ids (ranked by ascending id,
-/// consistent with `SeasonMap::seasons`'s own sorted-by-id invariant) for both
-/// the ordinal assignment and `n_seasons`. Falls back to the distinct
-/// `season_id`s actually used by `stages`, also dense-indexed in ascending
-/// order, when no `season_map` is registered — a `System` may carry per-stage
-/// `season_id`s without one.
+/// Prefers the registered `season_map`'s declared ids for both the ordinal
+/// assignment and `n_seasons`. A single-resolution map ranks them by calendar
+/// order ([`SeasonCycles::position`]), so the closure's cyclic predecessor of
+/// an ordinal is its calendar predecessor; a multi-resolution map ranks them by
+/// ascending id. Falls back to the distinct `season_id`s actually used by
+/// `stages`, dense-indexed in ascending order, when no `season_map` is
+/// registered — a `System` may carry per-stage `season_id`s without one.
 ///
 /// A stage whose `season_id` does not appear among the resolved ids (a dangling
 /// reference to an undeclared season — rejected upstream by semantic validation
@@ -229,6 +230,13 @@ pub(crate) fn season_dense_index(
     );
     raw_ids.sort_unstable();
     raw_ids.dedup();
+    if let Some(cycles) = season_map.map(SeasonCycles::new)
+        && raw_ids
+            .iter()
+            .all(|&raw| matches!(cycles.position(raw), Some((0, _))))
+    {
+        raw_ids.sort_by_key(|&raw| cycles.position(raw));
+    }
     let n_seasons = raw_ids.len();
 
     let dense_index = raw_ids
@@ -614,5 +622,69 @@ mod tests {
             expected[1],
             models[1].residual_std_ratio
         );
+    }
+
+    /// Every season is AR(2), so each season's ratio depends on its cycle
+    /// predecessor's implied autocorrelation.
+    #[test]
+    fn derived_residual_ratios_follow_the_calendar_cycle_when_season_ids_are_out_of_order() {
+        const OUT_OF_ORDER_IDS: [usize; 4] = [2, 0, 3, 1];
+        let calendar_ordered = cobre_stochastic::test_support::quarterly_season_map();
+        let mut out_of_order = calendar_ordered.clone();
+        for (def, id) in out_of_order.seasons.iter_mut().zip(OUT_OF_ORDER_IDS) {
+            def.id = id;
+        }
+        out_of_order.seasons.sort_by_key(|def| def.id);
+
+        let psi_by_quarter: Vec<Vec<f64>> = vec![
+            vec![0.5, 0.2],
+            vec![0.3, 0.1],
+            vec![0.6, -0.15],
+            vec![0.4, 0.25],
+        ];
+        assert!(cobre_stochastic::par::check_stationarity(&psi_by_quarter, &[2; 4], 4).is_ok());
+
+        let stages_with = |season_ids: [usize; 4]| -> Vec<Stage> {
+            (0_usize..)
+                .zip(0_i32..)
+                .zip(season_ids)
+                .map(|((index, id), season_id)| stage_with_season(index, id, season_id))
+                .collect()
+        };
+        let ratios_under = |stage_to_season: &HashMap<i32, usize>, n_seasons: usize| -> Vec<u64> {
+            let mut models: Vec<InflowModel> = (0_i32..)
+                .zip(&psi_by_quarter)
+                .map(|(stage_id, psi)| model(1, stage_id, psi.clone(), 0.5, 20.0, None))
+                .collect();
+            populate_derived_residual_ratios(&mut models, stage_to_season, n_seasons).unwrap();
+            models
+                .iter()
+                .map(|m| m.residual_std_ratio.to_bits())
+                .collect()
+        };
+
+        let (stage_to_season, n_seasons) =
+            resolve_stage_seasons(&stages_with(OUT_OF_ORDER_IDS), Some(&out_of_order));
+        let (twin_stage_to_season, twin_n_seasons) =
+            resolve_stage_seasons(&stages_with([0, 1, 2, 3]), Some(&calendar_ordered));
+        let calendar_ratios = ratios_under(&twin_stage_to_season, twin_n_seasons);
+        assert_eq!(ratios_under(&stage_to_season, n_seasons), calendar_ratios);
+
+        let id_ranked: HashMap<i32, usize> = (0_i32..).zip(OUT_OF_ORDER_IDS).collect();
+        let id_ranked_ratios = ratios_under(&id_ranked, 4);
+        let quarters_with_another_predecessor: Vec<usize> = (0..4)
+            .filter(|&quarter| {
+                let calendar_predecessor = OUT_OF_ORDER_IDS[(quarter + 3) % 4];
+                let id_predecessor = (OUT_OF_ORDER_IDS[quarter] + 3) % 4;
+                calendar_predecessor != id_predecessor
+            })
+            .collect();
+        assert!(quarters_with_another_predecessor.len() >= 2);
+        for quarter in quarters_with_another_predecessor {
+            assert_ne!(
+                id_ranked_ratios[quarter], calendar_ratios[quarter],
+                "quarter {quarter} must tell the two rankings apart"
+            );
+        }
     }
 }

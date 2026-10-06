@@ -28,6 +28,9 @@ use super::fitting::solve_linear_system;
 ///
 /// Returns `rho[m] = [1.0, ρ_m(1), …, ρ_m(k)]` per season, or `None` when the
 /// closure's `n = n_seasons * k` linear system is singular.
+///
+/// Season indices are positions in the season cycle: index `(m + n − 1) % n` is
+/// season `m`'s predecessor.
 #[must_use]
 pub fn implied_periodic_acf(
     psi_by_season: &[Vec<f64>],

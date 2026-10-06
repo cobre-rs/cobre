@@ -592,6 +592,17 @@ impl SeasonCycles {
         })
     }
 
+    /// Where `season_id` sits: `(level, index)`, with levels counted finest
+    /// first and `index` the season's place in its level's calendar order.
+    /// `None` when `season_id` belongs to no level.
+    #[must_use]
+    pub fn position(&self, season_id: usize) -> Option<(usize, usize)> {
+        self.groups.iter().enumerate().find_map(|(level, group)| {
+            let index = group.iter().position(|&id| id == season_id)?;
+            Some((level, index))
+        })
+    }
+
     /// The two lowest ids among the seasons of one level that cover the first
     /// shared calendar day, scanning the levels finest first and the year from
     /// January 1. `None` when no two seasons of a level share a day.
@@ -1136,6 +1147,35 @@ mod tests {
             assert_eq!(cycles.overlapping_pair(), None);
             assert_eq!(cycles.predecessor(99), None);
         }
+    }
+
+    #[test]
+    fn season_cycles_report_calendar_positions() {
+        let ring = SeasonCycles::new(&custom_map(vec![
+            custom_season(0, (1, 1), (1, 31)),
+            custom_season(1, (2, 1), (2, 28)),
+            custom_season(2, (3, 1), (3, 31)),
+            custom_season(12, (4, 1), (6, 30)),
+            custom_season(13, (7, 1), (9, 30)),
+        ]));
+        for (index, season_id) in [0, 1, 2, 12, 13].into_iter().enumerate() {
+            assert_eq!(
+                ring.position(season_id),
+                Some((0, index)),
+                "season {season_id}"
+            );
+        }
+        assert_eq!(ring.position(3), None);
+
+        let layered = SeasonCycles::new(&d30_shaped_season_map());
+        for (season_id, position) in [(0, (0, 0)), (14, (1, 0)), (15, (1, 1)), (12, (1, 2))] {
+            assert_eq!(
+                layered.position(season_id),
+                Some(position),
+                "season {season_id}"
+            );
+        }
+        assert_eq!(layered.position(99), None);
     }
 
     #[test]

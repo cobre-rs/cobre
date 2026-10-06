@@ -15,6 +15,7 @@ use cobre_core::{
 };
 
 use super::ar_coefficients::{ArCoefficientEstimate, SeasonLookups, build_season_lookups};
+use super::cycle_positions::CyclePositions;
 use super::seasonal_stats::{SeasonalStats, find_season_for_date};
 use crate::StochasticError;
 
@@ -67,6 +68,10 @@ const MIN_CORRELATION_PAIRS: usize = 30;
 /// all entities in canonical `hydro_ids` order. The function does **not** enforce
 /// positive-semidefiniteness — the downstream spectral decomposition handles
 /// rank-deficient and non-PD matrices.
+///
+/// On a single-resolution `season_map`, a season's lags are the seasons before
+/// it in calendar order, whatever their ids; profile names and the schedule
+/// carry the map's own season ids.
 ///
 /// # Parameters
 ///
@@ -147,6 +152,59 @@ pub fn estimate_correlation_with_season_map(
         });
     }
 
+    let residual_correlations = match CyclePositions::new(season_map) {
+        None => residual_correlations_in_cycle_order(
+            observations,
+            ar_estimates,
+            seasonal_stats,
+            stages,
+            hydro_ids,
+            season_map,
+            None,
+        ),
+        Some(cycle_positions) => {
+            let season_map =
+                season_map.map(|season_map| cycle_positions.relabel_season_map(season_map));
+            let in_positions = residual_correlations_in_cycle_order(
+                observations,
+                &cycle_positions.estimates_to_positions(ar_estimates),
+                seasonal_stats,
+                &cycle_positions.relabel_stages(stages),
+                hydro_ids,
+                season_map.as_ref(),
+                Some(cycle_positions.raw_ids()),
+            );
+            ResidualCorrelations {
+                seasonal_matrices: cycle_positions.seasons_to_raw(in_positions.seasonal_matrices),
+                ..in_positions
+            }
+        }
+    };
+
+    Ok(assemble_seasonal_correlation_model(
+        hydro_ids,
+        &residual_correlations.pooled_matrix,
+        &residual_correlations.seasonal_matrices,
+        stages,
+        residual_correlations.n_seasons,
+    ))
+}
+
+struct ResidualCorrelations {
+    pooled_matrix: Vec<f64>,
+    seasonal_matrices: HashMap<usize, Vec<f64>>,
+    n_seasons: usize,
+}
+
+fn residual_correlations_in_cycle_order(
+    observations: &[(EntityId, NaiveDate, f64)],
+    ar_estimates: &[ArCoefficientEstimate],
+    seasonal_stats: &[SeasonalStats],
+    stages: &[Stage],
+    hydro_ids: &[EntityId],
+    season_map: Option<&SeasonMap>,
+    season_labels: Option<&[usize]>,
+) -> ResidualCorrelations {
     let lookups = build_season_lookups(observations, seasonal_stats, stages, season_map);
 
     let ar_lookup: HashMap<(EntityId, usize), &ArCoefficientEstimate> = ar_estimates
@@ -156,19 +214,23 @@ pub fn estimate_correlation_with_season_map(
 
     let per_season_residuals = compute_hydro_residuals(&lookups, &ar_lookup, hydro_ids, season_map);
 
-    warn_degenerate_hydros(&lookups, hydro_ids, &per_season_residuals);
+    let identity_labels: Vec<usize> = (0..lookups.n_seasons).collect();
+    warn_degenerate_hydros(
+        &lookups,
+        hydro_ids,
+        &per_season_residuals,
+        season_labels.unwrap_or(&identity_labels),
+    );
 
     let pooled_residuals = flatten_residuals(&per_season_residuals);
     let pooled_matrix = compute_pearson_correlation_matrix(&pooled_residuals);
     let seasonal_matrices = compute_seasonal_matrices(&per_season_residuals, lookups.n_seasons);
 
-    Ok(assemble_seasonal_correlation_model(
-        hydro_ids,
-        &pooled_matrix,
-        &seasonal_matrices,
-        stages,
-        lookups.n_seasons,
-    ))
+    ResidualCorrelations {
+        pooled_matrix,
+        seasonal_matrices,
+        n_seasons: lookups.n_seasons,
+    }
 }
 
 /// Compute standardized AR innovation residuals (see
@@ -282,11 +344,13 @@ fn flatten_residuals(
 
 /// Emit diagnostic warnings for statistically degenerate hydros. Informational
 /// only — no hydros are excluded; the spectral decomposition handles near-zero
-/// eigenvalues.
+/// eigenvalues. Scans season indices `0..season_labels.len()` and names index
+/// `s` as `season_labels[s]`.
 fn warn_degenerate_hydros(
     lookups: &SeasonLookups<'_>,
     hydro_ids: &[EntityId],
     per_season_residuals: &[HashMap<usize, Vec<(NaiveDate, f64)>>],
+    season_labels: &[usize],
 ) {
     for (hidx, &hydro_id) in hydro_ids.iter().enumerate() {
         let Some(all_obs) = lookups.entity_obs.get(&hydro_id) else {
@@ -300,7 +364,7 @@ fn warn_degenerate_hydros(
             }
         }
 
-        for season_id in 0..lookups.n_seasons {
+        for (season_id, &season_label) in season_labels.iter().enumerate() {
             let Some(vals) = obs_by_season.get(&season_id) else {
                 continue;
             };
@@ -313,7 +377,7 @@ fn warn_degenerate_hydros(
             if neg_frac > 0.5 {
                 tracing::warn!(
                     hydro_id = hydro_id.0,
-                    season = season_id,
+                    season = season_label,
                     negative_fraction = neg_frac,
                     "hydro has majority negative observations in season \
                      (included in correlation; spectral decomposition handles this)"
@@ -324,7 +388,7 @@ fn warn_degenerate_hydros(
             if vals.iter().all(|&v| (v - first).abs() < f64::EPSILON) {
                 tracing::warn!(
                     hydro_id = hydro_id.0,
-                    season = season_id,
+                    season = season_label,
                     value = first,
                     "hydro has constant series in season \
                      (included in correlation; near-zero eigenvalue expected)"
@@ -349,7 +413,7 @@ fn warn_degenerate_hydros(
                 if r_std < 1e-8 {
                     tracing::warn!(
                         hydro_id = hydro_id.0,
-                        season = season_id,
+                        season = season_label,
                         residual_std = r_std,
                         "hydro has near-zero residual variance in season \
                          (included in correlation; near-zero eigenvalue expected)"
@@ -615,10 +679,23 @@ fn assemble_seasonal_correlation_model(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
 
-    use chrono::NaiveDate;
+    use chrono::{Datelike, NaiveDate};
+    use cobre_core::scenario::CorrelationModel;
+    use cobre_core::{EntityId, SeasonMap};
+    use tracing::field::{Field, Visit};
+    use tracing::{Event, Level, Metadata, Subscriber, span};
 
-    use super::compute_seasonal_pearson_matrix;
+    use super::{compute_seasonal_pearson_matrix, estimate_correlation_with_season_map};
+    use crate::par::fitting::cycle_positions::twin_fixtures::{
+        TwinMaps, calendar_history, calendar_stages, permuted_quarterly_twins, sparse_ring_twins,
+    };
+    use crate::par::fitting::{
+        ArEstimationConfig, estimate_ar_coefficients_with_selection,
+        estimate_seasonal_stats_with_season_map,
+    };
+    use crate::test_support::sparse_ring_season_map;
 
     /// Pre-change oracle: the `HashMap`-intersection + per-pair-sort algorithm
     /// `compute_seasonal_pearson_matrix`'s date-sorted merge-walk replaces.
@@ -762,5 +839,174 @@ mod tests {
 
         assert_eq!(min_pairs, oracle_min_pairs);
         assert_eq!(matrix, oracle_matrix);
+    }
+
+    const HYDROS: [EntityId; 2] = [EntityId(1), EntityId(2)];
+
+    fn correlation_of_calendar_history(
+        season_map: &SeasonMap,
+        calendar_ids: &[usize],
+    ) -> CorrelationModel {
+        let stages = calendar_stages(season_map, calendar_ids);
+        let history = calendar_history(season_map, calendar_ids, &HYDROS, 30);
+        let stats =
+            estimate_seasonal_stats_with_season_map(&history, &stages, &HYDROS, Some(season_map))
+                .unwrap();
+        let (estimates, _) = estimate_ar_coefficients_with_selection(
+            &history,
+            &stats,
+            &stages,
+            &HYDROS,
+            &ArEstimationConfig {
+                max_order: 2,
+                max_coeff_magnitude: None,
+                season_map: Some(season_map),
+                use_annual_component: false,
+            },
+        )
+        .unwrap();
+        estimate_correlation_with_season_map(
+            &history,
+            &estimates,
+            &stats,
+            &stages,
+            &HYDROS,
+            Some(season_map),
+        )
+        .unwrap()
+    }
+
+    fn scheduled_matrix_bits(model: &CorrelationModel, stage_id: i32) -> Vec<Vec<u64>> {
+        let profile = model
+            .schedule
+            .iter()
+            .find(|entry| entry.stage_id == stage_id)
+            .map_or("default", |entry| entry.profile_name.as_str());
+        model.profiles[profile].groups[0]
+            .matrix
+            .iter()
+            .map(|row| row.iter().map(|v| v.to_bits()).collect())
+            .collect()
+    }
+
+    fn assert_correlation_equals_twin_correlation(twins: &TwinMaps) -> CorrelationModel {
+        let model = correlation_of_calendar_history(&twins.map, &twins.map_ids());
+        let twin_model = correlation_of_calendar_history(&twins.twin, &twins.twin_ids());
+        assert!(
+            !twin_model.schedule.is_empty(),
+            "the twin must schedule at least one seasonal profile"
+        );
+        for stage_id in (0_i32..).take(twins.ids.len()) {
+            assert_eq!(
+                scheduled_matrix_bits(&model, stage_id),
+                scheduled_matrix_bits(&twin_model, stage_id),
+                "stage {stage_id}"
+            );
+        }
+        model
+    }
+
+    #[test]
+    fn seasonal_correlation_on_a_sparse_custom_map_equals_the_one_on_its_dense_twin() {
+        let model = assert_correlation_equals_twin_correlation(&sparse_ring_twins());
+        for profile in ["season_12", "season_13"] {
+            assert!(
+                model.profiles.contains_key(profile),
+                "missing {profile} in {:?}",
+                model.profiles.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn seasonal_correlation_on_an_out_of_calendar_order_map_equals_the_one_on_its_calendar_ordered_twin()
+     {
+        assert_correlation_equals_twin_correlation(&permuted_quarterly_twins());
+    }
+
+    /// The `season` field of every warning event.
+    #[derive(Clone, Default)]
+    struct WarnedSeasons(Arc<Mutex<Vec<u64>>>);
+
+    impl Subscriber for WarnedSeasons {
+        fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+            *metadata.level() <= Level::WARN
+        }
+
+        fn new_span(&self, _attrs: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            struct SeasonField(Option<u64>);
+            impl Visit for SeasonField {
+                fn record_u64(&mut self, field: &Field, value: u64) {
+                    if field.name() == "season" {
+                        self.0 = Some(value);
+                    }
+                }
+
+                fn record_debug(&mut self, _field: &Field, _value: &dyn std::fmt::Debug) {}
+            }
+            if *event.metadata().level() == Level::WARN {
+                let mut season = SeasonField(None);
+                event.record(&mut season);
+                if let Some(season) = season.0 {
+                    self.0.lock().unwrap().push(season);
+                }
+            }
+        }
+
+        fn enter(&self, _span: &span::Id) {}
+
+        fn exit(&self, _span: &span::Id) {}
+    }
+
+    #[test]
+    fn degenerate_season_warnings_name_the_raw_season_id_on_a_relabeled_map() {
+        let season_map = sparse_ring_season_map();
+        let stages = calendar_stages(&season_map, &[0, 1, 2, 12, 13]);
+        let hydro_ids = [EntityId(1)];
+        let observations: Vec<(EntityId, NaiveDate, f64)> = stages
+            .iter()
+            .flat_map(|stage| {
+                let values = if stage.season_id == Some(12) {
+                    [50.0, 50.0]
+                } else {
+                    [100.0, 110.0]
+                };
+                let mid_season = stage.start_date.with_day(15).unwrap();
+                [
+                    (hydro_ids[0], stage.start_date, values[0]),
+                    (hydro_ids[0], mid_season, values[1]),
+                ]
+            })
+            .collect();
+        let stats = estimate_seasonal_stats_with_season_map(
+            &observations,
+            &stages,
+            &hydro_ids,
+            Some(&season_map),
+        )
+        .unwrap();
+
+        let warned = WarnedSeasons::default();
+        tracing::subscriber::with_default(warned.clone(), || {
+            estimate_correlation_with_season_map(
+                &observations,
+                &[],
+                &stats,
+                &stages,
+                &hydro_ids,
+                Some(&season_map),
+            )
+            .unwrap();
+        });
+
+        assert_eq!(*warned.0.lock().unwrap(), vec![12]);
     }
 }

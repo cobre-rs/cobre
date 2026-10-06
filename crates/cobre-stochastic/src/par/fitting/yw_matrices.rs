@@ -11,6 +11,9 @@
 /// Unlike a stationary autocorrelation, the reference season fixes the "current"
 /// observations and stats while the lag selects the "lagged" ones.
 ///
+/// Season indices are positions in the season cycle: index `(m + n − 1) % n` is
+/// season `m`'s predecessor.
+///
 /// # Parameters
 ///
 /// - `ref_season` -- 0-based season index of the reference month `p`.

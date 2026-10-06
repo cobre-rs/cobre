@@ -4,11 +4,14 @@ use chrono::NaiveDate;
 use cobre_core::{EntityId, SeasonMap, Stage};
 
 use super::{
-    ArEstimationConfig, ContributionReduction, PacfReductionParams, ReductionReason,
-    estimate_ar_coefficients_with_selection, estimate_ar_with_pacf_annual, has_negative_phi1,
-    iterative_pacf_reduction, validate_order_contributions,
+    ArEstimationConfig, ContributionReduction, EstimationReport, PacfReductionParams,
+    ReductionReason, estimate_ar_coefficients_with_selection, estimate_ar_with_pacf_annual,
+    has_negative_phi1, iterative_pacf_reduction, validate_order_contributions,
 };
 use crate::StochasticError;
+use crate::par::fitting::cycle_positions::twin_fixtures::{
+    TwinMaps, calendar_history, calendar_stages, permuted_quarterly_twins, sparse_ring_twins,
+};
 use crate::par::fitting::{ArCoefficientEstimate, SeasonalStats};
 
 /// Test-only: magnitude bound + contribution-based order validation over all
@@ -1599,6 +1602,146 @@ fn annual_ar_fit_is_thread_count_and_declaration_order_invariant() {
             &format!("shuffled hydro_ids order, {n}-thread pool"),
             &baseline_sorted,
             &shuffled_out,
+        );
+    }
+}
+
+// ── Season-cycle relabeling ──────────────────────────────────────────────────
+
+fn fit_calendar_history(
+    season_map: &SeasonMap,
+    calendar_ids: &[usize],
+) -> (Vec<ArCoefficientEstimate>, EstimationReport) {
+    use crate::par::fitting::estimate_seasonal_stats_with_season_map;
+    let hydro_ids = [EntityId(1)];
+    let stages = calendar_stages(season_map, calendar_ids);
+    let history = calendar_history(season_map, calendar_ids, &hydro_ids, 30);
+    let stats =
+        estimate_seasonal_stats_with_season_map(&history, &stages, &hydro_ids, Some(season_map))
+            .unwrap();
+    estimate_ar_coefficients_with_selection(
+        &history,
+        &stats,
+        &stages,
+        &hydro_ids,
+        &ArEstimationConfig {
+            max_order: 2,
+            max_coeff_magnitude: None,
+            season_map: Some(season_map),
+            use_annual_component: false,
+        },
+    )
+    .unwrap()
+}
+
+fn coefficient_bits(coefficients: &[f64]) -> Vec<u64> {
+    coefficients.iter().map(|c| c.to_bits()).collect()
+}
+
+fn season_coefficient_bits(estimates: &[ArCoefficientEstimate], season_id: usize) -> Vec<u64> {
+    let estimate = estimates
+        .iter()
+        .find(|e| e.season_id == season_id)
+        .unwrap_or_else(|| panic!("no estimate for season {season_id}"));
+    coefficient_bits(&estimate.coefficients)
+}
+
+fn assert_fit_equals_twin_fit(twins: &TwinMaps) {
+    let (estimates, report) = fit_calendar_history(&twins.map, &twins.map_ids());
+    let (twin_estimates, twin_report) = fit_calendar_history(&twins.twin, &twins.twin_ids());
+    assert!(
+        twin_estimates.iter().any(|e| e.coefficients.len() == 2),
+        "the twin fit must select order 2 somewhere"
+    );
+    let entry = &report.entries[&EntityId(1)];
+    let twin_entry = &twin_report.entries[&EntityId(1)];
+
+    for &(id, twin_id) in &twins.ids {
+        assert_eq!(
+            season_coefficient_bits(&estimates, id),
+            season_coefficient_bits(&twin_estimates, twin_id),
+            "estimate of season {id} vs twin season {twin_id}"
+        );
+        assert_eq!(
+            coefficient_bits(&entry.coefficients[id]),
+            coefficient_bits(&twin_entry.coefficients[twin_id]),
+            "report coefficients of season {id} vs twin season {twin_id}"
+        );
+    }
+    assert_eq!(estimates.len(), twin_estimates.len());
+    assert_eq!(entry.selected_order, twin_entry.selected_order);
+    let largest_id = twins.map_ids().into_iter().max().unwrap();
+    assert_eq!(entry.coefficients.len(), largest_id + 1);
+    for (raw, coefficients) in entry.coefficients.iter().enumerate() {
+        if twins.twin_of(raw).is_none() {
+            assert!(coefficients.is_empty(), "index {raw} is not a season id");
+        }
+    }
+
+    let reductions: Vec<_> = entry
+        .contribution_reductions
+        .iter()
+        .map(|r| {
+            (
+                twins.twin_of(r.season_id),
+                r.original_order,
+                r.reduced_order,
+                r.reason,
+                coefficient_bits(&r.contributions),
+            )
+        })
+        .collect();
+    let twin_reductions: Vec<_> = twin_entry
+        .contribution_reductions
+        .iter()
+        .map(|r| {
+            (
+                Some(r.season_id),
+                r.original_order,
+                r.reduced_order,
+                r.reason,
+                coefficient_bits(&r.contributions),
+            )
+        })
+        .collect();
+    assert_eq!(reductions, twin_reductions);
+}
+
+#[test]
+fn ar_fit_on_a_sparse_custom_map_equals_the_fit_on_its_dense_twin() {
+    assert_fit_equals_twin_fit(&sparse_ring_twins());
+}
+
+#[test]
+fn ar_fit_on_an_out_of_calendar_order_map_equals_the_fit_on_its_calendar_ordered_twin() {
+    assert_fit_equals_twin_fit(&permuted_quarterly_twins());
+}
+
+/// characterization: the fit indexed seasons by raw id before relabeling
+/// existed, and raw id equals calendar position on this map.
+#[test]
+fn fit_on_a_dense_calendar_ordered_custom_map_is_unchanged() {
+    const FIT_BITS: [&[u64]; 4] = [
+        &[4_605_120_269_902_754_618],
+        &[4_596_444_960_825_664_260, 4_603_467_181_103_770_236],
+        &[4_600_539_182_485_145_474, 4_602_924_096_865_316_619],
+        &[4_604_971_852_568_177_276],
+    ];
+    let season_map = crate::test_support::quarterly_season_map();
+    let (estimates, report) = fit_calendar_history(&season_map, &[0, 1, 2, 3]);
+    let entry = &report.entries[&EntityId(1)];
+    assert_eq!(estimates.len(), FIT_BITS.len());
+    assert_eq!(entry.coefficients.len(), FIT_BITS.len());
+    for (season_id, &bits) in FIT_BITS.iter().enumerate() {
+        assert_eq!(
+            season_coefficient_bits(&estimates, season_id),
+            bits,
+            "season {season_id}"
+        );
+        assert_eq!(
+            coefficient_bits(&entry.coefficients[season_id]),
+            bits,
+            "report season {season_id}"
         );
     }
 }

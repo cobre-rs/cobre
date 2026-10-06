@@ -19,6 +19,7 @@ use crate::StochasticError;
 use crate::par::contribution::{
     check_negative_contributions, compute_contributions, find_max_valid_order, has_negative_phi1,
 };
+use crate::par::fitting::cycle_positions::CyclePositions;
 use crate::par::fitting::estimate_ar_coefficients_with_season_map;
 use crate::par::fitting::{
     AnnualSeasonalStats, ArCoefficientEstimate, SeasonalStats, conditional_facp_partitioned,
@@ -191,10 +192,40 @@ pub struct ArEstimationConfig<'a> {
 /// Estimate AR coefficients, dispatching to the classical or PAR-A path on
 /// `cfg.use_annual_component`.
 ///
+/// On a single-resolution `cfg.season_map`, a season's lags are the seasons
+/// before it in calendar order, whatever their ids; the returned estimates and
+/// report carry the map's own season ids.
+///
 /// # Errors
 ///
 /// Propagates [`StochasticError`] from the underlying fitting primitives.
 pub fn estimate_ar_coefficients_with_selection(
+    observations: &[(EntityId, NaiveDate, f64)],
+    seasonal_stats: &[SeasonalStats],
+    stages: &[Stage],
+    hydro_ids: &[EntityId],
+    cfg: &ArEstimationConfig<'_>,
+) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
+    let Some(cycle_positions) = CyclePositions::new(cfg.season_map) else {
+        return estimate_ar_in_cycle_order(observations, seasonal_stats, stages, hydro_ids, cfg);
+    };
+    let stages = cycle_positions.relabel_stages(stages);
+    let season_map = cfg
+        .season_map
+        .map(|season_map| cycle_positions.relabel_season_map(season_map));
+    let cfg = ArEstimationConfig {
+        season_map: season_map.as_ref(),
+        ..*cfg
+    };
+    let (estimates, report) =
+        estimate_ar_in_cycle_order(observations, seasonal_stats, &stages, hydro_ids, &cfg)?;
+    Ok((
+        cycle_positions.estimates_to_raw(estimates),
+        cycle_positions.report_to_raw(report),
+    ))
+}
+
+fn estimate_ar_in_cycle_order(
     observations: &[(EntityId, NaiveDate, f64)],
     seasonal_stats: &[SeasonalStats],
     stages: &[Stage],

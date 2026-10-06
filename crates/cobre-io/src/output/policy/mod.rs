@@ -44,6 +44,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::super::error::OutputError;
+    use super::super::software::policy_checkpoint_remedy;
     use super::checkpoint::finish_interrupted_swap;
     use super::*;
 
@@ -1469,7 +1470,7 @@ mod tests {
 
     /// The older-version mirror of the test above: a manifest predating
     /// [`FORMAT_VERSION`] is rejected on the same version marker BEFORE any
-    /// payload is parsed, naming both versions and instructing a re-export.
+    /// payload is parsed, naming both versions and ending with the shared remedy.
     #[test]
     fn read_policy_checkpoint_rejects_older_manifest_version() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1495,8 +1496,8 @@ mod tests {
             msg.contains("format_version")
                 && msg.contains(&(FORMAT_VERSION - 1).to_string())
                 && msg.contains(&FORMAT_VERSION.to_string())
-                && msg.contains("re-export"),
-            "must name both versions and instruct a re-export, not surface the corrupt payload: {msg}"
+                && msg.ends_with(&policy_checkpoint_remedy()),
+            "must name both versions and end with the shared remedy, not surface the corrupt payload: {msg}"
         );
     }
 

@@ -1032,7 +1032,7 @@ fn non_boundary_resolved_scalar_parameter_validates() {
 }
 
 /// A checkpoint written by another cobre version is refused at warm-start
-/// load, naming both versions.
+/// load, naming both versions and ending with the re-run remedy.
 #[test]
 fn warm_start_refuses_a_policy_written_by_another_version() {
     let dir = TempDir::new().unwrap();
@@ -1056,7 +1056,14 @@ fn warm_start_refuses_a_policy_written_by_another_version() {
         .stderr(predicate::str::contains(format!(
             "this is cobre {}",
             env!("CARGO_PKG_VERSION")
-        )));
+        )))
+        .stderr(predicate::str::contains(
+            "re-run the program that produced it with cobre",
+        ))
+        .stderr(predicate::str::contains(
+            "for a converted boundary policy, convert it again",
+        ))
+        .stderr(predicate::str::contains("re-export").not());
 }
 
 /// A checkpoint written by another program at this build's exact version is

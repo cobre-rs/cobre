@@ -14,6 +14,7 @@
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
 
 use super::super::error::OutputError;
+use super::super::software::policy_checkpoint_remedy;
 use super::records::{
     CheckpointManifest, ENTITY_SLOT_DATE_SENTINEL, EntitySlot, FORMAT_VERSION, GraphManifest,
     HydroSeasonOrders, ManifestEdge, ManifestNode, OwnedPolicyBasisRecord, OwnedPolicyCutRecord,
@@ -1525,7 +1526,8 @@ pub fn deserialize_checkpoint_manifest(buf: &[u8]) -> Result<CheckpointManifest,
             ctx,
             format!(
                 "unsupported checkpoint manifest format_version {format_version}; expected \
-                 {FORMAT_VERSION}; re-export it with a current Cobre"
+                 {FORMAT_VERSION}; {remedy}",
+                remedy = policy_checkpoint_remedy()
             ),
         ));
     }

@@ -234,8 +234,8 @@ fn build_pre_self_describing_stage_cuts_bin(
 
 /// A boundary checkpoint whose `cuts/<pool>.bin` predates the self-describing
 /// per-pool facts (`cost_scale_factor`/`node_id`/`graph_stage_id`) rejects with
-/// a message naming the checkpoint path and "re-export" — never a silent
-/// default, and never a fall-through to the generic not-found/state_dimension
+/// a message naming the checkpoint path and ending with the shared remedy —
+/// never a silent default, and never a fall-through to the generic not-found/state_dimension
 /// messages.
 #[test]
 fn boundary_load_rejects_pre_self_describing_checkpoint() {
@@ -294,8 +294,8 @@ fn boundary_load_rejects_pre_self_describing_checkpoint() {
     );
     let msg = err.to_string();
     assert!(
-        msg.contains("re-export"),
-        "message must advise re-export: {msg}"
+        msg.ends_with(&cobre_io::policy_checkpoint_remedy()),
+        "message must end with the shared remedy: {msg}"
     );
     assert!(
         msg.contains(&tmp.path().display().to_string()),
@@ -364,5 +364,9 @@ fn boundary_load_rejects_pre_format_version_checkpoint() {
     assert!(
         msg.contains("format_version"),
         "message must name the version field: {msg}"
+    );
+    assert!(
+        msg.ends_with(&cobre_io::policy_checkpoint_remedy()),
+        "message must end with the shared remedy: {msg}"
     );
 }

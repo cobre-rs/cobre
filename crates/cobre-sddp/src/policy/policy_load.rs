@@ -3,7 +3,7 @@
 //! [`validate_policy_load`] is the single entry point for compatibility
 //! validation; every load path (full-FCF warm-start/resume/simulation-only and
 //! boundary-cut injection) routes through it, which first refuses a policy
-//! written by another Cobre version, and returns a [`PolicyLoadProof`]
+//! not written by this build, and returns a [`PolicyLoadProof`]
 //! kind-typed to [`FullFcf`] or [`BoundaryInjection`] — the only way to obtain
 //! one, so [`FutureCostFunction::new_with_warm_start`],
 //! [`FutureCostFunction::from_deserialized`], and [`inject_boundary_cuts`]
@@ -33,6 +33,7 @@ use cobre_io::SeasonManifest;
 use cobre_io::StageCutsReadResult;
 use cobre_io::decode_slot_date;
 use cobre_io::encode_slot_date;
+use cobre_io::policy_checkpoint_remedy;
 use cobre_io::read_policy_checkpoint;
 use cobre_solver::{Basis, BasisStatus};
 
@@ -146,11 +147,11 @@ pub fn checkpoint_terminal_cost_scale_factor(
         .last()
         .and_then(|stage| stage.cost_scale_factor)
         .ok_or_else(|| {
-            SddpError::Validation(
+            SddpError::Validation(format!(
                 "policy checkpoint predates self-describing cuts (its resolved \
-                 cuts/<pool>.bin carries no cost_scale_factor); re-export it with a current Cobre"
-                    .to_string(),
-            )
+                 cuts/<pool>.bin carries no cost_scale_factor); {remedy}",
+                remedy = policy_checkpoint_remedy()
+            ))
         })
 }
 
@@ -807,13 +808,13 @@ pub fn resolve_boundary_state_requirements(
 
 /// A resolved boundary pool whose `cuts/<pool>.bin` predates the
 /// self-describing per-pool facts (`cost_scale_factor` reads `None`): no
-/// silent default, no `metadata.json` fallback — the checkpoint must be
-/// re-exported.
+/// silent default, no `metadata.json` fallback.
 fn boundary_predates_self_describing_cuts(boundary_path: &Path) -> SddpError {
     SddpError::Validation(format!(
         "boundary policy checkpoint at {} predates self-describing cuts (its resolved \
-         cuts/<pool>.bin carries no cost_scale_factor); re-export it with a current Cobre",
-        boundary_path.display()
+         cuts/<pool>.bin carries no cost_scale_factor); {remedy}",
+        boundary_path.display(),
+        remedy = policy_checkpoint_remedy()
     ))
 }
 
@@ -897,13 +898,13 @@ impl<'a> BoundaryLoadRequest<'a> {
 
 /// A checkpoint whose every pool carries
 /// [`STAGE_CUTS_PRICED_STATE_DATE_SENTINEL`] predates recorded priced dates:
-/// date selection has nothing to compare against, so the checkpoint must be
-/// re-exported.
+/// date selection has nothing to compare against.
 fn boundary_checkpoint_undated(boundary_path: &Path) -> SddpError {
     SddpError::Validation(format!(
         "boundary policy checkpoint at {} carries no priced_state_date on any pool (a pool \
-         written before priced dates were recorded); re-export it with a current Cobre",
-        boundary_path.display()
+         written before priced dates were recorded); {remedy}",
+        boundary_path.display(),
+        remedy = policy_checkpoint_remedy()
     ))
 }
 
@@ -1001,8 +1002,9 @@ fn check_season_compatibility(
     if source.cycle_code == SEASON_CYCLE_CODE_ABSENT {
         return Err(SddpError::Validation(format!(
             "boundary policy checkpoint at {} predates the season descriptor (its manifest \
-             carries no season cycle or PAR orders); re-export it with a current Cobre",
-            boundary_path.display()
+             carries no season cycle or PAR orders); {remedy}",
+            boundary_path.display(),
+            remedy = policy_checkpoint_remedy()
         )));
     }
 
@@ -1199,14 +1201,13 @@ fn check_topology_subset(
 /// Otherwise returns [`SddpError::Validation`] if:
 /// - The checkpoint cannot be read
 /// - Every pool in the checkpoint carries
-///   [`STAGE_CUTS_PRICED_STATE_DATE_SENTINEL`] (a pre-dated checkpoint);
-///   re-export with a current Cobre
+///   [`STAGE_CUTS_PRICED_STATE_DATE_SENTINEL`] (a pre-dated checkpoint)
 /// - More than one pool is priced at the boundary date (a branching source's
 ///   terminal date tie); names the boundary date and every matching pool id
 /// - No pool is priced at the boundary date; names the boundary date and
 ///   every pool's own `(pool id, priced date)`
 /// - The resolved pool's `.bin` predates self-describing cuts
-///   (`cost_scale_factor` reads `None`); re-export with a current Cobre
+///   (`cost_scale_factor` reads `None`)
 /// - The resolved pool is shared by more than one node (`node_id` reads the
 ///   sentinel); a boundary source must be a single-node terminal pool
 /// - A cut references inflow-lag state deeper than `effective_inflow_lag_depth`
@@ -1588,16 +1589,16 @@ mod tests {
         EntitySlot, GraphManifest, HydroSeasonOrders, ProducerBlock, SEASON_CYCLE_CODE_MONTHLY,
         SEASON_CYCLE_CODE_WEEKLY, SOFTWARE_NAME, SOFTWARE_VERSION,
         STAGE_CUTS_PRICED_STATE_DATE_SENTINEL, SeasonManifest, SoftwareIdentity, StageCutsPayload,
-        decode_slot_date, encode_slot_date, read_policy_checkpoint,
+        decode_slot_date, encode_slot_date, policy_checkpoint_remedy, read_policy_checkpoint,
     };
 
     use super::{
         BoundaryInjection, BoundaryLoadRequest, BoundaryReconciliationReport,
         BoundaryStateRequirements, CutPool, FullFcf, NodeId, NodePos, PolicyStageManifest,
         StoredBasisMisfit, TypedVec, UnusedStoredBases, ValidatedBoundaryCuts,
-        boundary_policy_required_lag_depth, check_season_compatibility,
-        compare_manifest_slot_identity, inject_boundary_cuts, load_boundary_cuts,
-        validate_policy_load,
+        boundary_policy_required_lag_depth, boundary_predates_self_describing_cuts,
+        check_season_compatibility, compare_manifest_slot_identity, inject_boundary_cuts,
+        load_boundary_cuts, validate_policy_load,
     };
     use crate::SddpError;
     use crate::policy::orchestration::{StudyHydroSeasonOrders, StudySeasonManifest};
@@ -2105,7 +2106,7 @@ mod tests {
             .to_string();
 
         assert!(msg.contains("predates self-describing cuts"), "{msg}");
-        assert!(msg.contains("re-export it with a current Cobre"), "{msg}");
+        assert!(msg.ends_with(&policy_checkpoint_remedy()), "{msg}");
     }
 
     // ── load_boundary_cuts tests ──────────────────────────────────────────────
@@ -2596,11 +2597,25 @@ mod tests {
         );
     }
 
+    /// A resolved pool whose `cost_scale_factor` reads `None` is refused with a
+    /// message ending in the shared remedy. No checkpoint fixture reaches this
+    /// refusal: a pool written before `cost_scale_factor` was recorded also
+    /// carries no priced date, and the undated-pool refusal fires first.
+    #[test]
+    fn boundary_pool_without_a_cost_scale_rejects_with_the_rerun_remedy() {
+        let msg =
+            boundary_predates_self_describing_cuts(std::path::Path::new("boundary")).to_string();
+        assert!(
+            msg.ends_with(&policy_checkpoint_remedy()),
+            "must end with the shared remedy: {msg}"
+        );
+    }
+
     /// Given a source whose `season_manifest` is `SeasonManifest::default()`
     /// (a pre-`id:19` checkpoint) and a present study descriptor,
-    /// `load_boundary_cuts` rejects advising re-export.
+    /// `load_boundary_cuts` rejects with a message ending in the shared remedy.
     #[test]
-    fn boundary_load_rejects_absent_source_season_descriptor_with_reexport_hint() {
+    fn boundary_load_rejects_absent_source_season_descriptor_with_the_rerun_remedy() {
         let tmp = tempfile::tempdir().unwrap();
         write_checkpoint_with_manifest(tmp.path(), 1, 1, &[10.0], &[]);
 
@@ -2617,7 +2632,10 @@ mod tests {
         );
 
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("re-export"), "must advise re-export: {msg}");
+        assert!(
+            msg.ends_with(&policy_checkpoint_remedy()),
+            "must end with the shared remedy: {msg}"
+        );
     }
 
     /// Given a study whose descriptor is absent (no `with_study_seasons`
@@ -3262,10 +3280,10 @@ mod tests {
 
     /// Given a checkpoint whose every pool carries
     /// [`STAGE_CUTS_PRICED_STATE_DATE_SENTINEL`] — a pre-dated checkpoint —
-    /// when `load_boundary_cuts` runs, then it rejects with a message
-    /// containing "re-export" and the checkpoint path.
+    /// when `load_boundary_cuts` runs, then it rejects with a message ending in
+    /// the shared remedy and containing the checkpoint path.
     #[test]
-    fn load_boundary_cuts_undated_pools_reject_with_reexport_hint() {
+    fn load_boundary_cuts_undated_pools_reject_with_the_rerun_remedy() {
         let tmp = tempfile::tempdir().unwrap();
         write_pools_with_priced_state_dates(
             tmp.path(),
@@ -3288,7 +3306,10 @@ mod tests {
             "an every-pool-undated checkpoint must reject"
         );
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("re-export"), "must advise re-export: {msg}");
+        assert!(
+            msg.ends_with(&policy_checkpoint_remedy()),
+            "must end with the shared remedy: {msg}"
+        );
         assert!(
             msg.contains(&tmp.path().display().to_string()),
             "must name the checkpoint path: {msg}"

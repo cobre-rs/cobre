@@ -62,7 +62,7 @@ pub use scaling_report::write_scaling_report;
 pub use simulation_writer::{
     SimulationParquetWriter, remove_simulation_outputs, simulation_family_subpaths,
 };
-pub use software::{SOFTWARE_NAME, SOFTWARE_VERSION, SoftwareIdentity};
+pub use software::{SOFTWARE_NAME, SOFTWARE_VERSION, SoftwareIdentity, policy_checkpoint_remedy};
 pub use solver_stats_writer::{SolverStatsRow, write_simulation_solver_stats, write_solver_stats};
 pub use stochastic::{
     FittingReductionEntry, FittingReport, HydroFittingEntry, write_correlation_json,

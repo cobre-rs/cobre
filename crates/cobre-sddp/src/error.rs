@@ -2,7 +2,7 @@
 
 use cobre_comm::CommError;
 use cobre_io::scenarios::estimation::EstimationError;
-use cobre_io::{LoadError, OutputError, SOFTWARE_NAME, SOFTWARE_VERSION};
+use cobre_io::{LoadError, OutputError, SOFTWARE_NAME, SOFTWARE_VERSION, policy_checkpoint_remedy};
 use cobre_solver::SolverError;
 use cobre_stochastic::StochasticError;
 
@@ -102,9 +102,9 @@ pub enum SddpError {
     /// the same software at the same version load.
     #[error(
         "policy was written by {writer}, but this is {SOFTWARE_NAME} {SOFTWARE_VERSION}; a \
-         policy loads only in the software and version that wrote it: retrain it, or re-export \
-         it, with {SOFTWARE_NAME} {SOFTWARE_VERSION}",
-        writer = describe_writer(.policy_software.as_deref(), .policy_version)
+         policy loads only in the software and version that wrote it: {remedy}",
+        writer = describe_writer(.policy_software.as_deref(), .policy_version),
+        remedy = policy_checkpoint_remedy()
     )]
     PolicySoftwareMismatch {
         /// The `software` the checkpoint's manifest records, if any.
@@ -125,9 +125,11 @@ pub enum SddpError {
 }
 
 fn describe_writer(software: Option<&str>, version: &str) -> String {
-    match software {
-        Some(name) => format!("{name} {version}"),
-        None => format!("software that recorded no name, version {version}"),
+    match (software.filter(|name| !name.is_empty()), version) {
+        (Some(name), "") => format!("{name}, which recorded no version"),
+        (Some(name), version) => format!("{name} {version}"),
+        (None, "") => "software that recorded no name or version".to_string(),
+        (None, version) => format!("software that recorded no name, version {version}"),
     }
 }
 
@@ -323,6 +325,53 @@ mod tests {
         };
         let msg = err.to_string();
         assert!(msg.contains("recorded no name, version 0.0.1"), "{msg}");
+    }
+
+    #[test]
+    fn display_policy_software_mismatch_tells_the_user_to_rerun_the_producing_program() {
+        let err = SddpError::PolicySoftwareMismatch {
+            policy_software: Some("another-program".to_string()),
+            policy_version: "0.0.1".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "policy was written by another-program 0.0.1, but this is {SOFTWARE_NAME} \
+                 {SOFTWARE_VERSION}; a policy loads only in the software and version that \
+                 wrote it: re-run the program that produced it with {SOFTWARE_NAME} \
+                 {SOFTWARE_VERSION}; for a converted boundary policy, convert it again"
+            )
+        );
+    }
+
+    #[test]
+    fn display_policy_software_mismatch_names_an_unrecorded_name_or_version() {
+        let cases = [
+            (
+                Some("cobre"),
+                "",
+                "policy was written by cobre, which recorded no version, but this is ",
+            ),
+            (
+                None,
+                "",
+                "policy was written by software that recorded no name or version, but this is ",
+            ),
+            (
+                Some(""),
+                "0.0.1",
+                "policy was written by software that recorded no name, version 0.0.1, but this is ",
+            ),
+        ];
+        for (software, version, expected_prefix) in cases {
+            let msg = SddpError::PolicySoftwareMismatch {
+                policy_software: software.map(str::to_string),
+                policy_version: version.to_string(),
+            }
+            .to_string();
+            assert!(msg.starts_with(expected_prefix), "{msg}");
+            assert!(!msg.contains(" ,") && !msg.contains("by  "), "{msg}");
+        }
     }
 
     #[test]

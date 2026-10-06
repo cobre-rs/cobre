@@ -31,7 +31,8 @@ pub use external::{
     validate_external_library,
 };
 pub use historical::{
-    HistoricalScenarioLibrary, standardize_historical_windows, validate_historical_library,
+    HistoricalScenarioLibrary, HistoricalStructureProof, check_historical_structure,
+    standardize_historical_windows, validate_historical_library,
 };
 pub use tables::{ClassNoiseTables, ForwardNoiseTables, NoiseTable};
 pub use window::discover_historical_windows;

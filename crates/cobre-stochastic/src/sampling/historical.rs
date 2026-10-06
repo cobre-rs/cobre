@@ -231,6 +231,66 @@ impl HistoricalScenarioLibrary {
 }
 
 // ---------------------------------------------------------------------------
+// check_historical_structure
+// ---------------------------------------------------------------------------
+
+/// Unforgeable evidence that [`check_historical_structure`] passed for the
+/// `stages` and `hydro_ids` it carries.
+///
+/// Only [`check_historical_structure`] constructs it.
+/// [`standardize_historical_windows`] requires it and reads exactly the slices
+/// that were checked.
+#[derive(Debug)]
+pub struct HistoricalStructureProof<'a> {
+    stages: &'a [Stage],
+    hydro_ids: &'a [EntityId],
+}
+
+/// Check the structural preconditions of historical standardization.
+///
+/// ## Checks performed
+///
+/// | ID  | Kind    | Description                                                   |
+/// |-----|---------|---------------------------------------------------------------|
+/// | V2.1 | Error  | Every study stage must have `season_id: Some(_)`.             |
+/// | V2.9 | Error  | `hydro_ids.len()` must equal `library.n_hydros()`.            |
+///
+/// # Errors
+///
+/// Returns [`StochasticError::InsufficientData`] with a message prefixed by
+/// the check ID (e.g., `"V2.1: ..."`) for the first failed check.
+pub fn check_historical_structure<'a>(
+    library: &HistoricalScenarioLibrary,
+    hydro_ids: &'a [EntityId],
+    stages: &'a [Stage],
+) -> Result<HistoricalStructureProof<'a>, StochasticError> {
+    for stage in stages {
+        if stage.season_id.is_none() {
+            return Err(StochasticError::InsufficientData {
+                context: format!(
+                    "V2.1: stage {} (index {}) has season_id: None; \
+                     all study stages must have a season_id assigned",
+                    stage.id, stage.index,
+                ),
+            });
+        }
+    }
+
+    if hydro_ids.len() != library.n_hydros() {
+        return Err(StochasticError::InsufficientData {
+            context: format!(
+                "V2.9: hydro_ids slice length ({}) does not match \
+                 library.n_hydros() ({})",
+                hydro_ids.len(),
+                library.n_hydros(),
+            ),
+        });
+    }
+
+    Ok(HistoricalStructureProof { stages, hydro_ids })
+}
+
+// ---------------------------------------------------------------------------
 // standardize_historical_windows
 // ---------------------------------------------------------------------------
 
@@ -250,7 +310,8 @@ impl HistoricalScenarioLibrary {
 ///
 /// # Inputs
 ///
-/// - `hydro_ids` — canonical-order hydro entity IDs (must match `par`)
+/// - `structure` — proof from [`check_historical_structure`]; carries the study
+///   stages and the canonical-order hydro entity IDs (must match `par`)
 /// - `season_map` — observation-date → season mapping, resolved exactly as in
 ///   [`discover_historical_windows`](super::window::discover_historical_windows);
 ///   unmappable observations are skipped.
@@ -266,15 +327,13 @@ impl HistoricalScenarioLibrary {
 ///
 /// Panics in debug builds if dimension mismatches between `library`, `par`,
 /// `stages`, or `stage_lag_transitions` are detected.
-// Rationale: mirrors standardize_external_inflow's arity (including its own
-// `seed: DerivedSeed`) plus the two additional inputs this scheme alone
-// needs, window_years and season_map.
+// Rationale: one argument per independent input; a grouping type would have
+// this single consumer.
 #[allow(clippy::too_many_arguments)]
 pub fn standardize_historical_windows(
+    structure: &HistoricalStructureProof<'_>,
     library: &mut HistoricalScenarioLibrary,
     inflow_history: &[InflowHistoryRow],
-    hydro_ids: &[EntityId],
-    stages: &[Stage],
     par: &PrecomputedPar,
     window_years: &[i32],
     season_map: Option<&SeasonMap>,
@@ -282,6 +341,7 @@ pub fn standardize_historical_windows(
     stage_lag_transitions: &[StageLagTransition],
     downstream_par_order: usize,
 ) {
+    let &HistoricalStructureProof { stages, hydro_ids } = structure;
     debug_assert_eq!(
         library.n_windows(),
         window_years.len(),
@@ -434,14 +494,13 @@ pub fn standardize_historical_windows(
 /// Validate a [`HistoricalScenarioLibrary`] against construction inputs.
 ///
 /// Runs after window discovery and eta standardization; the first failed error
-/// check returns `Err`.
+/// check returns `Err`. The structural checks V2.1 and V2.9 run earlier, in
+/// [`check_historical_structure`].
 ///
 /// ## Checks performed
 ///
 /// | ID  | Kind    | Description                                                   |
 /// |-----|---------|---------------------------------------------------------------|
-/// | V2.1 | Error  | Every study stage must have `season_id: Some(_)`.             |
-/// | V2.9 | Error  | `hydro_ids.len()` must equal `library.n_hydros()`.            |
 /// | V2.5 | Error  | At least one window must be discovered when `user_pool` is `None`. |
 /// | V2.3 | Error  | No eta value in the library may be `f64::NEG_INFINITY`.       |
 /// | V2.6 | Warning| `library.n_windows() < forward_passes` — log a warning.      |
@@ -457,63 +516,18 @@ pub fn standardize_historical_windows(
 /// # Examples
 ///
 /// ```
-/// use cobre_core::{EntityId, scenario::InflowHistoryRow};
-/// use cobre_core::temporal::{
-///     Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-///     StageStateConfig,
-/// };
-/// use chrono::NaiveDate;
 /// use cobre_stochastic::{HistoricalScenarioLibrary, sampling::historical::validate_historical_library};
 ///
 /// let lib = HistoricalScenarioLibrary::new(3, 1, 2, 1, vec![1990, 1995, 2000]);
-/// let stage = Stage {
-///     index: 0,
-///     id: 0,
-///     start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-///     end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-///     season_id: Some(0),
-///     blocks: vec![Block { index: 0, name: "B".to_string(), duration_hours: 720.0 }],
-///     block_mode: BlockMode::Parallel,
-///     state_config: StageStateConfig { storage: true, inflow_lags: false },
-///     risk_config: StageRiskConfig::Expectation,
-///     scenario_config: ScenarioSourceConfig { branching_factor: 1, noise_method: NoiseMethod::Saa },
-/// };
-/// let hydro_ids = [EntityId(1), EntityId(2)];
-/// let result = validate_historical_library(&lib, &[], &hydro_ids, &[stage], 1, None, 5);
+/// let result = validate_historical_library(&lib, 1, None, 5);
 /// assert!(result.is_ok());
 /// ```
 pub fn validate_historical_library(
     library: &HistoricalScenarioLibrary,
-    _inflow_history: &[InflowHistoryRow],
-    hydro_ids: &[EntityId],
-    stages: &[Stage],
     max_par_order: usize,
     user_pool: Option<&HistoricalYears>,
     forward_passes: u32,
 ) -> Result<(), StochasticError> {
-    for stage in stages {
-        if stage.season_id.is_none() {
-            return Err(StochasticError::InsufficientData {
-                context: format!(
-                    "V2.1: stage {} (index {}) has season_id: None; \
-                     all study stages must have a season_id assigned",
-                    stage.id, stage.index,
-                ),
-            });
-        }
-    }
-
-    if hydro_ids.len() != library.n_hydros() {
-        return Err(StochasticError::InsufficientData {
-            context: format!(
-                "V2.9: hydro_ids slice length ({}) does not match \
-                 library.n_hydros() ({})",
-                hydro_ids.len(),
-                library.n_hydros(),
-            ),
-        });
-    }
-
     if user_pool.is_none() && library.n_windows() == 0 {
         return Err(StochasticError::InsufficientData {
             context: "V2.5: historical library has 0 windows after auto-discovery; \
@@ -652,7 +666,7 @@ mod tests {
         test_support::{HydroSpec, MirrorUnitGroup, StageSpec, date, single_block},
     };
 
-    use super::{DerivedSeed, Stage, standardize_historical_windows};
+    use super::{DerivedSeed, Stage, check_historical_structure, standardize_historical_windows};
     use crate::derive_inflow_seeds;
     use crate::par::{
         DownstreamLagAccum, EntityMajor, PrimaryLagAccum, advance_lag_chain,
@@ -740,11 +754,12 @@ mod tests {
         ];
 
         let mut lib = HistoricalScenarioLibrary::new(1, 2, 1, 0, vec![1990]);
+        let hydro_ids = [hydro];
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib,
             &history,
-            &[hydro],
-            &stages,
             &par,
             &[1990],
             None,
@@ -830,11 +845,12 @@ mod tests {
         let derived_lag_values = [110.0];
 
         let mut lib = HistoricalScenarioLibrary::new(1, 12, 1, 1, vec![1990]);
+        let hydro_ids = [hydro];
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib,
             &history,
-            &[hydro],
-            &stages,
             &par,
             &[1990],
             None,
@@ -926,11 +942,12 @@ mod tests {
         ];
 
         let mut lib = HistoricalScenarioLibrary::new(2, 2, 2, 0, vec![1990, 1991]);
+        let hydro_ids = [h1, h2];
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib,
             &history,
-            &[h1, h2],
-            &stages,
             &par,
             &[1990, 1991],
             None,
@@ -984,11 +1001,12 @@ mod tests {
         let history = vec![make_row(hydro, 2000, 0, 50.0)];
 
         let mut lib = HistoricalScenarioLibrary::new(1, 1, 1, 0, vec![2000]);
+        let hydro_ids = [hydro];
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib,
             &history,
-            &[hydro],
-            &stages,
             &par,
             &[2000],
             None,
@@ -1059,7 +1077,9 @@ mod tests {
             .collect();
         let hydro_ids: Vec<EntityId> = (1..=3).map(EntityId).collect();
 
-        let result = validate_historical_library(&lib, &[], &hydro_ids, &stages, 1, None, 5);
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages);
+        assert!(structure.is_ok(), "expected Ok(_), got: {structure:?}");
+        let result = validate_historical_library(&lib, 1, None, 5);
         assert!(result.is_ok(), "expected Ok(()), got: {result:?}");
     }
 
@@ -1077,12 +1097,7 @@ mod tests {
         );
         lib.eta_slice_mut(2, 5)[1] = f64::NEG_INFINITY;
 
-        let stages: Vec<Stage> = (0..n_stages)
-            .map(|i| make_validate_stage(i, Some(i % 12)))
-            .collect();
-        let hydro_ids: Vec<EntityId> = (1..=3).map(EntityId).collect();
-
-        let result = validate_historical_library(&lib, &[], &hydro_ids, &stages, 1, None, 5);
+        let result = validate_historical_library(&lib, 1, None, 5);
         match result {
             Err(StochasticError::InsufficientData { context }) => {
                 assert!(
@@ -1107,7 +1122,7 @@ mod tests {
         ];
         let hydro_ids = vec![EntityId(1), EntityId(2)];
 
-        let result = validate_historical_library(&lib, &[], &hydro_ids, &stages, 0, None, 1);
+        let result = check_historical_structure(&lib, &hydro_ids, &stages);
         match result {
             Err(StochasticError::InsufficientData { context }) => {
                 assert!(
@@ -1129,7 +1144,7 @@ mod tests {
         let stages = vec![make_validate_stage(0, Some(0))];
         let hydro_ids = vec![EntityId(1), EntityId(2), EntityId(3), EntityId(4)];
 
-        let result = validate_historical_library(&lib, &[], &hydro_ids, &stages, 0, None, 1);
+        let result = check_historical_structure(&lib, &hydro_ids, &stages);
         match result {
             Err(StochasticError::InsufficientData { context }) => {
                 assert!(
@@ -1144,11 +1159,9 @@ mod tests {
     #[test]
     fn test_pool_warning_path_returns_ok() {
         let lib = HistoricalScenarioLibrary::new(5, 1, 2, 0, (1990..1995).collect());
-        let stages = vec![make_validate_stage(0, Some(0))];
-        let hydro_ids = vec![EntityId(1), EntityId(2)];
 
         // 5 windows < 20 forward passes triggers warn! but must still return Ok(()).
-        let result = validate_historical_library(&lib, &[], &hydro_ids, &stages, 0, None, 20);
+        let result = validate_historical_library(&lib, 0, None, 20);
         assert!(
             result.is_ok(),
             "warning path must return Ok(()), got: {result:?}"
@@ -1189,11 +1202,12 @@ mod tests {
         let sm = monthly_season_map(MonthlyLabels::ZeroBased);
 
         let mut lib_none = HistoricalScenarioLibrary::new(1, 2, 1, 0, vec![2000]);
+        let hydro_ids = [hydro];
+        let structure = check_historical_structure(&lib_none, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib_none,
             &history,
-            &[hydro],
-            &stages,
             &par,
             &[2000],
             None,
@@ -1208,11 +1222,11 @@ mod tests {
         );
 
         let mut lib_sm = HistoricalScenarioLibrary::new(1, 2, 1, 0, vec![2000]);
+        let structure = check_historical_structure(&lib_sm, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib_sm,
             &history,
-            &[hydro],
-            &stages,
             &par,
             &[2000],
             Some(&sm),
@@ -1317,11 +1331,12 @@ mod tests {
         ];
 
         let mut lib = HistoricalScenarioLibrary::new(1, 4, 1, 0, vec![2000]);
+        let hydro_ids = [hydro];
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib,
             &history,
-            &[hydro],
-            &stages,
             &par,
             &[2000],
             Some(&sm),
@@ -1441,11 +1456,12 @@ mod tests {
         ];
 
         let mut lib = HistoricalScenarioLibrary::new(1, 5, 1, 1, vec![window_year]);
+        let hydro_ids = [hydro];
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib,
             &history,
-            &[hydro],
-            &stages,
             &par,
             &[window_year],
             None,
@@ -1456,7 +1472,8 @@ mod tests {
                 weight: &[],
             },
             &transitions,
-            1, // downstream_par_order: one completed quarter needed to rebuild
+            1,
+            // downstream_par_order: one completed quarter needed to rebuild,
         );
 
         let det_base = par.deterministic_base(4, 0);
@@ -1524,11 +1541,12 @@ mod tests {
         let history = vec![make_row(hydro, 1995, 0, 110.0)];
 
         let mut lib = HistoricalScenarioLibrary::new(1, 1, 1, 0, vec![1995]);
+        let hydro_ids = [hydro];
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib,
             &history,
-            &[hydro],
-            &stages,
             &par,
             &[1995],
             None,
@@ -1616,11 +1634,12 @@ mod tests {
         let mut lib =
             HistoricalScenarioLibrary::new(1, n_stages, n_hydros, 0, window_years.clone());
 
+        let hydro_ids = [h1, h2];
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib,
             &history,
-            &[h1, h2],
-            &stages,
             &par,
             &window_years,
             Some(&sm),
@@ -1778,11 +1797,11 @@ mod tests {
         ];
 
         let mut lib = HistoricalScenarioLibrary::new(1, 2, 2, l_state, vec![2024]);
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib,
             &inflow_history,
-            &hydro_ids,
-            &stages,
             &par,
             &[2024],
             Some(&season_map),
@@ -1992,11 +2011,11 @@ mod tests {
 
         let mut lib =
             HistoricalScenarioLibrary::new(1, stages.len(), 1, l_state, vec![window_year]);
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib,
             &inflow_history,
-            &hydro_ids,
-            &stages,
             &par,
             &[window_year],
             Some(&season_map),
@@ -2095,11 +2114,12 @@ mod tests {
         let seed_b = [999.0_f64];
 
         let mut lib_a = HistoricalScenarioLibrary::new(1, 2, 1, 1, vec![2024]);
+        let hydro_ids = [hydro];
+        let structure = check_historical_structure(&lib_a, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib_a,
             &history,
-            &[hydro],
-            &stages,
             &par,
             &[2024],
             None,
@@ -2114,11 +2134,11 @@ mod tests {
         );
 
         let mut lib_b = HistoricalScenarioLibrary::new(1, 2, 1, 1, vec![2024]);
+        let structure = check_historical_structure(&lib_b, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib_b,
             &history,
-            &[hydro],
-            &stages,
             &par,
             &[2024],
             None,
@@ -2191,11 +2211,12 @@ mod tests {
 
         let mut lib =
             HistoricalScenarioLibrary::new(windows.len(), stages.len(), 1, 1, windows.clone());
+        let hydro_ids = [hydro];
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
         standardize_historical_windows(
+            &structure,
             &mut lib,
             &history,
-            &[hydro],
-            &stages,
             &par,
             &windows,
             Some(&sm),

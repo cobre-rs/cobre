@@ -13,9 +13,10 @@ use cobre_core::{
 use cobre_io::StageIdResolver;
 use cobre_stochastic::{
     DerivedSeed, ExternalScenarioLibrary, HistoricalScenarioLibrary, PrecomputedNormal,
-    PrecomputedPar, discover_historical_windows, pad_library_to_uniform,
-    standardize_external_inflow, standardize_external_load, standardize_external_ncs,
-    standardize_historical_windows, validate_external_library, validate_historical_library,
+    PrecomputedPar, check_historical_structure, discover_historical_windows,
+    pad_library_to_uniform, standardize_external_inflow, standardize_external_load,
+    standardize_external_ncs, standardize_historical_windows, validate_external_library,
+    validate_historical_library,
 };
 
 use crate::SddpError;
@@ -68,11 +69,12 @@ pub(crate) fn build_historical_inflow_library(
         max_order,
         window_years.clone(),
     );
+    let structure =
+        check_historical_structure(&library, &hydro_ids, stages).map_err(SddpError::Stochastic)?;
     standardize_historical_windows(
+        &structure,
         &mut library,
         inflow_history,
-        &hydro_ids,
-        stages,
         par,
         &window_years,
         season_map,
@@ -80,16 +82,8 @@ pub(crate) fn build_historical_inflow_library(
         &stage_lag_transitions,
         downstream_par_order,
     );
-    validate_historical_library(
-        &library,
-        inflow_history,
-        &hydro_ids,
-        stages,
-        max_order,
-        user_pool,
-        min_windows,
-    )
-    .map_err(SddpError::Stochastic)?;
+    validate_historical_library(&library, max_order, user_pool, min_windows)
+        .map_err(SddpError::Stochastic)?;
     Ok(library)
 }
 
@@ -317,14 +311,16 @@ pub(crate) fn build_external_ncs_library(
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
-        Block, BlockMode, ExternalLoadRow, ExternalScenarioRow, InflowModel, NoiseMethod,
-        ScenarioSourceConfig, StageRiskConfig, StageStateConfig, System, SystemBuilder,
+        Block, BlockMode, ExternalLoadRow, ExternalScenarioRow, InflowHistoryRow, InflowModel,
+        NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig, System,
+        SystemBuilder,
     };
     use cobre_stochastic::{PrecomputedNormal, StochasticError, derive_external_sample_moments};
 
     use super::{
         DerivedSeed, EntityId, LoadModel, PrecomputedPar, SamplingScheme, SddpError, Stage,
         StageLagTransition, build_external_inflow_library, build_external_load_library,
+        build_historical_inflow_library,
     };
 
     fn single_stage(id: i32) -> Stage {
@@ -1016,5 +1012,58 @@ mod tests {
             (reconstruct(1) - 400.0).abs() < 1e-10,
             "gapped declared id 5 must resolve to canonical position 1"
         );
+    }
+
+    #[test]
+    fn historical_library_reports_a_seasonless_stage_before_standardizing() {
+        let hydro_id = EntityId(1);
+        let hydro_ids = vec![hydro_id];
+        let seasonless = Stage {
+            index: 1,
+            start_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+            season_id: None,
+            ..single_stage(1)
+        };
+        let stages = vec![single_stage(0), seasonless];
+        let models: Vec<InflowModel> = stages
+            .iter()
+            .map(|stage| InflowModel {
+                hydro_id,
+                stage_id: stage.id,
+                mean_m3s: 100.0,
+                std_m3s: 10.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+                annual: None,
+            })
+            .collect();
+        let par = PrecomputedPar::build(&models, &stages, &hydro_ids, None).unwrap();
+        let history: Vec<InflowHistoryRow> = (1990..=1992)
+            .map(|year| InflowHistoryRow {
+                hydro_id,
+                start_date: NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(year, 2, 1).unwrap(),
+                value_m3s: 100.0,
+            })
+            .collect();
+        let system = SystemBuilder::new()
+            .hydros(vec![crate::test_support::geometry_hydro(1)])
+            .stages(stages)
+            .inflow_history(history)
+            .build()
+            .expect("system must build");
+
+        let result = build_historical_inflow_library(&system, &par, empty_derived_seed(), None, 1);
+
+        match result {
+            Err(SddpError::Stochastic(StochasticError::InsufficientData { context })) => {
+                assert!(
+                    context.starts_with("V2.1: stage 1 (index 1)"),
+                    "expected a V2.1 rejection naming stage 1, got: {context}"
+                );
+            }
+            other => panic!("expected a V2.1 rejection, got: {other:?}"),
+        }
     }
 }

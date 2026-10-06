@@ -46,7 +46,7 @@ use cobre_sddp::{
 use cobre_solver::ActiveSolver;
 use cobre_stochastic::{
     ClassSchemes, DerivedSeed, ExternalScenarioLibrary, HistoricalScenarioLibrary,
-    OpeningTreeInputs, PrecomputedPar, build_stochastic_context,
+    OpeningTreeInputs, PrecomputedPar, build_stochastic_context, check_historical_structure,
     par::lag_kernel::{DownstreamLagAccum, LagMajor, PrimaryLagAccum, advance_lag_chain},
     par::lag_transition::{derive_downstream_par_order, precompute_stage_lag_transitions},
     solve_par_noise, standardize_external_inflow, standardize_historical_windows,
@@ -2412,11 +2412,11 @@ fn differential_lag_chain_forward_external_historical_agree_at_quarterly_transit
             });
         }
     }
+    let structure = check_historical_structure(&hist_lib, &fx.hydro_ids, &fx.stages).unwrap();
     standardize_historical_windows(
+        &structure,
         &mut hist_lib,
         &hist_rows,
-        &fx.hydro_ids,
-        &fx.stages,
         &fx.par,
         &[window_year],
         None,
@@ -2525,11 +2525,12 @@ fn opening_tree_historical_standardization_ring_aware_eta_requires_derived_downs
     let derived_lag_values = fx.derived_lag_values();
     let mut hist_lib_ring_aware =
         HistoricalScenarioLibrary::new(1, DLC_N_STAGES, DLC_N_HYDROS, 1, vec![window_year]);
+    let structure =
+        check_historical_structure(&hist_lib_ring_aware, &fx.hydro_ids, &fx.stages).unwrap();
     standardize_historical_windows(
+        &structure,
         &mut hist_lib_ring_aware,
         &hist_rows,
-        &fx.hydro_ids,
-        &fx.stages,
         &fx.par,
         &[window_year],
         None,
@@ -2545,11 +2546,12 @@ fn opening_tree_historical_standardization_ring_aware_eta_requires_derived_downs
 
     let mut hist_lib_literal_zero =
         HistoricalScenarioLibrary::new(1, DLC_N_STAGES, DLC_N_HYDROS, 1, vec![window_year]);
+    let structure =
+        check_historical_structure(&hist_lib_literal_zero, &fx.hydro_ids, &fx.stages).unwrap();
     standardize_historical_windows(
+        &structure,
         &mut hist_lib_literal_zero,
         &hist_rows,
-        &fx.hydro_ids,
-        &fx.stages,
         &fx.par,
         &[window_year],
         None,

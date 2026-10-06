@@ -28,8 +28,8 @@ use cobre_core::{
     },
 };
 use cobre_stochastic::{
-    DerivedSeed, HistoricalScenarioLibrary, evaluate_par_batch, par::precompute::PrecomputedPar,
-    standardize_historical_windows,
+    DerivedSeed, HistoricalScenarioLibrary, check_historical_structure, evaluate_par_batch,
+    par::precompute::PrecomputedPar, standardize_historical_windows,
 };
 
 fn monthly_stage(index: usize, season_id: usize) -> Stage {
@@ -159,11 +159,12 @@ fn par_a_historical_replay_roundtrip() {
         (0..12).map(|_| uniform_monthly_transition()).collect();
 
     let mut library = HistoricalScenarioLibrary::new(1, 12, 1, par.max_order(), vec![window_year]);
+    let hydro_ids = [hydro];
+    let structure = check_historical_structure(&library, &hydro_ids, &stages).unwrap();
     standardize_historical_windows(
+        &structure,
         &mut library,
         &history,
-        &[hydro],
-        &stages,
         &par,
         &[window_year],
         None,
@@ -269,11 +270,12 @@ fn t2_derived_seed_differs_from_window_lags_roundtrip() {
         (0..12).map(|_| uniform_monthly_transition()).collect();
 
     let mut library = HistoricalScenarioLibrary::new(1, 12, 1, max_order, vec![window_year]);
+    let hydro_ids = [hydro];
+    let structure = check_historical_structure(&library, &hydro_ids, &stages).unwrap();
     standardize_historical_windows(
+        &structure,
         &mut library,
         &history,
-        &[hydro],
-        &stages,
         &par,
         &[window_year],
         None,
@@ -369,11 +371,12 @@ fn t3_ar0_par_a_roundtrip() {
         (0..12).map(|_| uniform_monthly_transition()).collect();
 
     let mut library = HistoricalScenarioLibrary::new(1, 12, 1, max_order, vec![window_year]);
+    let hydro_ids = [hydro];
+    let structure = check_historical_structure(&library, &hydro_ids, &stages).unwrap();
     standardize_historical_windows(
+        &structure,
         &mut library,
         &history,
-        &[hydro],
-        &stages,
         &par,
         &[window_year],
         None,
@@ -477,11 +480,12 @@ fn t4_derived_seed_shorter_than_max_order_roundtrip() {
         (0..4).map(|_| uniform_monthly_transition()).collect();
 
     let mut library = HistoricalScenarioLibrary::new(1, 4, 1, par.max_order(), vec![window_year]);
+    let hydro_ids = [hydro];
+    let structure = check_historical_structure(&library, &hydro_ids, &stages).unwrap();
     standardize_historical_windows(
+        &structure,
         &mut library,
         &history,
-        &[hydro],
-        &stages,
         &par,
         &[window_year],
         None,
@@ -580,11 +584,12 @@ fn t5_two_windows_shared_derived_seed_roundtrip() {
         (0..12).map(|_| uniform_monthly_transition()).collect();
 
     let mut library = HistoricalScenarioLibrary::new(2, 12, 1, max_order, window_years.to_vec());
+    let hydro_ids = [hydro];
+    let structure = check_historical_structure(&library, &hydro_ids, &stages).unwrap();
     standardize_historical_windows(
+        &structure,
         &mut library,
         &full_history,
-        &[hydro],
-        &stages,
         &par,
         &window_years,
         None,

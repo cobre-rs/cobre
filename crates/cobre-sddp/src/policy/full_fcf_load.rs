@@ -276,7 +276,7 @@ impl CheckedFullFcfLoad {
         debug_assert!(self.kind != FullFcfLoadKind::SimulationOnly);
         let completed = self.completed_iterations();
         setup.replace_fcf(self.fcf);
-        // No stored bases (checkpoint written without `store_basis`) → iteration 1
+        // No stored bases (the training run captured none) → iteration 1
         // cold-starts.
         if self.stored_basis_records > 0 {
             setup.set_warm_start_basis_cache(self.basis_cache);

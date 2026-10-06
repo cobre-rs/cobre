@@ -24,7 +24,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use chrono::NaiveDate;
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -47,7 +46,6 @@ use cobre_io::LoadError;
 use cobre_comm::LocalBackend;
 use cobre_core::System;
 use cobre_core::TrainingEvent::IterationSummary;
-use cobre_io::BoundaryPolicy;
 use cobre_io::Config;
 use cobre_io::DistributionInfo;
 use cobre_io::LoadedCase;
@@ -86,12 +84,10 @@ use cobre_io::write_skipped_simulation_results;
 use cobre_io::write_solver_stats;
 use cobre_io::write_success_marker;
 use cobre_io::write_training_results;
-use cobre_sddp::BoundaryLoadRequest;
 use cobre_sddp::HydroFitTimings;
 use cobre_sddp::SddpError;
 use cobre_sddp::SimulationWeighting;
 use cobre_sddp::TrainingResult;
-use cobre_sddp::ValidatedBoundaryCuts;
 use cobre_sddp::aggregate_simulation;
 use cobre_sddp::aggregate_solver_stats_log;
 use cobre_sddp::build_deviation_summary;
@@ -102,20 +98,18 @@ use cobre_sddp::config::ShutdownSource;
 use cobre_sddp::delta_to_stats_row;
 use cobre_sddp::hydro_models::prepare_hydro_models_from_artifacts;
 use cobre_sddp::inject_boundary_cuts;
-use cobre_sddp::load_boundary_cuts;
 use cobre_sddp::policy::full_fcf_load::FullFcfLoadError;
 use cobre_sddp::policy::full_fcf_load::FullFcfLoadKind;
 use cobre_sddp::policy::full_fcf_load::check_full_fcf_load;
 use cobre_sddp::policy::full_fcf_load::locate_policy_dir;
 use cobre_sddp::policy::orchestration::CheckpointParams;
-use cobre_sddp::policy::orchestration::build_season_manifest;
 use cobre_sddp::policy::orchestration::export_stochastic_artifacts;
 use cobre_sddp::policy::orchestration::write_checkpoint;
+use cobre_sddp::reconcile_boundary_policy;
 use cobre_sddp::resolve_boundary_state_requirements;
 use cobre_sddp::setup::PostTrainingSimulation;
 use cobre_sddp::setup::RunPhasePlan;
 use cobre_sddp::solver_stats_log_to_rows;
-use cobre_sddp::study_horizon_end;
 use cobre_sddp::{
     ArOrderSummary, DEFAULT_SEED, HydroModelSummary, ModelProvenanceReport, SolverStatsDelta,
     StochasticSource, StochasticSummary, StudyParams, StudySetup, build_hydro_model_summary,
@@ -1072,59 +1066,6 @@ pub(crate) fn build_study_setup(
         hydro_models_summary,
         warnings,
         setup_timings: timings,
-    })
-}
-
-pub(crate) struct BoundaryReconciliation {
-    pub(crate) cuts: ValidatedBoundaryCuts,
-    pub(crate) checkpoint_path: PathBuf,
-    pub(crate) boundary_date: NaiveDate,
-}
-
-/// Reconcile `bp`'s checkpoint against `setup`'s terminal manifest without
-/// injecting anything, exactly as the CLI's validate path does before solving.
-pub(crate) fn reconcile_boundary_policy(
-    setup: &StudySetup,
-    system: &System,
-    bp: &BoundaryPolicy,
-    case_dir: &Path,
-) -> Result<BoundaryReconciliation, SddpError> {
-    let checkpoint_path = bp.checkpoint_path(case_dir);
-    // Rationale: the cast cannot truncate — `state_dimension` counts FCF
-    // state variables (one per reservoir/lag), bounded by the validated study
-    // dimensions and far below `u32::MAX`.
-    #[allow(clippy::cast_possible_truncation)]
-    let state_dim = setup.fcf.state_dimension as u32;
-    let current_manifest = setup.build_terminal_entity_manifest(system);
-    let fixed_windows = setup.build_terminal_fixed_post_horizon_windows(system);
-
-    let Some(boundary_date) = study_horizon_end(system) else {
-        return Err(SddpError::Validation(format!(
-            "case {}: the study declares no non-negative stage, so it has no boundary date to \
-             load a boundary policy against",
-            case_dir.display()
-        )));
-    };
-
-    let study_seasons = build_season_manifest(system);
-    let cuts = load_boundary_cuts(
-        &BoundaryLoadRequest::new(
-            &checkpoint_path,
-            boundary_date,
-            state_dim,
-            &current_manifest,
-            setup.inputs.stage_data.stage_templates.cost_scale_factor,
-        )
-        .with_fixed_windows(&fixed_windows)
-        .with_inflow_lag_depth(setup.boundary_requirements().inflow_lag_depth())
-        .with_study_seasons(&study_seasons)
-        .with_strict(bp.strict),
-    )?;
-
-    Ok(BoundaryReconciliation {
-        cuts,
-        checkpoint_path,
-        boundary_date,
     })
 }
 

@@ -413,6 +413,7 @@ def test_validate_rejects_missing_season_scalar_parameter_gap(
     assert any("season" in err["message"] for err in result["errors"]), (
         f"expected an error naming the missing season, got: {result['errors']!r}"
     )
+    assert result["errors"][0]["kind"] == "BoundaryReconciliationError"
 
 
 def test_validate_rejects_per_stage_block_coverage_gap(
@@ -474,10 +475,9 @@ def test_validate_rejects_missing_specific_productivity(
 
 # ── Non-boundary scalar-parameter presence guard ──────────────────────────────
 #
-# A deck with no boundary policy builds no StudySetup, yet validate must still run
-# study construction's scalar-parameter guard so a gap is rejected before the
-# solver — identically to `cobre validate` (same error kind
-# GenericConstraintValidationError and the same message).
+# Validate runs the scalar-parameter guard before it builds the study, so a gap on
+# a deck with no boundary policy keeps the error kind
+# GenericConstraintValidationError and the same message as `cobre validate`.
 
 
 def _write_scalar_parameters(

@@ -15,6 +15,8 @@
 
 use chrono::NaiveDate;
 use cobre_core::AnticipatedCommitmentHistory;
+use cobre_core::System;
+use cobre_io::BoundaryPolicy;
 use cobre_io::Config;
 use cobre_io::EntitySlot;
 use cobre_io::GraphManifest;
@@ -36,12 +38,14 @@ use cobre_solver::{Basis, BasisStatus};
 
 use crate::SddpError;
 use crate::cut::pool::CutPool;
-use crate::policy::orchestration::StudySeasonManifest;
+use crate::policy::orchestration::{StudySeasonManifest, build_season_manifest};
 use crate::policy::reconcile::{
     BoundaryReconciliationReport, SlotKey, build_boundary_fold, build_identity_index, build_rebind,
     build_reconciliation_report, build_source_interval_index, rebind_cut,
 };
-use crate::setup::{BoundaryStateRequirements, NodeId, NodePos, StudySetup, TypedVec};
+use crate::setup::{
+    BoundaryStateRequirements, NodeId, NodePos, StudySetup, TypedVec, study_horizon_end,
+};
 use crate::workspace::CapturedBasis;
 use cobre_io::{SoftwareIdentity, StateFamily};
 
@@ -49,7 +53,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The constant every unmarked policy checkpoint (no `cost_scale_factor`
 /// provenance) was unconditionally scaled at. A pool or checkpoint whose
@@ -1507,6 +1511,72 @@ pub fn inject_boundary_cuts(
     fcf.pools[terminal_idx] =
         CutPool::new_with_warm_start(state_dimension, forward_passes, 0, boundary_cuts);
     Ok(())
+}
+
+/// A boundary checkpoint reconciled against a study by [`reconcile_boundary_policy`].
+#[derive(Debug)]
+pub struct BoundaryReconciliation {
+    /// The validated terminal-pool cut records and their reconciliation report.
+    pub cuts: ValidatedBoundaryCuts,
+    /// The checkpoint directory the cuts were read from.
+    pub checkpoint_path: PathBuf,
+    /// The date the boundary pool was selected against.
+    pub boundary_date: NaiveDate,
+}
+
+/// Reconcile `bp`'s checkpoint against `setup`'s terminal entity manifest
+/// without injecting anything.
+///
+/// # Errors
+///
+/// Returns [`SddpError::Validation`] when the study declares no non-negative
+/// stage (so it has no boundary date), and propagates [`load_boundary_cuts`]'s
+/// rejections.
+pub fn reconcile_boundary_policy(
+    setup: &StudySetup,
+    system: &System,
+    bp: &BoundaryPolicy,
+    case_dir: &Path,
+) -> Result<BoundaryReconciliation, SddpError> {
+    let checkpoint_path = bp.checkpoint_path(case_dir);
+    // Rationale: the cast cannot truncate — `state_dimension` counts FCF
+    // state variables (one per reservoir/lag), bounded by the validated study
+    // dimensions and far below `u32::MAX`.
+    #[allow(clippy::cast_possible_truncation)]
+    let state_dim = setup.fcf.state_dimension as u32;
+    let current_manifest = setup.build_terminal_entity_manifest(system);
+    let fixed_windows = setup.build_terminal_fixed_post_horizon_windows(system);
+
+    let Some(boundary_date) = study_horizon_end(system) else {
+        return Err(SddpError::Validation(format!(
+            "case {}: the study declares no non-negative stage, so it has no boundary date to \
+             load a boundary policy against",
+            case_dir.display()
+        )));
+    };
+
+    let study_seasons = build_season_manifest(system);
+    let cuts = load_boundary_cuts(
+        &BoundaryLoadRequest::new(
+            &checkpoint_path,
+            boundary_date,
+            state_dim,
+            &current_manifest,
+            setup.inputs.stage_data.stage_templates.cost_scale_factor,
+        )
+        .with_fixed_windows(&fixed_windows)
+        // The depth the state layout reserved, so the load-time depth guard is a defensive
+        // check, never a user error.
+        .with_inflow_lag_depth(setup.boundary_requirements().inflow_lag_depth())
+        .with_study_seasons(&study_seasons)
+        .with_strict(bp.strict),
+    )?;
+
+    Ok(BoundaryReconciliation {
+        cuts,
+        checkpoint_path,
+        boundary_date,
+    })
 }
 
 #[cfg(test)]

@@ -11,39 +11,21 @@
 //! ## Validation contract
 //!
 //! If `cobre validate <CASE_DIR>` exits 0, then `cobre run <CASE_DIR>` will not
-//! fail in any phase before the solver begins iterating. The pre-solver
-//! phases exercised here are:
-//!
-//! 1. [`cobre_sddp::StudyParams::from_config`] — validates `config.json` fields
-//!    that are only checked at algorithm startup and surfaces deprecation
-//!    warnings for fields that are scheduled for removal.
-//! 2. [`cobre_sddp::prepare_stochastic`] — runs PAR estimation from inflow
-//!    history, loads user opening trees, and builds the stochastic context.
-//! 3. [`cobre_sddp::hydro_models::prepare_hydro_models_from_artifacts`] — resolves
-//!    production and evaporation models from the pre-parsed artifact bundle.
-//! 4. [`cobre_sddp::validate_generic_constraint_parameters`] — builds the resolved
-//!    scalar-parameter table and rejects a generic constraint that references an
-//!    unresolved id. Run for a deck with no boundary policy; a boundary deck
-//!    runs the same guard inside [`cobre_sddp::StudySetup::new`] (phase 5).
-//! 5. When `config.policy.boundary` is configured, [`cobre_sddp::StudySetup::new`]
-//!    plus [`cobre_sddp::load_boundary_cuts`] — builds the study and reconciles
-//!    the boundary policy against its terminal manifest, without solving.
+//! fail in any phase before the solver begins iterating. After the case loads and
+//! `config.json` parses, every pre-solver check runs through
+//! [`cobre_sddp::validate_phases::validate_study`], the pipeline `cobre.io.validate`
+//! shares: it builds the study with the constructor `cobre run` uses, and, when
+//! `config.policy.boundary` is configured, reconciles the boundary policy against
+//! its terminal manifest, without solving. A phase failure exits by its
+//! [`cobre_sddp::ErrorClass`].
 
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 use clap::Args;
-use cobre_core::{ScalarParameter, System};
-use cobre_io::{BoundaryPolicy, Config, LoadError, ValidationReport, validate_case_with_artifacts};
-use cobre_sddp::hydro_models::prepare_hydro_models_from_artifacts;
-use cobre_sddp::policy::orchestration;
-use cobre_sddp::validate_phases::{PrepPhase, prep_phase_metadata};
-use cobre_sddp::{
-    BoundaryLoadRequest, BoundaryReconciliationReport, PrepareHydroModelsResult, SddpError,
-    StudyParams, StudySetup, load_boundary_cuts, prepare_stochastic,
-    resolve_boundary_state_requirements, study_horizon_end, validate_generic_constraint_parameters,
-};
-use cobre_stochastic::StochasticContext;
+use cobre_io::{LoadError, ReportEntry, validate_case_with_artifacts};
+use cobre_sddp::validate_phases::{PhaseFailure, ValidateFailure, ValidateRequest, validate_study};
+use cobre_sddp::{BoundaryReconciliation, BoundaryReconciliationReport, ErrorClass, SddpError};
 use console::{Term, style};
 use serde::Serialize;
 
@@ -77,14 +59,7 @@ struct ValidateBoundaryOutput {
     error: Option<ValidateErrorOutput>,
 }
 
-/// Computed once and carried to both `--json` and human-mode outputs.
-#[derive(Debug)]
-struct BoundaryOutcome {
-    boundary_date: NaiveDate,
-    report: BoundaryReconciliationReport,
-}
-
-/// Early-abort failure. `phase` is the stable kind string from [`prep_phase_metadata`] or [`LoadError::kind`] (same string programmatic callers filter on).
+/// Early-abort failure. `phase` is the stable kind string from [`PhaseFailure::kind`] or [`LoadError::kind`] (same string programmatic callers filter on).
 #[derive(Debug, Serialize)]
 struct ValidateErrorOutput {
     phase: String,
@@ -92,11 +67,11 @@ struct ValidateErrorOutput {
 }
 
 impl ValidateBoundaryOutput {
-    fn success(outcome: Option<BoundaryOutcome>) -> Self {
+    fn success(boundary: Option<&BoundaryReconciliation>) -> Self {
         Self {
-            configured: Some(outcome.is_some()),
-            boundary_date: outcome.as_ref().map(|o| o.boundary_date),
-            report: outcome.map(|o| o.report),
+            configured: Some(boundary.is_some()),
+            boundary_date: boundary.map(|b| b.boundary_date),
+            report: boundary.map(|b| b.cuts.report().clone()),
             error: None,
         }
     }
@@ -132,18 +107,18 @@ fn format_constraint_description(
     }
 }
 
-/// Formats validation warnings as report lines (empty when no warnings). `report.error_count` is always
+/// Formats validation warnings as report lines (empty when no warnings). The error count is always
 /// zero here — [`validate_case_with_artifacts`] returns `Err` on any error.
-fn report_lines(report: &ValidationReport, case_dir: &Path) -> Vec<String> {
-    if report.warning_count == 0 {
+fn report_lines(warnings: &[ReportEntry], case_dir: &Path) -> Vec<String> {
+    if warnings.is_empty() {
         return Vec::new();
     }
     let mut lines = vec![format!(
         "Validation: 0 errors, {} warnings in {}",
-        report.warning_count,
+        warnings.len(),
         case_dir.display()
     )];
-    for entry in &report.warnings {
+    for entry in warnings {
         let location = if let Some(entity) = &entry.entity {
             format!("{} ({})", entry.file, entity)
         } else {
@@ -158,12 +133,6 @@ fn report_lines(report: &ValidationReport, case_dir: &Path) -> Vec<String> {
     lines
 }
 
-/// Computes the stable phase kind and `"file_label: message"` report string, shared by both human and `--json` outputs to prevent drift.
-fn describe_prep_error(phase: PrepPhase, err: &SddpError) -> (&'static str, String) {
-    let (kind, file_label) = prep_phase_metadata(phase, err);
-    (kind, format!("{file_label}: {err}"))
-}
-
 fn print_prep_error(term: &Term, report: &str, case_dir: &Path) {
     let _ = term.write_line(&format!(
         "Validation: 1 errors, 0 warnings in {}",
@@ -172,172 +141,35 @@ fn print_prep_error(term: &Term, report: &str, case_dir: &Path) {
     let _ = term.write_line(&format!("{} {report}", style("error:").red().bold()));
 }
 
-/// Handle a pre-solver preparation-phase failure. `stdout_sink` is `None`
-/// under `--json`, where the error object replaces the human report.
-fn prep_error_to_cli_error(
+/// The exit a phase failure takes, from its [`ErrorClass`]. `report` has already
+/// been rendered, so a refusal of the case carries `already_rendered: true`.
+fn phase_failure_cli_error(error: SddpError, report: String) -> CliError {
+    match error.class() {
+        ErrorClass::InvalidInput | ErrorClass::IncompatiblePolicy => CliError::Validation {
+            report,
+            already_rendered: true,
+        },
+        ErrorClass::Io | ErrorClass::Solver | ErrorClass::Internal => CliError::from(error),
+    }
+}
+
+/// Render a pre-solver phase failure (human, or the `--json` error object) and
+/// return the error the command exits with. `stdout_sink` is `None` under
+/// `--json`, where the error object replaces the human report.
+fn render_phase_failure(
     stdout_sink: Option<&Term>,
     json: bool,
-    phase: PrepPhase,
-    err: &SddpError,
+    failure: PhaseFailure,
     case_dir: &Path,
 ) -> Result<CliError, CliError> {
-    let (kind, report) = describe_prep_error(phase, err);
+    let report = failure.report();
     if let Some(term) = stdout_sink {
         print_prep_error(term, &report, case_dir);
     }
     if json {
-        emit_validate_json(&ValidateBoundaryOutput::error(kind, &report))?;
+        emit_validate_json(&ValidateBoundaryOutput::error(failure.kind(), &report))?;
     }
-    Ok(CliError::Validation {
-        report,
-        already_rendered: true,
-    })
-}
-
-/// Run a pre-solver preparation phase; an `Err` is reported (human and
-/// `--json`) before it is returned.
-fn run_prep_phase<T>(
-    result: Result<T, SddpError>,
-    stdout_sink: Option<&Term>,
-    json: bool,
-    phase: PrepPhase,
-    case_dir: &Path,
-) -> Result<T, CliError> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(ref err) => Err(prep_error_to_cli_error(
-            stdout_sink,
-            json,
-            phase,
-            err,
-            case_dir,
-        )?),
-    }
-}
-
-/// Build a `StudySetup` from the parsed config and reconcile
-/// `config.policy.boundary` against its terminal manifest, without solving.
-fn reconcile_boundary(
-    case_dir: &Path,
-    config: &Config,
-    bp: &BoundaryPolicy,
-    system: &System,
-    stochastic: StochasticContext,
-    hydro_models: PrepareHydroModelsResult,
-    scalar_parameters: Vec<ScalarParameter>,
-) -> Result<BoundaryOutcome, SddpError> {
-    let boundary_path = bp.checkpoint_path(case_dir);
-
-    // Resolve before building the layout so validate mirrors the run path.
-    let boundary_requirements = resolve_boundary_state_requirements(case_dir, config)?;
-
-    let setup = StudySetup::new_with_boundary_requirements(
-        system,
-        config,
-        stochastic,
-        hydro_models,
-        boundary_requirements,
-        scalar_parameters,
-    )?;
-
-    // Rationale: the cast cannot truncate — `state_dimension` counts FCF
-    // state variables (one per reservoir/lag), bounded by the validated study
-    // dimensions and far below `u32::MAX`.
-    #[allow(clippy::cast_possible_truncation)]
-    let state_dim = setup.fcf.state_dimension as u32;
-    let current_manifest = setup.build_terminal_entity_manifest(system);
-    let fixed_windows = setup.build_terminal_fixed_post_horizon_windows(system);
-
-    let Some(boundary_date) = study_horizon_end(system) else {
-        return Err(SddpError::Validation(format!(
-            "case {}: the study declares no non-negative stage, so it has no boundary date to \
-             load a boundary policy against",
-            case_dir.display()
-        )));
-    };
-
-    let study_seasons = orchestration::build_season_manifest(system);
-    let boundary_cuts = load_boundary_cuts(
-        &BoundaryLoadRequest::new(
-            &boundary_path,
-            boundary_date,
-            state_dim,
-            &current_manifest,
-            setup.inputs.stage_data.stage_templates.cost_scale_factor,
-        )
-        .with_fixed_windows(&fixed_windows)
-        .with_inflow_lag_depth(setup.boundary_requirements().inflow_lag_depth())
-        .with_study_seasons(&study_seasons)
-        .with_strict(bp.strict),
-    )?;
-
-    Ok(BoundaryOutcome {
-        boundary_date,
-        report: boundary_cuts.report().clone(),
-    })
-}
-
-/// Reconciles `config.policy.boundary` when configured, mapping a reject to [`CliError::Validation`]. Returns `Ok(None)` when no boundary is configured (no `StudySetup` work runs).
-fn run_boundary_check(
-    case_dir: &Path,
-    config: &Config,
-    system: &System,
-    stochastic: StochasticContext,
-    hydro_models: PrepareHydroModelsResult,
-    scalar_parameters: Vec<ScalarParameter>,
-    stdout: Option<&Term>,
-    json: bool,
-) -> Result<Option<BoundaryOutcome>, CliError> {
-    let Some(bp) = config.policy.boundary.as_ref() else {
-        return Ok(None);
-    };
-
-    match reconcile_boundary(
-        case_dir,
-        config,
-        bp,
-        system,
-        stochastic,
-        hydro_models,
-        scalar_parameters,
-    ) {
-        Ok(outcome) => Ok(Some(outcome)),
-        Err(ref err) => Err(prep_error_to_cli_error(
-            stdout,
-            json,
-            PrepPhase::Boundary,
-            err,
-            case_dir,
-        )?),
-    }
-}
-
-/// Runs the scalar-parameter presence guard for decks without a boundary policy (boundary decks run the guard inside [`StudySetup::new`], so this is a no-op there). Rejects map to [`CliError::Validation`].
-fn run_generic_constraint_parameter_check(
-    case_dir: &Path,
-    config: &Config,
-    system: &System,
-    hydro_models: &PrepareHydroModelsResult,
-    scalar_parameters: &[ScalarParameter],
-    cost_scale_factor: f64,
-    stdout: Option<&Term>,
-    json: bool,
-) -> Result<(), CliError> {
-    if config.policy.boundary.is_some() {
-        return Ok(());
-    }
-    run_prep_phase(
-        validate_generic_constraint_parameters(
-            system,
-            hydro_models,
-            scalar_parameters,
-            cost_scale_factor,
-        ),
-        stdout,
-        json,
-        PrepPhase::GenericConstraints,
-        case_dir,
-    )
+    Ok(phase_failure_cli_error(failure.error, report))
 }
 
 /// Serialize `output` as `cobre validate --json`'s single stdout JSON object.
@@ -415,9 +247,6 @@ pub fn execute(args: &ValidateArgs) -> Result<(), CliError> {
         }
     };
 
-    let system = loaded.system;
-    let artifacts = loaded.artifacts;
-
     let config_path = args.case_dir.join("config.json");
     let config = match cobre_io::parse_config(&config_path) {
         Ok(config) => config,
@@ -427,95 +256,57 @@ pub fn execute(args: &ValidateArgs) -> Result<(), CliError> {
         }
     };
 
-    let study_params = run_prep_phase(
-        StudyParams::from_config(&config, Vec::new()),
-        stdout_sink,
-        args.json,
-        PrepPhase::Config,
-        &args.case_dir,
-    )?;
-
-    let seed = study_params.seed;
-
-    // config_path is used only for historical-years look-up and error messages, not file operations.
-    let training_source = match config.training_scenario_source(&config_path) {
-        Ok(source) => source,
-        Err(err) => {
+    let validated = match validate_study(ValidateRequest {
+        case_dir: &args.case_dir,
+        config: &config,
+        system: loaded.system,
+        artifacts: loaded.artifacts,
+    }) {
+        Ok(validated) => validated,
+        Err(ValidateFailure::ScenarioSource(err)) => {
             emit_json_error(args.json, err.kind(), &err.to_string())?;
             return Err(CliError::from(err));
         }
+        Err(ValidateFailure::Phase(failure)) => {
+            return Err(render_phase_failure(
+                stdout_sink,
+                args.json,
+                failure,
+                &args.case_dir,
+            )?);
+        }
     };
 
-    // Runs the expensive PAR estimation/opening-trees step to guarantee that exit-0 means full parity with `run`.
-    let boundary_requirements = resolve_boundary_state_requirements(&args.case_dir, &config)?;
-    let prepared = run_prep_phase(
-        prepare_stochastic(
-            system,
-            &args.case_dir,
-            &config,
-            seed,
-            &training_source,
-            boundary_requirements.inflow_lag_depth(),
-        ),
-        stdout_sink,
-        args.json,
-        PrepPhase::Stochastic,
-        &args.case_dir,
-    )?;
-
-    // Reuses the parsed bundle instead of re-reading disk.
-    let hydro_models = run_prep_phase(
-        prepare_hydro_models_from_artifacts(&prepared.system, &artifacts, false, None),
-        stdout_sink,
-        args.json,
-        PrepPhase::HydroModels,
-        &args.case_dir,
-    )?;
-
-    if !args.json {
-        let _ = stdout.write_line(&format!(
-            "Valid case: {} buses, {} hydros, {} thermals, {} lines",
-            prepared.system.n_buses(),
-            prepared.system.n_hydros(),
-            prepared.system.n_thermals(),
-            prepared.system.n_lines(),
-        ));
-        for line in report_lines(&report, &args.case_dir) {
-            let _ = stdout.write_line(&line);
-        }
+    if args.json {
+        emit_validate_json(&ValidateBoundaryOutput::success(
+            validated.boundary.as_ref(),
+        ))?;
+        return Ok(());
     }
 
-    run_generic_constraint_parameter_check(
-        &args.case_dir,
-        &config,
-        &prepared.system,
-        &hydro_models,
-        &artifacts.scalar_parameters,
-        study_params.cost_scale_factor,
-        stdout_sink,
-        args.json,
-    )?;
-
-    let boundary_outcome = run_boundary_check(
-        &args.case_dir,
-        &config,
-        &prepared.system,
-        prepared.stochastic,
-        hydro_models,
-        artifacts.scalar_parameters,
-        stdout_sink,
-        args.json,
-    )?;
-
-    if args.json {
-        emit_validate_json(&ValidateBoundaryOutput::success(boundary_outcome))?;
-    } else if let Some(outcome) = &boundary_outcome {
+    let system = &validated.system;
+    let _ = stdout.write_line(&format!(
+        "Valid case: {} buses, {} hydros, {} thermals, {} lines",
+        system.n_buses(),
+        system.n_hydros(),
+        system.n_thermals(),
+        system.n_lines(),
+    ));
+    let warnings: Vec<ReportEntry> = report
+        .warnings
+        .into_iter()
+        .chain(validated.warnings)
+        .collect();
+    for line in report_lines(&warnings, &args.case_dir) {
+        let _ = stdout.write_line(&line);
+    }
+    if let Some(boundary) = &validated.boundary {
         let _ = stdout.write_line(&format!(
             "boundary policy priced at {}",
-            outcome.boundary_date
+            boundary.boundary_date
         ));
-        let _ = stdout.write_line(&outcome.report.summary_line());
-        for line in outcome.report.detail_lines() {
+        let _ = stdout.write_line(&boundary.cuts.report().summary_line());
+        for line in boundary.cuts.report().detail_lines() {
             tracing::debug!("{line}");
         }
     }
@@ -545,9 +336,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn phase_failure_exit_code_follows_the_error_class() {
+        let stochastic =
+            SddpError::Stochastic(cobre_stochastic::StochasticError::InsufficientData {
+                context: "no valid historical windows found".to_string(),
+            });
+        let refusal = phase_failure_cli_error(stochastic, "scenarios/: refused".to_string());
+        assert!(matches!(
+            refusal,
+            CliError::Validation {
+                already_rendered: true,
+                ..
+            }
+        ));
+        assert_eq!(refusal.exit_code(), 1);
+
+        let unreadable = SddpError::Io(LoadError::IoError {
+            path: PathBuf::from("scenarios/inflow_history.parquet"),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "not found"),
+        });
+        let io = phase_failure_cli_error(unreadable, "scenarios/: not found".to_string());
+        assert_eq!(io.exit_code(), 2);
+    }
+
+    #[test]
     fn format_report_contains_warning_label() {
         let path = PathBuf::from("/case/dir");
-        let output = report_lines(&make_report(), &path).join("\n");
+        let output = report_lines(&make_report().warnings, &path).join("\n");
         assert!(
             output.contains("warning:"),
             "expected 'warning:' in output, got: {output}"
@@ -557,7 +372,7 @@ mod tests {
     #[test]
     fn format_report_contains_file_path() {
         let path = PathBuf::from("/case/dir");
-        let output = report_lines(&make_report(), &path).join("\n");
+        let output = report_lines(&make_report().warnings, &path).join("\n");
         assert!(
             output.contains("system/thermals.json"),
             "expected file path in output, got: {output}"
@@ -567,7 +382,7 @@ mod tests {
     #[test]
     fn format_report_summary_header_present() {
         let path = PathBuf::from("/case/dir");
-        let output = report_lines(&make_report(), &path).join("\n");
+        let output = report_lines(&make_report().warnings, &path).join("\n");
         assert!(
             output.contains("0 errors") && output.contains("1 warnings"),
             "expected summary header with counts, got: {output}"
@@ -587,7 +402,7 @@ mod tests {
                 message: "bus is unreferenced".to_string(),
             }],
         };
-        let output = report_lines(&report, &PathBuf::from("/case/dir")).join("\n");
+        let output = report_lines(&report.warnings, &PathBuf::from("/case/dir")).join("\n");
         assert!(
             output.contains("system/buses.json (bus_01)"),
             "entity-present location must render 'file (entity)', got: {output}"

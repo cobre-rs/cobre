@@ -10,18 +10,15 @@ use cobre_io::PolicyMode;
 use cobre_io::PolicyMode::Fresh;
 use cobre_io::PolicyMode::Resume;
 use cobre_io::PolicyMode::WarmStart;
-use cobre_sddp::BoundaryLoadRequest;
 use cobre_sddp::StudySetup;
 use cobre_sddp::TrainingResult;
 use cobre_sddp::ValidatedBoundaryCuts;
 use cobre_sddp::inject_boundary_cuts;
-use cobre_sddp::load_boundary_cuts;
 use cobre_sddp::policy::full_fcf_load::CheckedFullFcfLoad;
 use cobre_sddp::policy::full_fcf_load::FullFcfLoadKind;
 use cobre_sddp::policy::full_fcf_load::check_full_fcf_load;
 use cobre_sddp::policy::full_fcf_load::locate_policy_dir;
-use cobre_sddp::policy::orchestration::build_season_manifest;
-use cobre_sddp::study_horizon_end;
+use cobre_sddp::reconcile_boundary_policy;
 
 use crate::commands::broadcast::broadcast_value;
 use crate::error::CliError;
@@ -116,56 +113,21 @@ pub(super) fn apply_training_policy(
                               reports present — internal invariant violated"
                         .to_string(),
                 })?;
-            let boundary_path = bp.checkpoint_path(&ctx.case_dir);
-            // Rationale: the cast cannot truncate — `state_dimension` counts FCF
-            // state variables (one per reservoir/lag), bounded by the validated
-            // study dimensions and far below `u32::MAX`.
-            #[allow(clippy::cast_possible_truncation)]
-            let state_dim = setup.fcf.state_dimension as u32;
-            let current_manifest = setup.build_terminal_entity_manifest(system);
-            let fixed_windows = setup.build_terminal_fixed_post_horizon_windows(system);
-            let Some(boundary_date) = study_horizon_end(system) else {
-                return Err(CliError::Validation {
-                    report: format!(
-                        "case {}: the study declares no non-negative stage, so it has no \
-                         boundary date to load a boundary policy against",
-                        ctx.case_dir.display()
-                    ),
-                    already_rendered: false,
-                });
-            };
-            // The depth the state layout already reserved (read off the constructed
-            // setup, not re-inferred from the checkpoint), so the load-time depth
-            // guard is a defensive check, never a user error.
-            let effective_inflow_lag_depth = setup.boundary_requirements().inflow_lag_depth();
-            let study_seasons = build_season_manifest(system);
-            let validated = load_boundary_cuts(
-                &BoundaryLoadRequest::new(
-                    &boundary_path,
-                    boundary_date,
-                    state_dim,
-                    &current_manifest,
-                    setup.inputs.stage_data.stage_templates.cost_scale_factor,
-                )
-                .with_fixed_windows(&fixed_windows)
-                .with_inflow_lag_depth(effective_inflow_lag_depth)
-                .with_study_seasons(&study_seasons)
-                .with_strict(bp.strict),
-            )
-            .map_err(CliError::from)?;
+            let reconciled = reconcile_boundary_policy(setup, system, bp, &ctx.case_dir)
+                .map_err(CliError::from)?;
             if !ctx.quiet {
                 print_boundary_summary(
                     &ctx.stderr,
-                    validated.len(),
-                    boundary_date,
-                    &boundary_path,
-                    validated.report(),
+                    reconciled.cuts.len(),
+                    reconciled.boundary_date,
+                    &reconciled.checkpoint_path,
+                    reconciled.cuts.report(),
                 );
             }
-            for line in validated.report().detail_lines() {
+            for line in reconciled.cuts.report().detail_lines() {
                 tracing::debug!("{line}");
             }
-            Some(validated.to_vec())
+            Some(reconciled.cuts.to_vec())
         } else {
             None
         };

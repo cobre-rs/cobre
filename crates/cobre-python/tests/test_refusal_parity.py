@@ -17,6 +17,8 @@ import shutil
 from collections.abc import Callable
 from typing import Any
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 _REPO_ROOT = pathlib.Path(__file__).parents[3]
@@ -106,6 +108,47 @@ def _parent_directory_policy_path(case: pathlib.Path) -> None:
     _set_policy_path(case, "..")
 
 
+def _historical_forward_scheme(case: pathlib.Path) -> None:
+    def edit(config: Any) -> None:
+        config["training"]["scenario_source"]["inflow"] = {"scheme": "historical"}
+
+    _edit_json(case / "config.json", edit)
+
+
+def _write_inflow_seasonal_stats_with_zero_deviation_at_stage_3(
+    path: pathlib.Path,
+) -> None:
+    stage_ids = list(range(-2, 12))
+    table = pa.table(
+        {
+            "hydro_id": pa.array([0] * len(stage_ids), type=pa.int32()),
+            "stage_id": pa.array(stage_ids, type=pa.int32()),
+            "mean_m3s": pa.array([200.0] * len(stage_ids), type=pa.float64()),
+            "std_m3s": pa.array(
+                [0.0 if stage == 3 else 50.0 for stage in stage_ids],
+                type=pa.float64(),
+            ),
+        }
+    )
+    pq.write_table(table, path, compression="none")
+
+
+def _historical_forward_scheme_with_a_zero_deviation_season(
+    case: pathlib.Path,
+) -> None:
+    def edit(config: Any) -> None:
+        config["training"]["scenario_source"] = {
+            "seed": 1,
+            "inflow": {"scheme": "historical"},
+        }
+        config["estimation"] = {"max_order": 0}
+
+    _edit_json(case / "config.json", edit)
+    _write_inflow_seasonal_stats_with_zero_deviation_at_stage_3(
+        case / "scenarios" / "inflow_seasonal_stats.parquet"
+    )
+
+
 ROWS = [
     _row(
         name="travel_time_negative",
@@ -177,6 +220,22 @@ ROWS = [
         outcome="BracketedRefusal",
         kind="SchemaViolation",
         fragment="names the output directory or one of its ancestors",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="historical_forward_scheme_without_inflow_history",
+        base_case="1dtoy",
+        mutate=_historical_forward_scheme,
+        outcome="PlainRefusal",
+        fragment="no valid historical windows found",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="historical_forward_scheme_with_a_zero_deviation_season",
+        base_case="deterministic/d26-estimated-par2",
+        mutate=_historical_forward_scheme_with_a_zero_deviation_season,
+        outcome="PlainRefusal",
+        fragment="V2.3: historical library contains non-finite eta",
         error_class_name="ValidationError",
     ),
 ]

@@ -186,6 +186,27 @@ pub fn write_success_marker(phase_dir: &Path) -> Result<(), OutputError> {
     std::fs::write(&marker_path, b"").map_err(|e| OutputError::io(&marker_path, e))
 }
 
+/// Remove the `_SUCCESS` marker from a phase directory.
+///
+/// Callers invoke this before the phase's first write, so a reused output
+/// directory never shows the previous run's marker beside files the new run
+/// is still writing, and a run that fails mid-phase leaves no marker. A missing
+/// marker or a missing `phase_dir` is success.
+///
+/// # Errors
+///
+/// Returns [`OutputError::IoError`] when the marker exists but cannot be
+/// removed (for example, `_SUCCESS` is a directory): keeping it would keep a
+/// false marker.
+pub fn remove_success_marker(phase_dir: &Path) -> Result<(), OutputError> {
+    let marker_path = phase_dir.join(SUCCESS_MARKER_FILE);
+    match std::fs::remove_file(&marker_path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(OutputError::io(&marker_path, e)),
+    }
+}
+
 fn extract_max_iterations(config: &Config) -> Option<u32> {
     config
         .training
@@ -710,6 +731,38 @@ mod tests {
             "expected an IoError on the marker path, got {err:?}"
         );
         assert!(!phase_dir.exists(), "the phase dir must not be created");
+    }
+
+    #[test]
+    fn success_marker_remover_deletes_an_existing_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("_SUCCESS"), b"").unwrap();
+
+        remove_success_marker(tmp.path()).expect("remove_success_marker must succeed");
+
+        assert!(!tmp.path().join("_SUCCESS").exists());
+    }
+
+    #[test]
+    fn success_marker_remover_accepts_a_missing_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        remove_success_marker(tmp.path()).expect("a phase dir without a marker must succeed");
+        remove_success_marker(&tmp.path().join("training"))
+            .expect("a missing phase dir must succeed");
+    }
+
+    #[test]
+    fn success_marker_remover_reports_a_marker_it_cannot_remove() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("_SUCCESS")).unwrap();
+
+        let err = remove_success_marker(tmp.path()).expect_err("a directory marker must fail");
+
+        assert!(
+            matches!(&err, OutputError::IoError { path, .. } if path.ends_with("_SUCCESS")),
+            "expected an IoError on the marker path, got {err:?}"
+        );
     }
 
     #[test]

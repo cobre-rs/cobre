@@ -1702,3 +1702,62 @@ fn run_writes_no_simulation_marker_when_the_last_simulation_write_fails() {
         "simulation/_SUCCESS must not exist when a simulation write failed"
     );
 }
+
+#[test]
+fn run_clears_stale_markers_of_planned_phases_before_writing() {
+    let out = TempDir::new().unwrap();
+    write_file(out.path(), "training/_SUCCESS", "");
+    write_file(out.path(), "simulation/_SUCCESS", "");
+    write_file(out.path(), "training/solver", "");
+
+    cobre()
+        .args([
+            "run",
+            case_dir("1dtoy").to_str().unwrap(),
+            "--output",
+            out.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("training/solver"));
+
+    assert!(out.path().join("training/metadata.json").is_file());
+    assert!(
+        !out.path().join("training/_SUCCESS").exists(),
+        "the stale training/_SUCCESS must be removed before training writes"
+    );
+    assert!(
+        !out.path().join("simulation/_SUCCESS").exists(),
+        "the stale simulation/_SUCCESS must be removed before training when simulation is planned"
+    );
+}
+
+#[test]
+fn run_keeps_the_marker_of_a_phase_it_does_not_run() {
+    let dir = TempDir::new().unwrap();
+    make_valid_case(dir.path(), None, None, None, None);
+    let out = TempDir::new().unwrap();
+    write_file(out.path(), "simulation/_SUCCESS", "");
+
+    run_case(dir.path(), out.path());
+
+    assert_empty_file(&out.path().join("simulation/_SUCCESS"));
+    assert_empty_file(&out.path().join("training/_SUCCESS"));
+}
+
+#[test]
+fn simulation_only_run_keeps_the_training_marker() {
+    let dir = TempDir::new().unwrap();
+    copy_dir_recursive(&case_dir("1dtoy"), dir.path());
+    let out = TempDir::new().unwrap();
+    run_case(dir.path(), out.path());
+    rewrite_json(&dir.path().join("config.json"), |config| {
+        config["training"]["enabled"] = serde_json::json!(false);
+    });
+
+    run_case(dir.path(), out.path());
+
+    assert_empty_file(&out.path().join("training/_SUCCESS"));
+    assert_empty_file(&out.path().join("simulation/_SUCCESS"));
+}

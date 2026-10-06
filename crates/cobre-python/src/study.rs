@@ -19,13 +19,14 @@ use pyo3::exceptions::{PyIndexError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use cobre_io::remove_success_marker;
 use cobre_sddp::{
     FutureCostFunction, HydroModelSummary, ModelProvenanceReport, StochasticSummary, StudySetup,
     TrainingResult,
 };
 
 use crate::convert::pydict_to_json_map;
-use crate::errors::{ErrorSource, convert_error};
+use crate::errors::{ErrorSource, OUTPUT_WRITE_ERROR_PREFIX, convert_error};
 use crate::io::build_warnings_list;
 use crate::model::PySystem;
 use crate::run::{
@@ -348,6 +349,9 @@ impl Study {
 
         let phase_result: Result<(TrainingPhaseResult, Option<PyErr>), PhaseError> =
             run_in_scoped_pool(threads, |n| {
+                remove_success_marker(&output_dir.join("training")).map_err(|e| {
+                    format!("{OUTPUT_WRITE_ERROR_PREFIX}: stale training marker: {e}")
+                })?;
                 apply_training_policy_mode(setup, system, config, &output_dir, &case_dir)?;
 
                 let (training, callback_error) = match on_iteration {

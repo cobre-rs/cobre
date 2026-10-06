@@ -51,7 +51,8 @@ pub use manifest::{
 };
 pub use provenance::write_provenance_report;
 pub use results_writer::{
-    write_results, write_simulation_results, write_success_marker, write_training_results,
+    remove_success_marker, write_results, write_simulation_results, write_success_marker,
+    write_training_results,
 };
 pub use scaling_report::write_scaling_report;
 pub use simulation_writer::{SimulationParquetWriter, simulation_family_subpaths};

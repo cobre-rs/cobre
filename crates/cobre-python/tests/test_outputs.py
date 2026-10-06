@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import pathlib
 import shutil
+from typing import Any
 
 import pyarrow.parquet as pq
 import pytest
@@ -287,3 +288,92 @@ def test_run_writes_no_simulation_marker_when_the_last_simulation_write_fails(
     assert not (tmp_path / "simulation" / "metadata.json").exists()
     assert (tmp_path / "simulation" / "scenario_summary.parquet").is_file()
     assert (tmp_path / "training" / "_SUCCESS").is_file()
+
+
+def _seed_empty_markers(output_dir: pathlib.Path, *phases: str) -> None:
+    for phase in phases:
+        (output_dir / phase).mkdir(parents=True, exist_ok=True)
+        (output_dir / phase / "_SUCCESS").touch()
+
+
+def _marker_states(output_dir: pathlib.Path) -> tuple[bool, bool]:
+    return (
+        (output_dir / "training" / "_SUCCESS").exists(),
+        (output_dir / "simulation" / "_SUCCESS").exists(),
+    )
+
+
+def test_run_clears_stale_markers_before_training(tmp_path: pathlib.Path) -> None:
+    """A run into a reused directory shows neither stale marker while it trains."""
+    import cobre.run
+
+    _seed_empty_markers(tmp_path, "training", "simulation")
+    observed: list[tuple[bool, bool]] = []
+
+    def on_iteration(_event: dict[str, Any]) -> None:
+        observed.append(_marker_states(tmp_path))
+
+    cobre.run.run(VALID_CASE, output_dir=str(tmp_path), on_iteration=on_iteration)
+
+    assert observed, "on_iteration was never called"
+    assert set(observed) == {(False, False)}
+    assert _marker_states(tmp_path) == (True, True)
+
+
+def test_simulate_clears_stale_marker_before_its_first_write(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A simulate() whose first write fails leaves no stale simulation/_SUCCESS."""
+    import cobre
+    import cobre.errors
+
+    study = cobre.Study(VALID_CASE, output_dir=str(tmp_path / "trained"))
+    policy = study.train()
+    target = tmp_path / "target"
+    _seed_empty_markers(target, "simulation")
+    (target / "simulation" / "costs").touch()
+
+    with pytest.raises(cobre.errors.CobreError):
+        study.simulate(policy, output_dir=str(target))
+
+    assert not (target / "simulation" / "_SUCCESS").exists()
+
+
+def test_study_train_clears_only_its_own_marker(tmp_path: pathlib.Path) -> None:
+    """Study.train() hides the stale training marker and keeps the simulation one."""
+    import cobre
+
+    _seed_empty_markers(tmp_path, "training", "simulation")
+    study = cobre.Study(VALID_CASE, output_dir=str(tmp_path))
+    assert _marker_states(tmp_path) == (True, True)
+    observed: list[tuple[bool, bool]] = []
+
+    def on_iteration(_event: dict[str, Any]) -> None:
+        observed.append(_marker_states(tmp_path))
+
+    study.train(on_iteration=on_iteration)
+
+    assert observed, "on_iteration was never called"
+    assert set(observed) == {(False, True)}
+    assert _marker_states(tmp_path) == (True, True)
+
+
+def test_load_policy_then_simulate_elsewhere_keeps_the_trained_markers(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Loading a policy from X and simulating into Y leaves X's markers in place."""
+    import cobre
+    import cobre.results
+    import cobre.run
+
+    trained = tmp_path / "trained"
+    elsewhere = tmp_path / "elsewhere"
+    cobre.run.run(VALID_CASE, output_dir=str(trained))
+
+    study = cobre.Study(VALID_CASE, output_dir=str(trained))
+    policy = study.load_policy()
+    study.simulate(policy, output_dir=str(elsewhere))
+
+    assert _marker_states(trained) == (True, True)
+    assert (elsewhere / "simulation" / "_SUCCESS").is_file()
+    cobre.results.load_results(str(trained))

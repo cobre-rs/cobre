@@ -9694,6 +9694,7 @@ mod enumerated_external {
             cut_activity_tolerance: 0.0,
             budget: None,
             export_states: false,
+            checkpoint_schedule: None,
             scalar_parameters: Vec::new(),
             training_solver_backward: None,
             training_solver_forward: None,

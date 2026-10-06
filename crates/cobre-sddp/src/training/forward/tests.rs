@@ -646,7 +646,7 @@ fn ac_two_scenarios_three_stages_fixed_solution() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -755,7 +755,7 @@ fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -868,7 +868,7 @@ fn cost_statistics_accumulated_correctly() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1501,7 +1501,7 @@ fn run_one_iteration(
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -2185,7 +2185,7 @@ fn none_method_unchanged_with_truncation_code_present() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },

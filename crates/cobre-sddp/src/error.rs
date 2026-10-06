@@ -2,7 +2,7 @@
 
 use cobre_comm::CommError;
 use cobre_io::scenarios::estimation::EstimationError;
-use cobre_io::{LoadError, SOFTWARE_NAME, SOFTWARE_VERSION};
+use cobre_io::{LoadError, OutputError, SOFTWARE_NAME, SOFTWARE_VERSION};
 use cobre_solver::SolverError;
 use cobre_stochastic::StochasticError;
 
@@ -134,6 +134,16 @@ pub enum SddpError {
         /// Cut-row count the checkpoint recorded for this basis.
         found_cut_rows: usize,
     },
+
+    /// A checkpoint written during training could not be committed.
+    #[error("checkpoint write at iteration {iteration} failed: {source}")]
+    CheckpointWrite {
+        /// The iteration whose checkpoint failed.
+        iteration: u64,
+        /// The underlying write failure.
+        #[source]
+        source: OutputError,
+    },
 }
 
 fn describe_writer(software: Option<&str>, version: &str) -> String {
@@ -180,16 +190,31 @@ impl SddpError {
                 LoadError::ParseError { .. }
                 | LoadError::SchemaError { .. }
                 | LoadError::ConstraintError { .. },
-            ) => ErrorClass::InvalidInput,
+            )
+            | Self::CheckpointWrite {
+                source: OutputError::ForeignEntry { .. },
+                ..
+            } => ErrorClass::InvalidInput,
             Self::Io(LoadError::PolicyIncompatible { .. })
             | Self::PolicySoftwareMismatch { .. }
             | Self::StoredBasisDimensionMismatch { .. } => ErrorClass::IncompatiblePolicy,
-            Self::Io(LoadError::IoError { .. }) => ErrorClass::Io,
+            Self::Io(LoadError::IoError { .. })
+            | Self::CheckpointWrite {
+                source: OutputError::IoError { .. },
+                ..
+            } => ErrorClass::Io,
             Self::Infeasible { .. } | Self::Solver(_) => ErrorClass::Solver,
             Self::Communication(_)
             | Self::Simulation(_)
             | Self::WireVersionMismatch { .. }
-            | Self::BasisShapeMismatch { .. } => ErrorClass::Internal,
+            | Self::BasisShapeMismatch { .. }
+            | Self::CheckpointWrite {
+                source:
+                    OutputError::SerializationError { .. }
+                    | OutputError::SchemaError { .. }
+                    | OutputError::ManifestError { .. },
+                ..
+            } => ErrorClass::Internal,
         }
     }
 }
@@ -216,7 +241,7 @@ impl From<FphaFittingError> for SddpError {
 mod tests {
     use super::{ErrorClass, SddpError};
     use cobre_comm::CommError;
-    use cobre_io::{LoadError, SOFTWARE_NAME, SOFTWARE_VERSION};
+    use cobre_io::{LoadError, OutputError, SOFTWARE_NAME, SOFTWARE_VERSION};
     use cobre_solver::SolverError;
     use cobre_stochastic::StochasticError;
     use std::path::PathBuf;
@@ -616,9 +641,55 @@ mod tests {
                 },
                 ErrorClass::Internal,
             ),
+            (
+                SddpError::CheckpointWrite {
+                    iteration: 4,
+                    source: OutputError::IoError {
+                        path: PathBuf::from("out/policy.staging"),
+                        source: std::io::Error::other("no space left on device"),
+                    },
+                },
+                ErrorClass::Io,
+            ),
+            (
+                SddpError::CheckpointWrite {
+                    iteration: 4,
+                    source: OutputError::ForeignEntry {
+                        dir: PathBuf::from("out/policy"),
+                        entry: PathBuf::from("out/policy/notes.txt"),
+                    },
+                },
+                ErrorClass::InvalidInput,
+            ),
+            (
+                SddpError::CheckpointWrite {
+                    iteration: 4,
+                    source: OutputError::SerializationError {
+                        entity: "stage_cuts".to_string(),
+                        message: "buffer too large".to_string(),
+                    },
+                },
+                ErrorClass::Internal,
+            ),
         ];
         for (err, class) in table {
             assert_eq!(err.class(), class, "{err}");
         }
+    }
+
+    #[test]
+    fn display_checkpoint_write_names_the_iteration_and_the_write_failure() {
+        let err = SddpError::CheckpointWrite {
+            iteration: 7,
+            source: OutputError::IoError {
+                path: PathBuf::from("out/policy.staging"),
+                source: std::io::Error::other("no space left on device"),
+            },
+        };
+        assert_eq!(
+            err.to_string(),
+            "checkpoint write at iteration 7 failed: I/O error accessing out/policy.staging: \
+             no space left on device"
+        );
     }
 }

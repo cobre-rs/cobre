@@ -1,10 +1,12 @@
 //! `StudyParams` and associated constants.
 
+use std::path::Path;
+
 use cobre_core::ScalarParameter;
 use cobre_io::Config;
 use cobre_io::config::{
-    BackwardScheduler, ForwardPassesResolution, NumScenariosResolution, PhaseSolverProfileConfig,
-    StoppingRuleConfig,
+    BackwardScheduler, CheckpointSchedule, ForwardPassesResolution, NumScenariosResolution,
+    PhaseSolverProfileConfig, StoppingRuleConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -171,6 +173,9 @@ pub struct StudyParams {
     /// (`config.exports.states`). Overridable post-construction via
     /// [`StudySetup::set_export_states`](super::StudySetup::set_export_states).
     pub export_states: bool,
+    /// `policy.checkpointing`'s resolved schedule; `None` when periodic
+    /// checkpointing is off.
+    pub checkpoint_schedule: Option<CheckpointSchedule>,
     /// Caller-supplied scalar parameters from `constraints/generic_parameters.json`
     /// to ensure boundary-configured studies cannot build against an empty table by omission.
     pub scalar_parameters: Vec<ScalarParameter>,
@@ -183,6 +188,8 @@ impl StudyParams {
     /// # Errors
     ///
     /// - [`SddpError::Validation`] if cut selection config is invalid.
+    /// - [`SddpError::Io`] if `policy.checkpointing` is enabled without an
+    ///   interval of at least 1.
     pub fn from_config(
         config: &Config,
         scalar_parameters: Vec<ScalarParameter>,
@@ -339,6 +346,7 @@ impl StudyParams {
             // feeds them, so from_config leaves the placeholder for the caller to patch.
             boundary: BoundaryStateRequirements::none(),
             export_states: config.exports.states,
+            checkpoint_schedule: config.checkpoint_schedule(Path::new("config.json"))?,
             scalar_parameters,
         })
     }

@@ -100,6 +100,22 @@ checkpoint's graph shape, or a future selection mode disambiguating pools that
 share one `priced_state_date` by graph position. Until such a reader lands the
 field stays a write-only wire and Python-visible diagnostic surface.
 
+### `policy.checkpointing.compress` and `policy.checkpointing.store_basis`
+
+**What it is.** `crates/cobre-io/src/config/policy.rs` declares both keys on
+`CheckpointingConfig`. Both are loaded, validated and schema-exported, and
+nothing reads them. Periodic and final checkpoints are written uncompressed,
+and they store bases whenever the run captured them. The other three
+`policy.checkpointing` keys, `enabled`, `initial_iteration` and
+`interval_iterations`, resolve through `Config::checkpoint_schedule` into the
+schedule the periodic checkpoint writer consumes, so they are not reserved and
+are absent from this register.
+
+**Owner.** The training owner.
+
+**Consuming milestone.** Periodic checkpointing needs smaller or cheaper writes
+(`compress`), or a run needs checkpoints without stored bases (`store_basis`).
+
 ## Verified NOT reserved
 
 `historical_years` (`cobre_core::scenario::ScenarioSource`,

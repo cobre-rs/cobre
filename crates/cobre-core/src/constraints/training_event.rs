@@ -129,8 +129,8 @@ pub struct StageRowSelectionRecord {
 /// | 4b   | [`Self::PolicyBudgetEnforcementComplete`] | Budget cap enforcement done (every iteration when budget is set) |
 /// | 4c   | [`Self::PolicyTemplateFreezeComplete`] | Per-stage frozen template rebuild done (every iteration) |
 /// | 5    | [`Self::ConvergenceUpdate`]    | Stopping rules evaluated                               |
-/// | 6    | [`Self::CheckpointComplete`]   | Checkpoint written (conditional on checkpoint interval)|
-/// | 7    | [`Self::IterationSummary`]     | End-of-iteration aggregated summary                    |
+/// | 6    | [`Self::IterationSummary`]     | End-of-iteration aggregated summary                    |
+/// | 7    | [`Self::CheckpointComplete`]   | Periodic checkpoint committed (scheduled iterations)   |
 /// | pw   | [`Self::WorkerTiming`]         | Per-worker timing (2 × n\_workers per iteration)       |
 ///
 /// ## Lifecycle events
@@ -280,9 +280,7 @@ pub enum TrainingEvent {
         gap: f64,
     },
 
-    /// Checkpoint written.
-    ///
-    /// Only emitted when `iteration % checkpoint_interval == 0`.
+    /// Emitted by the writing rank after each periodic checkpoint is committed.
     CheckpointComplete {
         /// Iteration number.
         iteration: u64,
@@ -292,8 +290,8 @@ pub enum TrainingEvent {
         elapsed_ms: u64,
     },
 
-    /// Full iteration summary with aggregated timings, emitted as the final
-    /// per-iteration event.
+    /// Full iteration summary with aggregated timings; within an iteration only
+    /// [`Self::CheckpointComplete`] follows it.
     IterationSummary {
         /// Iteration number.
         iteration: u64,

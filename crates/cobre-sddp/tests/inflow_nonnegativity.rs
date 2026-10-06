@@ -500,7 +500,7 @@ fn train_fixture(
             },
             events: EventConfig {
                 event_sender: None,
-                checkpoint_interval: None,
+                periodic_checkpoint: None,
                 shutdown_flag: None,
                 export_states: false,
             },

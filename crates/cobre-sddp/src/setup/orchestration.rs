@@ -130,7 +130,7 @@ impl StudySetup {
             },
             events: EventConfig {
                 event_sender,
-                checkpoint_interval: None,
+                periodic_checkpoint: self.periodic_checkpoint.clone(),
                 shutdown_flag: shutdown_flag.map(Arc::clone),
                 export_states: self.events.export_states,
             },

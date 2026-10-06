@@ -394,7 +394,7 @@ fn test_stochastic_load_training_completes() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -519,7 +519,7 @@ fn test_deterministic_load_training_matches_baseline() {
             },
             events: EventConfig {
                 event_sender: None,
-                checkpoint_interval: None,
+                periodic_checkpoint: None,
                 shutdown_flag: None,
                 export_states: false,
             },
@@ -602,7 +602,7 @@ fn test_stochastic_load_seed_determinism() {
             },
             events: EventConfig {
                 event_sender: Some(tx),
-                checkpoint_interval: None,
+                periodic_checkpoint: None,
                 shutdown_flag: None,
                 export_states: false,
             },

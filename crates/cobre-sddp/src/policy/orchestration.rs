@@ -7,9 +7,10 @@
 //! `on_warning` callback on [`export_stochastic_artifacts`].
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
+use cobre_io::config::CheckpointSchedule;
 use cobre_io::output::policy::{
     CheckpointManifest, FORMAT_VERSION, GraphManifest, HydroSeasonOrders, ProducerBlock,
     SEASON_CYCLE_CODE_ABSENT, SEASON_CYCLE_CODE_CUSTOM, SEASON_CYCLE_CODE_MONTHLY,
@@ -430,6 +431,48 @@ pub fn write_checkpoint(
         &setup.inputs.node_graph,
         CheckpointState::of(training_result),
     )
+}
+
+/// The checkpoint a run writes on the iterations its `policy.checkpointing`
+/// schedule fires, built once by
+/// [`StudySetup::enable_periodic_checkpoints`](crate::setup::StudySetup::enable_periodic_checkpoints)
+/// with the final checkpoint's parameters and directory.
+#[derive(Debug, Clone)]
+pub struct PeriodicCheckpoint {
+    schedule: CheckpointSchedule,
+    policy_dir: PathBuf,
+    layout: CheckpointLayout,
+}
+
+impl PeriodicCheckpoint {
+    pub(crate) fn new(
+        schedule: CheckpointSchedule,
+        policy_dir: PathBuf,
+        layout: CheckpointLayout,
+    ) -> Self {
+        Self {
+            schedule,
+            policy_dir,
+            layout,
+        }
+    }
+
+    pub(crate) fn fires_at(&self, iteration: u64) -> bool {
+        self.schedule.fires_at(iteration)
+    }
+
+    pub(crate) fn policy_dir(&self) -> &Path {
+        &self.policy_dir
+    }
+
+    pub(crate) fn write(
+        &self,
+        fcf: &FutureCostFunction,
+        node_graph: &NodeGraph,
+        state: CheckpointState<'_>,
+    ) -> Result<(), OutputError> {
+        self.layout.write(&self.policy_dir, fcf, node_graph, state)
+    }
 }
 
 // ── Stochastic artifacts ──────────────────────────────────────────────────────

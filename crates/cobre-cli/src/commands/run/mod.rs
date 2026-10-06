@@ -148,6 +148,7 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
     match RunPhasePlan::resolve(training_enabled, setup.simulation_config.n_scenarios > 0) {
         RunPhasePlan::TrainedThenSimulated => {
             apply_training_policy(ctx, &system, &mut setup, root_config.as_ref(), policy_mode)?;
+            setup.enable_periodic_checkpoints(&system, &ctx.output_dir);
             let training_started_at = now_iso8601();
             let training = run_training_phase(ctx, &mut setup)?;
             let training_completed_at = now_iso8601();

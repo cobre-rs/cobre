@@ -129,7 +129,7 @@ pub struct CheckpointingConfig {
 /// A periodic checkpoint is written at [`Self::first_iteration`] and every
 /// [`Self::interval`] iterations after it. Iteration numbers are absolute, so a
 /// resumed run keeps the schedule of the run it resumes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckpointSchedule {
     pub(super) first_iteration: u64,
     pub(super) interval: NonZeroU64,

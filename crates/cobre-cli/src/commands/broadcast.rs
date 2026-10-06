@@ -6,7 +6,7 @@ use cobre_comm::Communicator;
 use cobre_core::scenario::ScenarioSource;
 use cobre_io::Config;
 use cobre_io::PolicyMode;
-use cobre_io::config::{BackwardScheduler, PhaseSolverProfileConfig};
+use cobre_io::config::{BackwardScheduler, CheckpointSchedule, PhaseSolverProfileConfig};
 use cobre_sddp::{
     BoundaryStateRequirements, CutSelectionStrategy, DEFAULT_MAX_ITERATIONS,
     InflowNonNegativityMethod, StoppingMode, StoppingRule, StoppingRuleSet, StudyParams,
@@ -108,6 +108,8 @@ pub(crate) struct BroadcastConfig {
     pub(crate) policy_mode: PolicyMode,
     /// Whether the visited-states archive is allocated for export.
     pub(crate) export_states: bool,
+    /// `policy.checkpointing`'s resolved schedule; every rank evaluates it.
+    pub(crate) checkpoint_schedule: Option<CheckpointSchedule>,
     /// Hard cap on active rows per stage; `None` means no cap. Sourced from
     /// `config.training.cut_selection.max_active_per_stage`.
     pub(crate) budget: Option<u32>,
@@ -212,6 +214,7 @@ impl BroadcastConfig {
             training_enabled: config.training.enabled,
             policy_mode: config.policy.mode,
             export_states: config.exports.states,
+            checkpoint_schedule: params.checkpoint_schedule,
             budget: params.budget,
             training_source,
             simulation_source,
@@ -777,6 +780,32 @@ mod tests {
             postcard::from_bytes(&bytes).expect("postcard deserialization must succeed");
         assert!(decoded.boundary.is_present());
         assert_eq!(decoded.boundary.inflow_lag_depth(), Some(12));
+    }
+
+    #[test]
+    fn broadcast_config_carries_the_checkpoint_schedule() {
+        use super::BroadcastConfig;
+
+        let json = r#"{
+            "training": {
+                "stopping_rules": [{ "type": "iteration_limit", "limit": 10 }]
+            },
+            "policy": {
+                "checkpointing": { "enabled": true, "initial_iteration": 3, "interval_iterations": 2 }
+            }
+        }"#;
+        let config: cobre_io::Config = serde_json::from_str(json).unwrap();
+        let original = BroadcastConfig::from_config(&config).unwrap();
+        let expected = config
+            .checkpoint_schedule(std::path::Path::new("config.json"))
+            .unwrap();
+        assert!(expected.is_some());
+        assert_eq!(original.checkpoint_schedule, expected);
+
+        let bytes = postcard::to_allocvec(&original).expect("postcard serialization must succeed");
+        let decoded: BroadcastConfig =
+            postcard::from_bytes(&bytes).expect("postcard deserialization must succeed");
+        assert_eq!(decoded.checkpoint_schedule, expected);
     }
 
     #[test]

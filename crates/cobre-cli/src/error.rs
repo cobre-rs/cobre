@@ -19,6 +19,7 @@ use cobre_io::OutputError;
 use cobre_sddp::ErrorClass;
 use cobre_sddp::SddpError;
 use cobre_sddp::SddpError::BasisShapeMismatch;
+use cobre_sddp::SddpError::CheckpointWrite;
 use cobre_sddp::SddpError::Communication;
 use cobre_sddp::SddpError::Infeasible;
 use cobre_sddp::SddpError::Io;
@@ -113,6 +114,28 @@ impl CliError {
             Self::Io { .. } => 2,
             Self::Solver { .. } => 3,
             Self::Internal { .. } => 4,
+        }
+    }
+
+    fn prefixed(self, prefix: &str) -> Self {
+        match self {
+            Self::Validation {
+                report,
+                already_rendered,
+            } => Self::Validation {
+                report: format!("{prefix}: {report}"),
+                already_rendered,
+            },
+            Self::Io { source, context } => Self::Io {
+                source,
+                context: format!("{prefix}: {context}"),
+            },
+            Self::Solver { message } => Self::Solver {
+                message: format!("{prefix}: {message}"),
+            },
+            Self::Internal { message } => Self::Internal {
+                message: format!("{prefix}: {message}"),
+            },
         }
     }
 
@@ -227,6 +250,10 @@ impl From<cobre_sddp::SddpError> for CliError {
         let class = err.class();
         let message = match err {
             Io(load_err) => return Self::from(load_err),
+            CheckpointWrite { iteration, source } => {
+                return Self::from(source)
+                    .prefixed(&format!("checkpoint write at iteration {iteration}"));
+            }
             Infeasible {
                 stage,
                 iteration,
@@ -680,6 +707,27 @@ mod tests {
                 col_basic: 4,
                 row_basic: 5,
             },
+            CheckpointWrite {
+                iteration: 2,
+                source: OutputError::IoError {
+                    path: PathBuf::from("out/policy.staging"),
+                    source: std::io::Error::other("no space left on device"),
+                },
+            },
+            CheckpointWrite {
+                iteration: 2,
+                source: OutputError::ForeignEntry {
+                    dir: PathBuf::from("out/policy"),
+                    entry: PathBuf::from("out/policy/notes.txt"),
+                },
+            },
+            CheckpointWrite {
+                iteration: 2,
+                source: OutputError::SerializationError {
+                    entity: "stage_cuts".to_string(),
+                    message: "buffer too large".to_string(),
+                },
+            },
         ];
         for err in errors {
             let expected = expected_exit_code(err.class());
@@ -750,6 +798,48 @@ mod tests {
             let description = err.to_string();
             assert_eq!(CliError::from(err).exit_code(), expected, "{description}");
         }
+    }
+
+    #[test]
+    fn checkpoint_write_failure_maps_like_its_output_error() {
+        let err = CheckpointWrite {
+            iteration: 2,
+            source: OutputError::IoError {
+                path: std::path::PathBuf::from("/proc/cobre-unwritable-policy.staging"),
+                source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            },
+        };
+        let cli_err = CliError::from(err);
+        assert!(matches!(cli_err, CliError::Io { .. }), "{cli_err:?}");
+        assert_eq!(cli_err.exit_code(), 2);
+        let CliError::Io { context, .. } = cli_err else {
+            unreachable!("checked above")
+        };
+        assert_eq!(
+            context,
+            "checkpoint write at iteration 2: /proc/cobre-unwritable-policy.staging"
+        );
+
+        let refusal = OutputError::ForeignEntry {
+            dir: std::path::PathBuf::from("out/policy"),
+            entry: std::path::PathBuf::from("out/policy/notes.txt"),
+        };
+        let display = refusal.to_string();
+        let cli_err = CliError::from(CheckpointWrite {
+            iteration: 2,
+            source: refusal,
+        });
+        assert!(
+            matches!(cli_err, CliError::Validation { .. }),
+            "{cli_err:?}"
+        );
+        let CliError::Validation { report, .. } = cli_err else {
+            unreachable!("checked above")
+        };
+        assert_eq!(
+            report,
+            format!("checkpoint write at iteration 2: {display}")
+        );
     }
 
     #[test]

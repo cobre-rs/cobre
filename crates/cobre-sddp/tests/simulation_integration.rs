@@ -622,7 +622,7 @@ fn train_simulate_write_cycle() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1301,7 +1301,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1455,7 +1455,7 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },

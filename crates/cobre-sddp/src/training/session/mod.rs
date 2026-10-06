@@ -47,6 +47,7 @@ use crate::{
     forward_pass_state::{ForwardPassInputs, ForwardPassState},
     lower_bound::LbEvalScratchBundle,
     lower_bound::evaluate_lower_bound,
+    policy::orchestration::CheckpointState,
     rank_reconcile::{StopInputs, agree_stop_inputs, reconcile_error_flag, reconcile_result},
     risk_measure::{RiskMeasure, uniform_effective_measure},
     setup::NodeGraph,
@@ -56,6 +57,7 @@ use crate::{
         aggregate_solver_statistics, pack_delta_scalars, unpack_delta_scalars,
     },
     state_exchange::ExchangeBuffers,
+    training::training::rank_local_basis_cache,
     training::{TrainingOutcome, TrainingResult, broadcast_basis_cache},
     workspace::{BasisStore, NoisePreallocation, WorkspacePool, WorkspaceSizing},
 };
@@ -266,6 +268,7 @@ where
         // stored by value; `export_states` is Copy and read directly.
         let event_sender = config.events.event_sender.take();
         let shutdown_flag = config.events.shutdown_flag.take();
+        let periodic_checkpoint = config.events.periodic_checkpoint.take();
         let export_states = config.events.export_states;
 
         let convergence_monitor = ConvergenceMonitor::with_iteration_budget(
@@ -289,7 +292,12 @@ where
             },
         );
 
-        let runtime = RuntimeHandles::new(event_sender, shutdown_flag, export_states);
+        let runtime = RuntimeHandles::new(
+            event_sender,
+            shutdown_flag,
+            export_states,
+            periodic_checkpoint,
+        );
 
         let results = TrainingResults::new(config.loop_config.start_iteration);
 
@@ -567,7 +575,61 @@ where
             return Ok(IterationOutcome::Converged);
         }
 
+        self.write_periodic_checkpoint(iteration)?;
+
         Ok(IterationOutcome::Continue)
+    }
+
+    /// Rank 0 writes the periodic checkpoint when the schedule fires at
+    /// `iteration`; every rank then agrees on the write's outcome, so a failed
+    /// write ends training on every rank at this iteration.
+    ///
+    /// # Errors
+    ///
+    /// [`SddpError::CheckpointWrite`] on rank 0 when the write fails, the peer
+    /// failure from [`reconcile_error_flag`] on every other rank.
+    fn write_periodic_checkpoint(&mut self, iteration: u64) -> Result<(), SddpError> {
+        let Some(periodic) = self.runtime.periodic_checkpoint() else {
+            return Ok(());
+        };
+        if !periodic.fires_at(iteration) {
+            return Ok(());
+        }
+
+        let start = Instant::now();
+        let local = if self.comm.rank() == 0 {
+            let basis_cache = rank_local_basis_cache(&self.basis_store);
+            periodic
+                .write(
+                    self.fcf,
+                    self.training_ctx.node_graph,
+                    CheckpointState {
+                        iterations: iteration,
+                        final_lb: self.results.final_lb,
+                        final_ub: self.results.final_ub,
+                        basis_cache: &basis_cache,
+                        visited_archive: self.visited_archive.as_ref(),
+                        lower_bound_history: self.convergence_monitor.lower_bound_history(),
+                    },
+                )
+                .map_err(|source| SddpError::CheckpointWrite { iteration, source })
+        } else {
+            Ok(())
+        };
+        let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        reconcile_error_flag(local, self.comm, &mut self.fwd_state.reconcile_scratch)?;
+
+        if self.comm.rank() == 0 {
+            emit(
+                self.runtime.event_sender(),
+                TrainingEvent::CheckpointComplete {
+                    iteration,
+                    checkpoint_path: periodic.policy_dir().display().to_string(),
+                    elapsed_ms,
+                },
+            );
+        }
+        Ok(())
     }
 
     /// Assemble and return the successful `TrainingOutcome`.
@@ -1898,7 +1960,7 @@ mod tests {
             },
             events: EventConfig {
                 event_sender: None,
-                checkpoint_interval: None,
+                periodic_checkpoint: None,
                 shutdown_flag: None,
                 export_states: false,
             },

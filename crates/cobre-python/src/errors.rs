@@ -11,7 +11,8 @@
 //! the raising paths. It accepts a concrete [`ErrorSource`] enum (never a
 //! `Box<dyn Trait>`) so the match is exhaustive: a newly added `LoadError` /
 //! `OutputError` variant fails the build, surfacing the need to map it. The
-//! `SddpError` match keeps explicit `Infeasible`/`Simulation` arms plus the
+//! `SddpError` match keeps explicit `Infeasible`/`Simulation` arms, a
+//! `CheckpointWrite` arm raising its `OutputError`'s class, plus the
 //! documented total `other => SolverError(None)` fallthrough (every other
 //! `SddpError` reaches this site only through the training/simulation phase
 //! helpers, whose failures are `RuntimeError`-shaped).
@@ -229,22 +230,7 @@ fn convert_error_with(py: Python<'_>, source: ErrorSource<'_>) -> PyErr {
                 new_leaf_err(py, &POLICY_INCOMPATIBLE_ERROR, &err.to_string())
             }
         },
-        ErrorSource::Output(err) => match err {
-            // A NotFound I/O error maps to the builtin FileNotFoundError (no typed
-            // class for it).
-            OutputError::IoError { source, .. }
-                if source.kind() == std::io::ErrorKind::NotFound =>
-            {
-                PyFileNotFoundError::new_err(err.to_string())
-            }
-            OutputError::IoError { .. } => case_io_error(py, &err.to_string()),
-            OutputError::SerializationError { .. } | OutputError::SchemaError { .. } => {
-                new_leaf_err(py, &OUTPUT_ERROR, &err.to_string())
-            }
-            OutputError::ManifestError { .. } | OutputError::ForeignEntry { .. } => {
-                validation_error(py, &err.to_string())
-            }
-        },
+        ErrorSource::Output(err) => output_error(py, err, &err.to_string()),
         ErrorSource::Sddp { error, message } => match error {
             SddpError::Infeasible {
                 stage,
@@ -252,6 +238,9 @@ fn convert_error_with(py: Python<'_>, source: ErrorSource<'_>) -> PyErr {
                 scenario,
             } => solver_error_infeasible(py, &message, *stage, *iteration, *scenario),
             SddpError::Simulation(_) => new_leaf_err(py, &SIMULATION_ERROR, &message),
+            SddpError::CheckpointWrite { source, .. } => {
+                output_error(py, source, &error.to_string())
+            }
             _other => solver_error_plain(py, &message),
         },
         ErrorSource::PolicyLoad(err) => match err {
@@ -273,6 +262,24 @@ fn convert_error_with(py: Python<'_>, source: ErrorSource<'_>) -> PyErr {
             }
         },
         ErrorSource::Message(msg) => message_prefix_to_pyerr(py, &msg),
+    }
+}
+
+/// The class an [`OutputError`] raises as, carrying `message`.
+fn output_error(py: Python<'_>, err: &OutputError, message: &str) -> PyErr {
+    match err {
+        // A NotFound I/O error maps to the builtin FileNotFoundError (no typed
+        // class for it).
+        OutputError::IoError { source, .. } if source.kind() == std::io::ErrorKind::NotFound => {
+            PyFileNotFoundError::new_err(message.to_string())
+        }
+        OutputError::IoError { .. } => case_io_error(py, message),
+        OutputError::SerializationError { .. } | OutputError::SchemaError { .. } => {
+            new_leaf_err(py, &OUTPUT_ERROR, message)
+        }
+        OutputError::ManifestError { .. } | OutputError::ForeignEntry { .. } => {
+            validation_error(py, message)
+        }
     }
 }
 
@@ -436,9 +443,11 @@ pub(crate) fn register_errors(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ErrorSource, INTERNAL_ERROR, LeafClass, POLICY_INCOMPATIBLE_ERROR, SIMULATION_ERROR,
-        SOLVER_ERROR, VALIDATION_ERROR, convert_error_with,
+        CASE_IO_ERROR, ErrorSource, INTERNAL_ERROR, LeafClass, OUTPUT_ERROR,
+        POLICY_INCOMPATIBLE_ERROR, SIMULATION_ERROR, SOLVER_ERROR, VALIDATION_ERROR,
+        convert_error_with,
     };
+    use cobre_io::OutputError;
     use cobre_sddp::SddpError;
     use cobre_sddp::policy::full_fcf_load::{FullFcfLoadError, FullFcfLoadKind};
     use pyo3::prelude::*;
@@ -533,6 +542,46 @@ mod tests {
             assert!(value.getattr("scenario").unwrap().is_none());
             let solver_rendered: String = value.str().unwrap().extract().unwrap();
             assert_eq!(solver_rendered, solver_msg);
+        });
+    }
+
+    /// A failed checkpoint write raises its `OutputError`'s class, with the SDDP
+    /// error's own text as the message.
+    #[test]
+    fn convert_error_checkpoint_write_raises_its_output_error_class() {
+        Python::initialize();
+        Python::attach(|py| {
+            for (source, leaf) in [
+                (
+                    OutputError::IoError {
+                        path: std::path::PathBuf::from("out/policy.staging"),
+                        source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                    },
+                    &CASE_IO_ERROR,
+                ),
+                (
+                    OutputError::SerializationError {
+                        entity: "stage_cuts".to_string(),
+                        message: "buffer too large".to_string(),
+                    },
+                    &OUTPUT_ERROR,
+                ),
+            ] {
+                let error = SddpError::CheckpointWrite {
+                    iteration: 2,
+                    source,
+                };
+                let err = convert_error_with(
+                    py,
+                    ErrorSource::Sddp {
+                        error: &error,
+                        message: format!("training failed after 2 iterations: {error}"),
+                    },
+                );
+                assert_leaf(py, &err, leaf);
+                let rendered: String = err.value(py).str().unwrap().extract().unwrap();
+                assert_eq!(rendered, error.to_string());
+            }
         });
     }
 

@@ -427,7 +427,7 @@ fn ac_train_completes_with_iteration_limit() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -508,7 +508,7 @@ fn ac_train_returns_partial_on_infeasible() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -602,7 +602,7 @@ fn ac_train_emits_correct_event_sequence() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -780,7 +780,7 @@ fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -929,7 +929,7 @@ fn ac_train_result_fields_populated() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1010,7 +1010,7 @@ fn ac_train_with_no_event_sender() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1088,7 +1088,7 @@ fn ac_total_time_ms_is_non_negative() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1174,7 +1174,7 @@ fn cut_selection_none_skips_step() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1269,7 +1269,7 @@ fn cut_selection_level1_runs_at_frequency() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1373,7 +1373,7 @@ fn cut_selection_stage0_exempt_preserves_cuts() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1487,7 +1487,7 @@ fn existing_train_tests_pass_with_none() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1570,7 +1570,7 @@ fn ac_train_partial_result_on_mid_iteration_failure() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1674,7 +1674,7 @@ fn start_iteration_resumes_from_offset() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1757,7 +1757,7 @@ fn start_iteration_at_or_beyond_max_runs_zero_iterations() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -2494,7 +2494,7 @@ fn template_freeze_event_emitted() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },

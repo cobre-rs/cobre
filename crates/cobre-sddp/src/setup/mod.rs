@@ -116,6 +116,7 @@ use crate::{
         AnticipatedLocal, AnticipatedPlants, CutStateProjection, HydroCellIndex, HydroSys,
         StateSpace, StudyDimensions, ThermalSys,
     },
+    policy::orchestration::PeriodicCheckpoint,
     risk_measure::{RiskMeasure, uniform_effective_measure},
     simulation::EntityCounts,
     simulation::extraction::TransitSeedArc,
@@ -210,10 +211,13 @@ pub struct StudySetup {
 
     /// Pure-data event flags (output-side).
     ///
-    /// Runtime handles (`event_sender`, `shutdown_flag`) and deferred fields
-    /// (`checkpoint_interval`) are excluded and supplied per-call in
-    /// [`StudySetup::train`].
+    /// Runtime handles (`event_sender`, `shutdown_flag`) are excluded and
+    /// supplied per-call in [`StudySetup::train`].
     pub(crate) events: EventParams,
+
+    /// Set by [`StudySetup::enable_periodic_checkpoints`]; every
+    /// [`StudySetup::train`] call writes it on its schedule.
+    pub(crate) periodic_checkpoint: Option<PeriodicCheckpoint>,
 
     /// Resolved backward-pass solver profile (`training.solver.backward`, layered
     /// over the current per-phase constant — see
@@ -461,7 +465,9 @@ impl StudySetup {
             policy_path: config.policy_path,
             events: EventParams {
                 export_states: config.export_states,
+                checkpoint_schedule: config.checkpoint_schedule,
             },
+            periodic_checkpoint: None,
             backward_profile,
             forward_profile,
             backward_scheduler: config.backward_scheduler,

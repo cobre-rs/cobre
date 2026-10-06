@@ -1,5 +1,7 @@
 //! Accessor methods and context builders for [`StudySetup`].
 
+use std::path::Path;
+
 use cobre_core::AnticipatedCommitmentHistory;
 use cobre_core::System;
 #[cfg(any(test, feature = "test-support"))]
@@ -16,6 +18,7 @@ use crate::{
     cut::FutureCostFunction,
     energy_conversion::EnergyConversionSet,
     indexer::StateSpace,
+    policy::orchestration::{CheckpointLayout, CheckpointParams, PeriodicCheckpoint},
     simulation::SimulationConfig,
     workspace::CapturedBasis,
 };
@@ -56,6 +59,34 @@ impl StudySetup {
     /// Enable state archiving for export.
     pub fn set_export_states(&mut self, export: bool) {
         self.events.export_states = export;
+    }
+
+    /// Have every later [`Self::train`] write a checkpoint to
+    /// `output_dir.join(&self.policy_path)` on the iterations the
+    /// `policy.checkpointing` schedule fires; does nothing when it is off.
+    ///
+    /// Call it on every rank: each rank evaluates the schedule and joins the
+    /// write's error agreement, and rank 0 writes. `system` is passed explicitly
+    /// because [`StudySetup`] does not own it.
+    pub fn enable_periodic_checkpoints(&mut self, system: &System, output_dir: &Path) {
+        let Some(schedule) = self.events.checkpoint_schedule else {
+            return;
+        };
+        let layout = CheckpointLayout::new(
+            self,
+            system,
+            CheckpointParams {
+                max_iterations: self.loop_params.max_iterations,
+                forward_passes: self.loop_params.forward_passes,
+                seed: self.loop_params.seed,
+                export_states: self.events.export_states,
+            },
+        );
+        self.periodic_checkpoint = Some(PeriodicCheckpoint::new(
+            schedule,
+            output_dir.join(&self.policy_path),
+            layout,
+        ));
     }
 
     /// Test-support hook: override the per-stage backward-pass risk measures

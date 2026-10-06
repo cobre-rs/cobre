@@ -565,7 +565,7 @@ fn run_one_deterministic_pass(
             },
             events: EventConfig {
                 event_sender: None,
-                checkpoint_interval: None,
+                periodic_checkpoint: None,
                 shutdown_flag: None,
                 export_states: false,
             },
@@ -625,7 +625,7 @@ fn train_converges_with_mock_solver() {
         },
         events: EventConfig {
             event_sender: None,
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -722,7 +722,7 @@ fn train_lb_monotonically_nondecreasing() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -808,7 +808,7 @@ fn train_emits_correct_event_sequence() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -908,7 +908,7 @@ fn train_stops_at_iteration_limit() {
             },
             events: EventConfig {
                 event_sender: None,
-                checkpoint_interval: None,
+                periodic_checkpoint: None,
                 shutdown_flag: None,
                 export_states: false,
             },
@@ -986,7 +986,7 @@ fn train_with_a_shutdown_during_iteration_1(level: usize) -> cobre_sddp::Trainin
             },
             events: EventConfig {
                 event_sender: None,
-                checkpoint_interval: None,
+                periodic_checkpoint: None,
                 shutdown_flag: Some(Arc::clone(&shutdown_flag)),
                 export_states: false,
             },
@@ -1083,7 +1083,7 @@ fn train_propagates_infeasible_error() {
             },
             events: EventConfig {
                 event_sender: None,
-                checkpoint_interval: None,
+                periodic_checkpoint: None,
                 shutdown_flag: None,
                 export_states: false,
             },
@@ -1165,7 +1165,7 @@ fn d17_level1_cut_selection_convergence() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1310,7 +1310,7 @@ fn d17_level1_cut_selection_reconstruction() {
             },
             events: EventConfig {
                 event_sender: None,
-                checkpoint_interval: None,
+                periodic_checkpoint: None,
                 shutdown_flag: None,
                 export_states: false,
             },
@@ -1393,7 +1393,7 @@ fn d18_lml1_cut_selection_convergence() {
         },
         events: EventConfig {
             event_sender: Some(tx),
-            checkpoint_interval: None,
+            periodic_checkpoint: None,
             shutdown_flag: None,
             export_states: false,
         },
@@ -1580,7 +1580,7 @@ fn frozen_backward_pass_smoke_test() {
             },
             events: EventConfig {
                 event_sender: None,
-                checkpoint_interval: None,
+                periodic_checkpoint: None,
                 shutdown_flag: None,
                 export_states: false,
             },

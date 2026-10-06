@@ -7,6 +7,7 @@ use std::sync::mpsc::Sender;
 use cobre_core::TrainingEvent;
 
 use crate::config::ShutdownSource;
+use crate::policy::orchestration::PeriodicCheckpoint;
 
 /// Per-invocation runtime integration hooks, kept separate from the long-lived
 /// study configuration — mirrors the `EventParams` projection on `StudySetup`.
@@ -17,25 +18,32 @@ pub(crate) struct RuntimeHandles {
     // field exists for symmetry and is asserted by the constructor unit test.
     #[allow(dead_code)]
     pub export_states: bool,
+    periodic_checkpoint: Option<PeriodicCheckpoint>,
 }
 
 impl RuntimeHandles {
-    /// Construct the handles from the three per-invocation values.
+    /// Construct the handles from the four per-invocation values.
     pub(crate) fn new(
         event_sender: Option<Sender<TrainingEvent>>,
         shutdown_flag: Option<Arc<AtomicUsize>>,
         export_states: bool,
+        periodic_checkpoint: Option<PeriodicCheckpoint>,
     ) -> Self {
         Self {
             event_sender,
             shutdown_flag,
             export_states,
+            periodic_checkpoint,
         }
     }
 
     /// Return a borrowed reference to the event sender, if present.
     pub(crate) fn event_sender(&self) -> Option<&Sender<TrainingEvent>> {
         self.event_sender.as_ref()
+    }
+
+    pub(crate) fn periodic_checkpoint(&self) -> Option<&PeriodicCheckpoint> {
+        self.periodic_checkpoint.as_ref()
     }
 
     /// The strongest shutdown request made so far, if any. The only read of the
@@ -70,21 +78,22 @@ mod tests {
 
     #[test]
     fn runtime_handles_new_stores_inputs() {
-        let runtime = RuntimeHandles::new(None, None, true);
+        let runtime = RuntimeHandles::new(None, None, true, None);
         assert!(runtime.event_sender.is_none());
         assert!(runtime.shutdown_flag.is_none());
         assert!(runtime.export_states);
+        assert!(runtime.periodic_checkpoint().is_none());
     }
 
     #[test]
     fn shutdown_requested_maps_the_shared_level() {
         assert_eq!(
-            RuntimeHandles::new(None, None, false).shutdown_requested(),
+            RuntimeHandles::new(None, None, false, None).shutdown_requested(),
             None
         );
 
         let flag = Arc::new(AtomicUsize::new(0));
-        let runtime = RuntimeHandles::new(None, Some(Arc::clone(&flag)), false);
+        let runtime = RuntimeHandles::new(None, Some(Arc::clone(&flag)), false, None);
         for (level, expected) in [
             (0, None),
             (1, Some(ShutdownSource::Cooperative)),
@@ -105,7 +114,7 @@ mod tests {
     #[test]
     fn runtime_handles_event_sender_returns_borrowed_ref() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let runtime = RuntimeHandles::new(Some(tx), None, false);
+        let runtime = RuntimeHandles::new(Some(tx), None, false, None);
 
         assert!(runtime.event_sender().is_some());
 

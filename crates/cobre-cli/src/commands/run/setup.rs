@@ -448,6 +448,7 @@ fn build_study_setup(
         cut_activity_tolerance: bcast_config.cut_activity_tolerance,
         budget: bcast_config.budget,
         export_states: bcast_config.export_states,
+        checkpoint_schedule: bcast_config.checkpoint_schedule,
         scalar_parameters,
         training_solver_backward,
         training_solver_forward,

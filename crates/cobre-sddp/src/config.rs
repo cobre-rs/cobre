@@ -23,13 +23,13 @@
 //!         ..CutManagementConfig::default()
 //!     },
 //!     events: EventConfig {
-//!         checkpoint_interval: Some(50),
+//!         export_states: true,
 //!         ..EventConfig::default()
 //!     },
 //! };
 //! assert_eq!(config.loop_config.forward_passes, 10);
 //! assert_eq!(config.loop_config.max_iterations, 200);
-//! assert_eq!(config.events.checkpoint_interval, Some(50));
+//! assert!(config.events.export_states);
 //! ```
 
 use std::sync::Arc;
@@ -37,8 +37,10 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc::Sender;
 
 use cobre_core::TrainingEvent;
+use cobre_io::config::CheckpointSchedule;
 
 use crate::cut_selection::CutSelectionStrategy;
+use crate::policy::orchestration::PeriodicCheckpoint;
 use crate::risk_measure::RiskMeasure;
 use crate::stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet};
 
@@ -159,8 +161,8 @@ impl Default for CutManagementConfig {
 /// ```rust
 /// use cobre_sddp::config::EventConfig;
 ///
-/// let cfg = EventConfig { checkpoint_interval: Some(10), ..EventConfig::default() };
-/// assert_eq!(cfg.checkpoint_interval, Some(10));
+/// let cfg = EventConfig { export_states: true, ..EventConfig::default() };
+/// assert!(cfg.periodic_checkpoint.is_none());
 /// ```
 #[derive(Debug, Default)]
 pub struct EventConfig {
@@ -168,8 +170,10 @@ pub struct EventConfig {
     /// The receiver must be drained on another thread or it blocks the loop.
     pub event_sender: Option<Sender<TrainingEvent>>,
 
-    /// Iterations between checkpoint writes (`iteration % n == 0`); `None` writes none.
-    pub checkpoint_interval: Option<u64>,
+    /// The periodic checkpoint the writing rank commits on scheduled non-stop
+    /// iterations; `None` writes none. Built by
+    /// [`StudySetup::enable_periodic_checkpoints`](crate::setup::StudySetup::enable_periodic_checkpoints).
+    pub periodic_checkpoint: Option<PeriodicCheckpoint>,
 
     /// Shutdown request, read once per iteration just before the stop decision.
     ///
@@ -218,12 +222,14 @@ impl ShutdownSource {
 /// Pure-data event parameters stored on [`crate::setup::StudySetup`].
 ///
 /// Projection of [`EventConfig`] to the fields stable across invocations and
-/// safe to persist; the runtime handles (`event_sender`, `shutdown_flag`) and
-/// `checkpoint_interval` are excluded.
+/// safe to persist; the runtime handles (`event_sender`, `shutdown_flag`) are
+/// excluded, and the periodic checkpoint is kept as its schedule.
 #[derive(Debug)]
 pub(crate) struct EventParams {
     /// See [`EventConfig::export_states`].
     pub(crate) export_states: bool,
+    /// `policy.checkpointing`'s resolved schedule; `None` when off.
+    pub(crate) checkpoint_schedule: Option<CheckpointSchedule>,
 }
 
 /// Parameters controlling the SDDP training loop.
@@ -281,34 +287,6 @@ mod tests {
         };
         assert_eq!(config.loop_config.forward_passes, 10);
         assert_eq!(config.loop_config.max_iterations, 100);
-    }
-
-    #[test]
-    fn checkpoint_interval_none_and_some() {
-        let config_none = TrainingConfig {
-            loop_config: LoopConfig {
-                forward_passes: 5,
-                max_iterations: 50,
-                ..LoopConfig::default()
-            },
-            cut_management: CutManagementConfig::default(),
-            events: EventConfig::default(),
-        };
-        assert!(config_none.events.checkpoint_interval.is_none());
-
-        let config_some = TrainingConfig {
-            loop_config: LoopConfig {
-                forward_passes: 5,
-                max_iterations: 50,
-                ..LoopConfig::default()
-            },
-            cut_management: CutManagementConfig::default(),
-            events: EventConfig {
-                checkpoint_interval: Some(10),
-                ..EventConfig::default()
-            },
-        };
-        assert_eq!(config_some.events.checkpoint_interval, Some(10));
     }
 
     // ── Event sender ─────────────────────────────────────────────────────────

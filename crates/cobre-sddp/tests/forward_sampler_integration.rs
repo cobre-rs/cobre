@@ -1436,6 +1436,7 @@ fn historical_training_is_bit_identical_with_or_without_a_scenario_seed() {
                     ncs: Some(source.ncs_scheme),
                 },
                 ctx,
+                forward_seed: ctx.forward_seed(),
                 stages: &stages,
                 historical_library: setup.inputs.scenario_libraries.training.historical.as_ref(),
                 external_inflow_library: None,

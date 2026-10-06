@@ -722,6 +722,7 @@ fn simulation_load_patches_applied() {
         n_scenarios: 1,
         io_channel_capacity: 4,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let state = test_support::state_layout(1, 0);
     let horizon = HorizonMode::Finite {
@@ -872,6 +873,7 @@ fn simulation_no_load_buses_unchanged() {
         n_scenarios: 1,
         io_channel_capacity: 4,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -973,6 +975,7 @@ fn simulation_state_set_profile_reaches_current_profile_after_run() {
         n_scenarios: 1,
         io_channel_capacity: 4,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -1094,6 +1097,7 @@ fn simulation_inflow_extraction_unaffected() {
         n_scenarios: 1,
         io_channel_capacity: 4,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -1419,6 +1423,7 @@ fn simulation_truncation_clamps_negative_inflow_noise() {
         n_scenarios: 4,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -1528,6 +1533,7 @@ fn simulation_none_method_produces_raw_negative_noise() {
         n_scenarios: 4,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,

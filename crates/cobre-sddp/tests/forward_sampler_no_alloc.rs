@@ -228,6 +228,7 @@ fn make_sampler_config<'a>(
             ncs: Some(scheme),
         },
         ctx,
+        forward_seed: ctx.forward_seed(),
         stages,
         historical_library: None,
         external_inflow_library: None,

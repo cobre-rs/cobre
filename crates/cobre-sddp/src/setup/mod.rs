@@ -407,8 +407,12 @@ impl StudySetup {
             config.training_enumerated,
         )?;
 
-        let (loop_params, simulation_config) =
-            resolve_phase_configs(&node_graph, &config, simulation_profile)?;
+        let (loop_params, simulation_config) = resolve_phase_configs(
+            &node_graph,
+            &config,
+            simulation_profile,
+            stochastic.forward_seed(),
+        )?;
 
         let (fcf, cut_state_layouts) =
             build_future_cost_function(system, &stage_data.state, &node_graph, &loop_params);
@@ -1653,6 +1657,7 @@ fn resolve_phase_configs(
     node_graph: &NodeGraph,
     config: &StudyParams,
     simulation_profile: ActiveProfile,
+    simulation_forward_seed: Option<u64>,
 ) -> Result<(LoopParams, SimulationConfig), SddpError> {
     // Resolves any `enumerated`-declared phase's actual count now that the
     // graph exists — config load could only signal the request, never the
@@ -1689,6 +1694,7 @@ fn resolve_phase_configs(
             n_scenarios,
             io_channel_capacity: config.io_channel_capacity,
             profile: simulation_profile,
+            forward_seed: simulation_forward_seed,
         },
     ))
 }

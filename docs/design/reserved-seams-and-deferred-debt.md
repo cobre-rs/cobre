@@ -683,6 +683,23 @@ caught.
 **Trigger.** A writer's output path changes, or a consumer of the exported
 output registry checks the registry paths against a run.
 
+### Per-phase forward-seed carriers
+
+**What it is.** The out-of-sample root seed reaches `ForwardSamplerConfig::forward_seed`
+from two carriers. The training phase reads `StochasticContext::forward_seed()`, which the
+context stores at build time from the training scenario source and never reads itself. The
+simulation phase reads `SimulationConfig::forward_seed`, which
+`StudySetup::from_broadcast_params` passes to `resolve_phase_configs`. Every other per-phase
+sampler input (the class schemes and the scenario libraries) rides on `TrainingContext`, set
+by `training_ctx()` and `simulation_ctx()`. Moving both seeds onto `TrainingContext` and
+dropping the context's stored seed touches every `TrainingContext` literal and every
+`build_stochastic_context` call.
+
+**Owner.** The training and simulation pipeline owner.
+
+**Trigger.** A change adds another per-phase sampler input, or groups `TrainingContext`'s
+per-phase fields; the two seeds then move with them.
+
 ## Deferred-debt register — whole-lifecycle audit findings
 
 Findings of the full `cobre run` lifecycle read, described by behavior. Each

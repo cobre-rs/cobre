@@ -83,6 +83,7 @@ pub enum SimulationWeighting<'a> {
 ///     n_scenarios: 1,
 ///     io_channel_capacity: 1,
 ///     profile: Phase::Simulation.profile(),
+///     forward_seed: None,
 /// };
 /// let comm = LocalBackend;
 ///
@@ -285,6 +286,7 @@ mod tests {
             n_scenarios: n,
             io_channel_capacity: 1,
             profile: crate::solve::solver_phase::Phase::Simulation.profile(),
+            forward_seed: None,
         }
     }
 

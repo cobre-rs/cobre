@@ -768,6 +768,7 @@ fn train_simulate_write_cycle() {
         n_scenarios: 2,
         io_channel_capacity: 4,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
 
     let entity_counts = default_single_hydro_entity_counts();
@@ -1346,6 +1347,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         n_scenarios: 1,
         io_channel_capacity: 4,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
 
     let entity_counts = default_single_hydro_entity_counts();
@@ -1518,6 +1520,7 @@ fn enumerated_census_k1_matches_sampled_single_scenario() {
         n_scenarios: 1,
         io_channel_capacity: 4,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let hydro_cell_index = cobre_sddp::test_support::identity_hydro_cell_index(256);
     let hydro_productivities_per_stage = vec![vec![1.0]; fx.n_stages];

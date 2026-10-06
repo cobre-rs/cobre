@@ -586,8 +586,11 @@ mod tests {
             study_stage_dates: &setup.study_stage_dates,
         };
 
-        let sampler =
-            crate::simulation::state::build_sim_sampler(&training_ctx).expect("forward sampler");
+        let sampler = crate::simulation::state::build_sim_sampler(
+            &training_ctx,
+            setup.simulation_config().forward_seed,
+        )
+        .expect("forward sampler");
         #[allow(clippy::cast_possible_truncation)]
         let total_scenarios_u32 = k as u32;
         let mut noise_tables = ForwardNoiseTables::default();

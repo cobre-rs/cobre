@@ -25,6 +25,7 @@ pub fn build_sampler_from_ctx<'a>(
             ncs: Some(ctx.ncs_scheme),
         },
         ctx: stochastic,
+        forward_seed: stochastic.forward_seed(),
         stages: ctx.stages,
         historical_library: ctx.historical_library,
         external_inflow_library: ctx.external_inflow_library,

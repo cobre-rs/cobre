@@ -21,6 +21,7 @@ use cobre_solver::ActiveProfile;
 ///     n_scenarios: 500,
 ///     io_channel_capacity: 32,
 ///     profile: Phase::Simulation.profile(),
+///     forward_seed: None,
 /// };
 /// assert_eq!(config.n_scenarios, 500);
 /// assert_eq!(config.io_channel_capacity, 32);
@@ -42,6 +43,10 @@ pub struct SimulationConfig {
     /// [`crate::solve::solver_phase::Phase::resolve_profile`]), applied at
     /// `SimulationState::run` entry.
     pub profile: ActiveProfile,
+
+    /// Root seed of the simulation's `OutOfSample` forward noise; `None` when
+    /// no seed is configured.
+    pub forward_seed: Option<u64>,
 }
 
 #[cfg(test)]
@@ -55,6 +60,7 @@ mod tests {
             n_scenarios: 2000,
             io_channel_capacity: 64,
             profile: Phase::Simulation.profile(),
+            forward_seed: None,
         };
         assert_eq!(config.n_scenarios, 2000);
         assert_eq!(config.io_channel_capacity, 64);
@@ -66,6 +72,7 @@ mod tests {
             n_scenarios: 1,
             io_channel_capacity: 1,
             profile: Phase::Simulation.profile(),
+            forward_seed: None,
         };
         assert_eq!(config.n_scenarios, 1);
         assert_eq!(config.io_channel_capacity, 1);
@@ -77,6 +84,7 @@ mod tests {
             n_scenarios: 100,
             io_channel_capacity: 16,
             profile: Phase::Simulation.profile(),
+            forward_seed: None,
         };
         let debug = format!("{config:?}");
         assert!(!debug.is_empty());

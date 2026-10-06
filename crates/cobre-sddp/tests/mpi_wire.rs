@@ -2475,6 +2475,7 @@ mod simulation_aggregation_determinism {
             n_scenarios: 4,
             io_channel_capacity: 1,
             profile: Phase::Simulation.profile(),
+            forward_seed: None,
         };
         let (summary, _gathered) =
             aggregate_simulation(&local_costs, &config, comm, SimulationWeighting::Uniform)
@@ -2528,6 +2529,7 @@ mod simulation_aggregation_determinism {
             n_scenarios: 4,
             io_channel_capacity: 1,
             profile: Phase::Simulation.profile(),
+            forward_seed: None,
         };
         let (summary, _gathered) = aggregate_simulation(
             &local_costs,
@@ -2617,6 +2619,7 @@ mod uniform_weight_left_to_right_reduction {
             n_scenarios: n as u32,
             io_channel_capacity: 1,
             profile: Phase::Simulation.profile(),
+            forward_seed: None,
         };
 
         let (summary, _gathered) = aggregate_simulation(

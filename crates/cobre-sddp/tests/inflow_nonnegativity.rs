@@ -605,6 +605,7 @@ fn simulate_fixture(
             n_scenarios: 20,
             io_channel_capacity: 32,
             profile: Phase::Simulation.profile(),
+            forward_seed: None,
         },
         SimulationOutputSpec {
             result_tx: &result_tx,

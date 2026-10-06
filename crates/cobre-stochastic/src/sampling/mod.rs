@@ -334,8 +334,11 @@ fn rebuild_class_tables(
 pub struct ForwardSamplerConfig<'a> {
     /// Per-class sampling scheme selections.
     pub class_schemes: ClassSchemes,
-    /// Stochastic context providing tree, seeds, correlation, and entity order.
+    /// Stochastic context providing opening tree, base seed, correlation and entity order.
     pub ctx: &'a StochasticContext,
+    /// Root seed of `OutOfSample` forward noise. The load and NCS class seeds
+    /// derive from it. Required when a class is `OutOfSample`.
+    pub forward_seed: Option<u64>,
     /// Study stages in index order; required by `OutOfSample` to read per-stage
     /// noise methods.
     pub stages: &'a [Stage],
@@ -575,7 +578,7 @@ fn warn_unsupported_forward_noise_methods(
 /// # Errors
 ///
 /// Returns [`StochasticError::MissingScenarioSource`] when:
-/// - `OutOfSample` scheme lacks a configured `forward_seed` in `ctx`.
+/// - `OutOfSample` is selected and `forward_seed` is `None`.
 /// - `Historical` is selected for inflow but `historical_library` is `None`.
 /// - `Historical` is selected for load or NCS (not supported).
 /// - `External` is selected but the corresponding library is `None`.
@@ -585,6 +588,7 @@ pub fn build_forward_sampler(
     let ForwardSamplerConfig {
         class_schemes,
         ctx,
+        forward_seed,
         stages,
         historical_library,
         external_inflow_library,
@@ -599,7 +603,7 @@ pub fn build_forward_sampler(
 
     // Inflow keeps the root seed: deriving it too would change every shipped
     // inflow-only deck.
-    let inflow_forward_seed = ctx.forward_seed();
+    let inflow_forward_seed = forward_seed;
     let load_forward_seed =
         inflow_forward_seed.map(|s| derive_class_forward_seed(s, EntityClass::Load));
     let ncs_forward_seed =
@@ -1008,6 +1012,7 @@ mod tests {
                 ncs: Some(scheme),
             },
             ctx,
+            forward_seed: ctx.forward_seed(),
             stages,
             historical_library: None,
             external_inflow_library: None,
@@ -1092,6 +1097,7 @@ mod tests {
                 ncs: Some(SamplingScheme::InSample),
             },
             ctx: &ctx,
+            forward_seed: ctx.forward_seed(),
             stages: &stages,
             historical_library: Some(&lib),
             external_inflow_library: None,
@@ -1135,6 +1141,7 @@ mod tests {
                 ncs: Some(SamplingScheme::InSample),
             },
             ctx: &ctx,
+            forward_seed: ctx.forward_seed(),
             stages: &stages,
             historical_library: Some(&historical_lib),
             external_inflow_library: Some(&external_lib),
@@ -1182,6 +1189,7 @@ mod tests {
                 ncs: Some(SamplingScheme::InSample),
             },
             ctx: &ctx,
+            forward_seed: ctx.forward_seed(),
             stages: &stages,
             historical_library: None,
             external_inflow_library: None,
@@ -1219,6 +1227,7 @@ mod tests {
                 ncs: Some(SamplingScheme::InSample),
             },
             ctx: &ctx,
+            forward_seed: ctx.forward_seed(),
             stages: &stages,
             historical_library: None,
             external_inflow_library: Some(&lib),
@@ -1242,6 +1251,7 @@ mod tests {
                 ncs: Some(SamplingScheme::InSample),
             },
             ctx: &ctx,
+            forward_seed: ctx.forward_seed(),
             stages: &stages,
             historical_library: None,
             external_inflow_library: None,
@@ -1612,11 +1622,7 @@ mod tests {
         );
     }
 
-    /// Classes sampled out of sample must not share a noise stream: one seed
-    /// for every class makes the load and NCS slots repeat the first inflow
-    /// slots bit-for-bit. Inflow keeps the root seed, so its slot is pinned.
-    #[test]
-    fn test_out_of_sample_classes_draw_distinct_streams() {
+    fn build_three_class_oos_ctx(forward_seed: Option<u64>) -> (StochasticContext, Vec<Stage>) {
         let stages = vec![make_stage(0, 0, 5), make_stage(1, 1, 5)];
         let load_model = |stage_id: i32| LoadModel {
             bus_id: EntityId(0),
@@ -1648,7 +1654,7 @@ mod tests {
         let ctx = build_stochastic_context(
             &system,
             42,
-            Some(99),
+            forward_seed,
             &[],
             &[],
             OpeningTreeInputs::default(),
@@ -1659,6 +1665,15 @@ mod tests {
             },
         )
         .unwrap();
+        (ctx, stages)
+    }
+
+    /// Classes sampled out of sample must not share a noise stream: one seed
+    /// for every class makes the load and NCS slots repeat the first inflow
+    /// slots bit-for-bit. Inflow keeps the root seed, so its slot is pinned.
+    #[test]
+    fn test_out_of_sample_classes_draw_distinct_streams() {
+        let (ctx, stages) = build_three_class_oos_ctx(Some(99));
         assert_eq!(ctx.n_load_buses(), 1);
         assert_eq!(ctx.n_stochastic_ncs(), 1);
         let sampler = build_forward_sampler(ForwardSamplerConfig {
@@ -1668,6 +1683,7 @@ mod tests {
                 ncs: Some(SamplingScheme::OutOfSample),
             },
             ctx: &ctx,
+            forward_seed: ctx.forward_seed(),
             stages: &stages,
             historical_library: None,
             external_inflow_library: None,
@@ -1709,6 +1725,59 @@ mod tests {
             4_608_014_355_120_151_153_u64,
             "inflow draw must keep its root-seed value"
         );
+    }
+
+    #[test]
+    fn forward_sampler_draws_from_the_config_forward_seed() {
+        let (ctx_seeded, stages) = build_three_class_oos_ctx(Some(99));
+        let (ctx_unseeded, _) = build_three_class_oos_ctx(None);
+        let dim = ctx_seeded.dim();
+        let draw = |ctx: &StochasticContext, forward_seed: Option<u64>| {
+            let sampler = build_forward_sampler(ForwardSamplerConfig {
+                forward_seed,
+                ..all_classes_config(SamplingScheme::OutOfSample, ctx, &stages)
+            })
+            .unwrap();
+            let mut buf = vec![0.0f64; dim];
+            let mut corr = vec![0.0f64; 2 * dim];
+            let tables = tables_for(&sampler, 1, 5, &[]);
+            let noise = sampler
+                .sample(SampleRequest {
+                    iteration: 1,
+                    scenario: 2,
+                    stage: 0,
+                    stage_idx: 0,
+                    noise_buf: &mut buf,
+                    corr_scratch: &mut corr,
+                    total_scenarios: 5,
+                    noise_group_id: 0,
+                    node_opening_offset: 0,
+                    node_opening_len: 0,
+                    pinned_scenario: None,
+                    tables: &tables,
+                })
+                .unwrap();
+            noise.as_slice().to_vec()
+        };
+
+        let seeded = draw(&ctx_seeded, Some(7));
+        let unseeded = draw(&ctx_unseeded, Some(7));
+        let other = draw(&ctx_seeded, Some(8));
+
+        for (slot, (s, u)) in seeded.iter().zip(&unseeded).enumerate() {
+            assert_eq!(
+                s.to_bits(),
+                u.to_bits(),
+                "slot {slot} must not depend on the context's forward seed"
+            );
+        }
+        let differs = |slot: usize| seeded[slot].to_bits() != other[slot].to_bits();
+        assert!(
+            differs(0) || differs(1),
+            "an inflow slot must follow the config seed"
+        );
+        assert!(differs(2), "the load slot must follow the config seed");
+        assert!(differs(3), "the NCS slot must follow the config seed");
     }
 
     // -----------------------------------------------------------------------
@@ -1769,6 +1838,7 @@ mod tests {
                 ncs: Some(SamplingScheme::InSample),
             },
             ctx,
+            forward_seed: ctx.forward_seed(),
             stages,
             historical_library: None,
             external_inflow_library: None,

@@ -1349,6 +1349,7 @@ mod determinism {
             n_scenarios,
             io_channel_capacity: 64,
             profile: Phase::Simulation.profile(),
+            forward_seed: None,
         };
         let entity_counts = EntityCounts {
             hydro_ids: vec![1, 2, 3],

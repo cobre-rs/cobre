@@ -276,8 +276,6 @@ pub struct StochasticContext {
     entity_order: Box<[EntityId]>,
     base_seed: u64,
     /// Seed for `OutOfSample` forward-pass noise, independent of `base_seed`.
-    /// `None` means unconfigured; the `ForwardSampler` factory validates
-    /// presence before constructing an `OutOfSample` sampler.
     forward_seed: Option<u64>,
     class_dimensions: ClassDimensions,
     provenance: StochasticProvenance,
@@ -333,7 +331,10 @@ impl StochasticContext {
         self.base_seed
     }
 
-    /// Returns the `OutOfSample` forward-pass noise seed (see `forward_seed`).
+    /// Returns the `OutOfSample` forward-pass noise seed supplied at build time.
+    ///
+    /// The context never reads it; callers pass it to
+    /// [`ForwardSamplerConfig::forward_seed`](crate::ForwardSamplerConfig::forward_seed).
     #[must_use]
     pub fn forward_seed(&self) -> Option<u64> {
         self.forward_seed

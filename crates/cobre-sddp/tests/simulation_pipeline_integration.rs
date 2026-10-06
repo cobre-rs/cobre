@@ -494,6 +494,7 @@ fn simulate_single_rank_4_scenarios_produces_4_results() {
         n_scenarios: 4,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let state = state_layout_for(1, 0);
     let horizon = HorizonMode::Finite {
@@ -603,6 +604,7 @@ fn simulate_infeasible_returns_lp_infeasible_error() {
         n_scenarios: 4,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -702,6 +704,7 @@ fn simulate_infeasible_at_scenario2_stage3() {
         n_scenarios: 4,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -798,6 +801,7 @@ fn simulate_channel_closed_returns_error() {
         n_scenarios: 2,
         io_channel_capacity: 1,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -892,6 +896,7 @@ fn simulate_total_cost_equals_sum_of_stage_costs() {
         n_scenarios: 2,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let state = state_layout_for(1, 0);
     let horizon = HorizonMode::Finite {
@@ -994,6 +999,7 @@ fn simulate_cost_buffer_scenario_ids_match_assigned_range() {
         n_scenarios: 6,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -1091,6 +1097,7 @@ fn simulate_channel_receives_results_in_scenario_order() {
         n_scenarios: 3,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -1183,6 +1190,7 @@ fn test_simulation_parallel_cost_determinism() {
         n_scenarios,
         io_channel_capacity: 64,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -1395,6 +1403,7 @@ fn simulate_emits_progress_events() {
         n_scenarios: 10,
         io_channel_capacity: 32,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -1514,6 +1523,7 @@ fn simulate_no_events_when_sender_is_none() {
         n_scenarios: 4,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -1616,6 +1626,7 @@ fn simulate_progress_events_received_before_return() {
         n_scenarios,
         io_channel_capacity: 32,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -1727,6 +1738,7 @@ fn simulate_progress_scenario_cost_equals_total_cost() {
         n_scenarios,
         io_channel_capacity: 32,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -1842,6 +1854,7 @@ fn simulate_emits_simulation_finished_as_last_event() {
         n_scenarios,
         io_channel_capacity: 32,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -1965,6 +1978,7 @@ fn simulate_progress_scenario_cost_is_finite() {
         n_scenarios: 5,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -2074,6 +2088,7 @@ fn simulate_frozen_path_issues_zero_add_rows() {
         n_scenarios,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -2174,6 +2189,7 @@ fn simulate_fallback_path_issues_expected_add_rows() {
         n_scenarios,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -2273,6 +2289,7 @@ fn simulate_frozen_length_mismatch_returns_error() {
         n_scenarios: 2,
         io_channel_capacity: 8,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -2424,6 +2441,7 @@ fn simulate_with_captured_basis_preserves_row_statuses() {
         n_scenarios,
         io_channel_capacity: 8,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -2565,6 +2583,7 @@ fn simulate_with_empty_stage_bases_cold_starts() {
         n_scenarios,
         io_channel_capacity: 16,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,
@@ -2762,6 +2781,7 @@ fn simulate_branching_k_fan_warm_starts_from_visited_node_basis() {
         n_scenarios,
         io_channel_capacity: 32,
         profile: Phase::Simulation.profile(),
+        forward_seed: None,
     };
     let horizon = HorizonMode::Finite {
         num_stages: n_stages,

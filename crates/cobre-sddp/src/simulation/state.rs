@@ -258,7 +258,7 @@ impl SimulationState {
             });
         }
 
-        let sampler = build_sim_sampler(training_ctx)?;
+        let sampler = build_sim_sampler(training_ctx, inputs.config.forward_seed)?;
         sampler.rebuild_noise_tables(
             SIMULATION_ITERATION,
             inputs.config.n_scenarios,
@@ -525,6 +525,7 @@ fn run_worker_scenarios<S: SolverInterface + Send>(
 /// Build the [`ForwardSampler`] for a simulation run from the training context.
 pub(crate) fn build_sim_sampler<'a>(
     training_ctx: &'a TrainingContext<'a>,
+    forward_seed: Option<u64>,
 ) -> Result<ForwardSampler<'a>, SimulationError> {
     Ok(build_forward_sampler(ForwardSamplerConfig {
         class_schemes: ClassSchemes {
@@ -533,6 +534,7 @@ pub(crate) fn build_sim_sampler<'a>(
             ncs: Some(training_ctx.ncs_scheme),
         },
         ctx: training_ctx.stochastic,
+        forward_seed,
         stages: training_ctx.stages,
         historical_library: training_ctx.historical_library,
         external_inflow_library: training_ctx.external_inflow_library,

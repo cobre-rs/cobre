@@ -82,7 +82,7 @@ pub(crate) fn build_historical_inflow_library(
         &stage_lag_transitions,
         downstream_par_order,
     );
-    validate_historical_library(&library, max_order, user_pool, min_windows)
+    validate_historical_library(&structure, &library, max_order, user_pool, min_windows)
         .map_err(SddpError::Stochastic)?;
     Ok(library)
 }

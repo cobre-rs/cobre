@@ -502,11 +502,16 @@ pub fn standardize_historical_windows(
 /// | ID  | Kind    | Description                                                   |
 /// |-----|---------|---------------------------------------------------------------|
 /// | V2.5 | Error  | At least one window must be discovered when `user_pool` is `None`. |
-/// | V2.3 | Error  | No eta value in the library may be `f64::NEG_INFINITY`.       |
+/// | V2.3 | Error  | No eta value may be `NEG_INFINITY` or NaN; the refusal names the window year, the stage id and the hydro id. |
 /// | V2.6 | Warning| `library.n_windows() < forward_passes` — log a warning.      |
 /// | V2.2 | Assert | Window contiguity — `debug_assert` only (construction invariant). |
 /// | V2.4 | Assert | User pool validity — `debug_assert` only (construction invariant). |
 /// | V2.7 | Assert | Lag warmup sufficiency — `debug_assert` only (construction invariant). |
+///
+/// # Inputs
+///
+/// - `structure` — proof from [`check_historical_structure`]; its stage and
+///   hydro ids label the V2.3 refusal
 ///
 /// # Errors
 ///
@@ -516,13 +521,38 @@ pub fn standardize_historical_windows(
 /// # Examples
 ///
 /// ```
-/// use cobre_stochastic::{HistoricalScenarioLibrary, sampling::historical::validate_historical_library};
+/// use chrono::NaiveDate;
+/// use cobre_core::EntityId;
+/// use cobre_core::temporal::{
+///     Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+///     StageStateConfig,
+/// };
+/// use cobre_stochastic::HistoricalScenarioLibrary;
+/// use cobre_stochastic::sampling::historical::{
+///     check_historical_structure, validate_historical_library,
+/// };
 ///
 /// let lib = HistoricalScenarioLibrary::new(3, 1, 2, 1, vec![1990, 1995, 2000]);
-/// let result = validate_historical_library(&lib, 1, None, 5);
+/// let stage = Stage {
+///     index: 0,
+///     id: 0,
+///     start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+///     end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+///     season_id: Some(0),
+///     blocks: vec![Block { index: 0, name: "B".to_string(), duration_hours: 720.0 }],
+///     block_mode: BlockMode::Parallel,
+///     state_config: StageStateConfig { storage: true, inflow_lags: false },
+///     risk_config: StageRiskConfig::Expectation,
+///     scenario_config: ScenarioSourceConfig { branching_factor: 1, noise_method: NoiseMethod::Saa },
+/// };
+/// let hydro_ids = [EntityId(1), EntityId(2)];
+/// let stages = [stage];
+/// let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
+/// let result = validate_historical_library(&structure, &lib, 1, None, 5);
 /// assert!(result.is_ok());
 /// ```
 pub fn validate_historical_library(
+    structure: &HistoricalStructureProof<'_>,
     library: &HistoricalScenarioLibrary,
     max_par_order: usize,
     user_pool: Option<&HistoricalYears>,
@@ -536,17 +566,36 @@ pub fn validate_historical_library(
         });
     }
 
+    let &HistoricalStructureProof { stages, hydro_ids } = structure;
+    debug_assert_eq!(
+        library.n_stages(),
+        stages.len(),
+        "library.n_stages() ({}) must equal stages.len() ({})",
+        library.n_stages(),
+        stages.len(),
+    );
+    debug_assert_eq!(
+        library.n_hydros(),
+        hydro_ids.len(),
+        "library.n_hydros() ({}) must equal hydro_ids.len() ({})",
+        library.n_hydros(),
+        hydro_ids.len(),
+    );
+
     // V2.3 / V2.8 — no eta may be NEG_INFINITY (the sigma=0 non-matching-observation
     // sentinel from standardize_historical_windows) or NaN.
     for w in 0..library.n_windows() {
-        for t in 0..library.n_stages() {
+        for (t, stage) in stages.iter().enumerate().take(library.n_stages()) {
             let eta = library.eta_slice(w, t);
             for (h, &value) in eta.iter().enumerate() {
                 if value == f64::NEG_INFINITY || value.is_nan() {
+                    let year = library.window_year(w);
+                    let stage_id = stage.id;
+                    let hydro_id = hydro_ids[h];
                     return Err(StochasticError::InsufficientData {
                         context: format!(
                             "V2.3: historical library contains non-finite eta (NEG_INFINITY or NaN) \
-                             at window {w}, stage {t}, hydro {h} — sigma=0 with \
+                             at window year {year}, stage id {stage_id}, hydro id {hydro_id} — sigma=0 with \
                              non-matching historical observation or numerical failure",
                         ),
                     });
@@ -1079,7 +1128,7 @@ mod tests {
 
         let structure = check_historical_structure(&lib, &hydro_ids, &stages);
         assert!(structure.is_ok(), "expected Ok(_), got: {structure:?}");
-        let result = validate_historical_library(&lib, 1, None, 5);
+        let result = validate_historical_library(&structure.unwrap(), &lib, 1, None, 5);
         assert!(result.is_ok(), "expected Ok(()), got: {result:?}");
     }
 
@@ -1096,8 +1145,13 @@ mod tests {
             (1990..1995).collect(),
         );
         lib.eta_slice_mut(2, 5)[1] = f64::NEG_INFINITY;
+        let stages: Vec<Stage> = (0..n_stages)
+            .map(|i| make_validate_stage(i, Some(i % 12)))
+            .collect();
+        let hydro_ids: Vec<EntityId> = (1..=3).map(EntityId).collect();
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
 
-        let result = validate_historical_library(&lib, 1, None, 5);
+        let result = validate_historical_library(&structure, &lib, 1, None, 5);
         match result {
             Err(StochasticError::InsufficientData { context }) => {
                 assert!(
@@ -1109,6 +1163,33 @@ mod tests {
                     "expected message to contain 'NEG_INFINITY', got: {context}"
                 );
             }
+            other => panic!("expected Err(InsufficientData), got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_finite_eta_refusal_names_window_year_stage_id_and_hydro_id() {
+        let n_stages = 12;
+        let mut lib = HistoricalScenarioLibrary::new(5, n_stages, 3, 1, (1990..1995).collect());
+        lib.eta_slice_mut(2, 5)[1] = f64::NEG_INFINITY;
+        let stages: Vec<Stage> = (101_i32..)
+            .zip(0..n_stages)
+            .map(|(id, i)| Stage {
+                id,
+                ..make_validate_stage(i, Some(i % 12))
+            })
+            .collect();
+        let hydro_ids: Vec<EntityId> = (11..=13).map(EntityId).collect();
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
+
+        let result = validate_historical_library(&structure, &lib, 1, None, 5);
+        match result {
+            Err(StochasticError::InsufficientData { context }) => assert_eq!(
+                context,
+                "V2.3: historical library contains non-finite eta (NEG_INFINITY or NaN) \
+                 at window year 1992, stage id 106, hydro id 12 — sigma=0 with \
+                 non-matching historical observation or numerical failure"
+            ),
             other => panic!("expected Err(InsufficientData), got: {other:?}"),
         }
     }
@@ -1159,9 +1240,12 @@ mod tests {
     #[test]
     fn test_pool_warning_path_returns_ok() {
         let lib = HistoricalScenarioLibrary::new(5, 1, 2, 0, (1990..1995).collect());
+        let stages = vec![make_validate_stage(0, Some(0))];
+        let hydro_ids = vec![EntityId(1), EntityId(2)];
+        let structure = check_historical_structure(&lib, &hydro_ids, &stages).unwrap();
 
         // 5 windows < 20 forward passes triggers warn! but must still return Ok(()).
-        let result = validate_historical_library(&lib, 0, None, 20);
+        let result = validate_historical_library(&structure, &lib, 0, None, 20);
         assert!(
             result.is_ok(),
             "warning path must return Ok(()), got: {result:?}"

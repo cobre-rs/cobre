@@ -77,6 +77,7 @@ pub(crate) struct RawStagesFile {
     /// Detection field: present when a `stages.json` still contains the old
     /// `scenario_source` key. `parse_stages` rejects it with a clear migration
     /// error directing the user to move the field to `config.json`.
+    #[cfg_attr(feature = "schema", schemars(skip))]
     #[serde(default)]
     scenario_source: Option<serde_json::Value>,
 
@@ -1366,8 +1367,7 @@ mod tests {
 
     /// Given a `stages.json` with `"scenario_source": {"seed": 42}`,
     /// `parse_stages` returns `Err(LoadError::SchemaError)` with field
-    /// `"scenario_source"` and a message containing "moved from stages.json to
-    /// config.json".
+    /// `"scenario_source"` and the full migration message naming `config.json`.
     #[test]
     fn test_stages_with_scenario_source_rejected() {
         let json = r#"{
@@ -1388,9 +1388,11 @@ mod tests {
                     field, "scenario_source",
                     "field should be 'scenario_source', got: {field}"
                 );
-                assert!(
-                    message.contains("moved from stages.json to config.json"),
-                    "message should contain 'moved from stages.json to config.json', got: {message}"
+                assert_eq!(
+                    message,
+                    "the 'scenario_source' field has moved from stages.json to config.json \
+                     (training.scenario_source / simulation.scenario_source). \
+                     Remove it from stages.json."
                 );
             }
             other => panic!("expected SchemaError, got: {other:?}"),

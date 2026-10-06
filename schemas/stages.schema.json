@@ -485,10 +485,6 @@
       },
       "type": "array"
     },
-    "scenario_source": {
-      "default": null,
-      "description": "Detection field: present when a `stages.json` still contains the old\n`scenario_source` key. `parse_stages` rejects it with a clear migration\nerror directing the user to move the field to `config.json`."
-    },
     "season_definitions": {
       "anyOf": [
         {

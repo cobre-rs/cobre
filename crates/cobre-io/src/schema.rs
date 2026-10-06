@@ -306,6 +306,34 @@ mod tests {
     }
 
     #[test]
+    fn stages_schema_does_not_accept_scenario_source() {
+        let schemas = generate_schemas().unwrap();
+        let (_, stages_schema) = schemas
+            .iter()
+            .find(|(name, _)| name == "stages.schema.json")
+            .unwrap_or_else(|| panic!("stages.schema.json not found in schemas"));
+
+        assert_eq!(stages_schema.pointer("/properties/scenario_source"), None);
+        assert_eq!(
+            stages_schema.pointer("/additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        for expected_field in [
+            "policy_graph",
+            "stages",
+            "pre_study_stages",
+            "season_definitions",
+        ] {
+            assert!(
+                stages_schema
+                    .pointer(&format!("/properties/{expected_field}"))
+                    .is_some(),
+                "stages schema /properties should contain '{expected_field}'"
+            );
+        }
+    }
+
+    #[test]
     fn test_all_expected_schema_filenames_present() {
         let schemas = generate_schemas().unwrap();
         let names: Vec<&str> = schemas.iter().map(|(n, _)| n.as_str()).collect();

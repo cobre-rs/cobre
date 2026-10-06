@@ -473,6 +473,12 @@ pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> File
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+/// Every case input path, relative to the case root, in `INPUT_FILES` order.
+#[cfg(test)]
+pub(crate) fn input_file_relative_paths() -> impl Iterator<Item = &'static str> {
+    INPUT_FILES.iter().map(|entry| entry.relative)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {

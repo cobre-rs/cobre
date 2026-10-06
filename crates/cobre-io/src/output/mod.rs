@@ -17,6 +17,7 @@ use chrono::{Datelike, NaiveDate};
 pub(crate) mod atomic;
 pub mod dictionary;
 pub mod error;
+pub(crate) mod file_registry;
 pub mod fixed_delivery;
 pub mod generic_constraints_echo;
 pub mod hydro_models;

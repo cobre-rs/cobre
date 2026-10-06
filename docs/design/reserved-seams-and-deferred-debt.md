@@ -664,6 +664,25 @@ stage that already holds each plant's accumulated productivity gains a
 validation pass, or a stage override inverts the ordering in a reported
 study. For `cobre-docs`, the next revision of the penalty-system page.
 
+### Writer path literals repeated by the output-file table
+
+**What it is.** `OUTPUT_FILES` in `crates/cobre-io/src/output/file_registry.rs`
+names the path of every registry Parquet file, but no writer reads it: each
+joins its own path literal. The writers are in cobre-io (for example
+`write_paths` and `write_dictionaries`), in `write_training_outputs`
+(`crates/cobre-cli/src/commands/run/outputs.rs`) and its peer in
+`crates/cobre-python/src/run.rs`, and in `export_stochastic_artifacts`
+(`crates/cobre-sddp/src/policy/orchestration.rs`). Only the Hive
+simulation-family rows are checked against their writer by a test, through
+`simulation_family_subpaths()`; every other row was checked once, by symbol,
+when the table was written. A writer path that changes without its row is not
+caught.
+
+**Owner.** The output data-model owner.
+
+**Trigger.** A writer's output path changes, or a consumer of the exported
+output registry checks the registry paths against a run.
+
 ## Deferred-debt register — whole-lifecycle audit findings
 
 Findings of the full `cobre run` lifecycle read, described by behavior. Each

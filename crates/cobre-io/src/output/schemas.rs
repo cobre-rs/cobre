@@ -2,10 +2,14 @@
 //! (SS5.1–5.11 and SS6.1–6.2).
 //!
 //! Every `*_schema()` function in this module has exactly one row in
-//! [`OUTPUT_SCHEMAS`], the crate-internal registry that pairs each schema with
-//! the relative path of the file it describes; that table is the single
-//! source both the axis-spelling gate test and `variables.csv` generation
-//! derive from. The per-scenario simulation entity schemas are cached behind a
+//! [`OUTPUT_SCHEMAS`], the crate-internal registry that pairs each schema
+//! constructor with its registry name and its optional `variables.csv` label.
+//! [`OUTPUT_FILES`](super::file_registry::OUTPUT_FILES) owns output paths: it
+//! maps every written Parquet file to the schema that backs it. The
+//! axis-spelling gate test, `variables.csv` generation and that file table all
+//! derive from `OUTPUT_SCHEMAS`.
+//!
+//! The per-scenario simulation entity schemas are cached behind a
 //! process-lifetime [`LazyLock`] and returned as `Arc<Schema>`, since
 //! `simulation_writer`'s `build_*_batch` functions build one per scenario;
 //! `OUTPUT_SCHEMAS` still registers each one's uncached builder so the table's
@@ -751,8 +755,9 @@ pub(crate) fn bounds_schema() -> Schema {
 
 /// One row of the crate-internal registry of every output-schema function: a
 /// schema's constructor paired with its registry name and its optional
-/// `training/dictionaries/variables.csv` grouping label. Each schema fn's own
-/// doc names the output path it describes; this table does not repeat it.
+/// `training/dictionaries/variables.csv` grouping label. Output paths live in
+/// [`OUTPUT_FILES`](super::file_registry::OUTPUT_FILES), whose rows name their
+/// backing schema by `name`.
 pub(crate) struct SchemaRegistryEntry {
     /// Registry name, unique across rows; keys per-column metadata such as
     /// units.
@@ -765,10 +770,12 @@ pub(crate) struct SchemaRegistryEntry {
 }
 
 /// The single owner of the output-schema family: every `*_schema()` function
-/// in this module appears here exactly once. The gate test
-/// `one_spelling_per_axis_across_every_output_schema` and
-/// `dictionary::variables_csv_schemas` both derive from this table
-/// rather than maintaining their own copies of the schema set.
+/// in this module appears here exactly once, with its registry name and its
+/// optional `variables.csv` label. The gate test
+/// `one_spelling_per_axis_across_every_output_schema`,
+/// `dictionary::variables_csv_schemas` and the output-path owner
+/// [`OUTPUT_FILES`](super::file_registry::OUTPUT_FILES) all derive from this
+/// table rather than keeping their own copies of the schema set.
 pub(crate) const OUTPUT_SCHEMAS: &[SchemaRegistryEntry] = &[
     SchemaRegistryEntry {
         name: "costs",

@@ -551,3 +551,28 @@ def test_write_policy_checkpoint_season_manifest_order_length_rejected_on_load(
 
     with pytest.raises(cobre.errors.OutputError, match=r"expected n_seasons=3"):
         cobre.results.load_policy(str(tmp_path))
+
+
+def test_write_policy_checkpoint_refuses_a_directory_holding_other_files(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A policy directory holding a file no checkpoint writer leaves there is
+    refused with ValidationError, and the file survives.
+    """
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+
+    policy = tmp_path / "policy"
+    policy.mkdir()
+    notes = policy / "notes.txt"
+    notes.write_text("keep me")
+
+    with pytest.raises(
+        cobre.errors.ValidationError,
+        match=r"notes\.txt, found in .*, is not part of a checkpoint",
+    ):
+        cobre.write_policy_checkpoint(str(policy), _make_stage_cuts(), _make_metadata())
+
+    assert notes.read_text() == "keep me"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["policy"]
+    assert sorted(p.name for p in policy.iterdir()) == ["notes.txt"]

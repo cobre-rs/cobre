@@ -63,6 +63,23 @@ pub enum OutputError {
         /// Human-readable error description.
         message: String,
     },
+
+    /// A checkpoint write would replace a directory holding an entry no
+    /// checkpoint writer leaves there, or a checkpoint path that is not a
+    /// directory. Nothing on disk is changed.
+    #[error(
+        "refusing to write a checkpoint: {}, found in {}, is not part of a checkpoint \
+         (manifest.bin, metadata.json, cuts/, basis/, states/); move it elsewhere or \
+         write the checkpoint to another directory",
+        entry.display(),
+        dir.display()
+    )]
+    ForeignEntry {
+        /// The directory holding `entry`.
+        dir: PathBuf,
+        /// The first refused entry, in sorted order.
+        entry: PathBuf,
+    },
 }
 
 impl OutputError {
@@ -181,6 +198,20 @@ mod tests {
     }
 
     #[test]
+    fn display_foreign_entry_names_the_entry_before_its_directory() {
+        let err = OutputError::ForeignEntry {
+            dir: PathBuf::from("out"),
+            entry: PathBuf::from("out/policy"),
+        };
+        assert_eq!(
+            err.to_string(),
+            "refusing to write a checkpoint: out/policy, found in out, is not part of a \
+             checkpoint (manifest.bin, metadata.json, cuts/, basis/, states/); move it \
+             elsewhere or write the checkpoint to another directory"
+        );
+    }
+
+    #[test]
     fn output_error_is_send_sync_static() {
         assert_send_sync_static::<OutputError>();
     }
@@ -199,6 +230,10 @@ mod tests {
             OutputError::ManifestError {
                 manifest_type: "policy".to_string(),
                 message: "missing required field".to_string(),
+            },
+            OutputError::ForeignEntry {
+                dir: PathBuf::from("output/policy"),
+                entry: PathBuf::from("output/policy/notes.txt"),
             },
         ];
         for err in &variants {
@@ -245,6 +280,10 @@ mod tests {
             OutputError::ManifestError {
                 manifest_type: "simulation".to_string(),
                 message: "partition list is empty".to_string(),
+            },
+            OutputError::ForeignEntry {
+                dir: PathBuf::from("output"),
+                entry: PathBuf::from("output/policy"),
             },
         ];
         for err in &variants {

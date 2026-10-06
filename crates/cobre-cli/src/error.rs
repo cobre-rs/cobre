@@ -203,6 +203,10 @@ impl From<cobre_io::OutputError> for CliError {
                 source,
                 context: path.display().to_string(),
             },
+            refusal @ OutputError::ForeignEntry { .. } => Self::Validation {
+                report: refusal.to_string(),
+                already_rendered: false,
+            },
             other => Self::Internal {
                 message: other.to_string(),
             },
@@ -720,6 +724,12 @@ mod tests {
                     message: "inconsistent dates".to_string(),
                 },
             },
+            FullFcfLoadError::Read {
+                source: OutputError::ForeignEntry {
+                    dir: PathBuf::from("out/policy"),
+                    entry: PathBuf::from("out/policy/notes.txt"),
+                },
+            },
         ];
         for kind in [
             FullFcfLoadKind::WarmStart,
@@ -740,6 +750,25 @@ mod tests {
             let description = err.to_string();
             assert_eq!(CliError::from(err).exit_code(), expected, "{description}");
         }
+    }
+
+    #[test]
+    fn foreign_entry_output_error_maps_to_validation_exit_1() {
+        let err = OutputError::ForeignEntry {
+            dir: std::path::PathBuf::from("out/policy"),
+            entry: std::path::PathBuf::from("out/policy/notes.txt"),
+        };
+        let display = err.to_string();
+        let cli_err = CliError::from(err);
+        assert!(
+            matches!(cli_err, CliError::Validation { .. }),
+            "OutputError::ForeignEntry must map to CliError::Validation, got: {cli_err:?}"
+        );
+        assert_eq!(cli_err.exit_code(), 1);
+        let CliError::Validation { report, .. } = cli_err else {
+            unreachable!("checked above")
+        };
+        assert_eq!(report, display);
     }
 
     #[test]

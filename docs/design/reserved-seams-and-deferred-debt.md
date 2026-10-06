@@ -583,6 +583,18 @@ titles and `$ref` targets are not.
 **Trigger.** An editor integration or schema consumer shows `title` or `$ref`
 names to case authors.
 
+### Python run reports a checkpoint write refusal as `CaseIoError`
+
+**What it is.** Python run's training-output writer (`write_training_outputs`
+in `crates/cobre-python/src/run.rs`) flattens checkpoint write errors into a
+`POLICY_CHECKPOINT_ERROR_PREFIX` message. A write-time
+`OutputError::ForeignEntry` therefore raises `CaseIoError` there, while the
+CLI exits 1 and `cobre.write_policy_checkpoint` raises `ValidationError`.
+
+**Owner.** The Python bindings owner.
+
+**Trigger.** Python's training-output writes return typed errors.
+
 ## Deferred-debt register — whole-lifecycle audit findings
 
 Findings of the full `cobre run` lifecycle read, described by behavior. Each

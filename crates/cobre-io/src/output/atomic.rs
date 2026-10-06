@@ -6,6 +6,9 @@
 //! `ENOSPC`/`EIO` on the buffered tail and the rename then installs a truncated
 //! file with no error surfaced. Always flush via [`std::io::Write::flush`] and
 //! propagate with `?` — never rely on drop-flush before a rename.
+//!
+//! Checkpoint commits also `sync_all` every file and, on unix, fsync every
+//! directory they change, so a committed copy survives a power loss.
 
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -60,6 +63,58 @@ pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), Output
     writer.flush().map_err(|e| OutputError::io(&tmp, e))?;
 
     std::fs::rename(&tmp, path).map_err(|e| OutputError::io(path, e))?;
+    Ok(())
+}
+
+/// Write `bytes` to `path`, then flush and `sync_all` it before returning.
+///
+/// # Errors
+///
+/// Returns [`OutputError::IoError`] if creating, writing, flushing, or syncing
+/// the file fails.
+pub(crate) fn write_bytes_synced(path: &Path, bytes: &[u8]) -> Result<(), OutputError> {
+    let file = std::fs::File::create(path).map_err(|e| OutputError::io(path, e))?;
+    let mut writer = BufWriter::new(file);
+    writer
+        .write_all(bytes)
+        .map_err(|e| OutputError::io(path, e))?;
+    writer.flush().map_err(|e| OutputError::io(path, e))?;
+    writer
+        .get_ref()
+        .sync_all()
+        .map_err(|e| OutputError::io(path, e))?;
+    Ok(())
+}
+
+/// [`write_bytes_atomic`], with the temporary file synced before the rename.
+///
+/// # Errors
+///
+/// Returns [`OutputError::IoError`] if creating, writing, flushing, syncing, or
+/// renaming the temporary file fails.
+pub(crate) fn write_bytes_atomic_synced(path: &Path, bytes: &[u8]) -> Result<(), OutputError> {
+    let tmp = tmp_path(path);
+    write_bytes_synced(&tmp, bytes)?;
+    std::fs::rename(&tmp, path).map_err(|e| OutputError::io(path, e))?;
+    Ok(())
+}
+
+/// Make the entries of directory `dir` durable.
+///
+/// # Errors
+///
+/// Returns [`OutputError::IoError`] if opening or syncing `dir` fails.
+#[cfg(unix)]
+pub(crate) fn sync_dir(dir: &Path) -> Result<(), OutputError> {
+    std::fs::File::open(dir)
+        .and_then(|handle| handle.sync_all())
+        .map_err(|e| OutputError::io(dir, e))
+}
+
+/// Does nothing: off unix, a directory cannot be synced through
+/// [`std::fs::File::sync_all`].
+#[cfg(not(unix))]
+pub(crate) fn sync_dir(_dir: &Path) -> Result<(), OutputError> {
     Ok(())
 }
 

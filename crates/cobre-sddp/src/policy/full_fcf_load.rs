@@ -90,6 +90,7 @@ impl FullFcfLoadError {
                 | OutputError::SerializationError { .. }
                 | OutputError::SchemaError { .. }
                 | OutputError::ManifestError { .. } => ErrorClass::IncompatiblePolicy,
+                OutputError::ForeignEntry { .. } => ErrorClass::InvalidInput,
             },
             // The inner `SddpError::Validation` classifies as `InvalidInput`, but a
             // refused checkpoint is an incompatible policy.

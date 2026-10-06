@@ -238,7 +238,9 @@ fn convert_error_with(py: Python<'_>, source: ErrorSource<'_>) -> PyErr {
             OutputError::SerializationError { .. } | OutputError::SchemaError { .. } => {
                 new_leaf_err(py, &OUTPUT_ERROR, &err.to_string())
             }
-            OutputError::ManifestError { .. } => validation_error(py, &err.to_string()),
+            OutputError::ManifestError { .. } | OutputError::ForeignEntry { .. } => {
+                validation_error(py, &err.to_string())
+            }
         },
         ErrorSource::Sddp { error, message } => match error {
             SddpError::Infeasible {

@@ -7,12 +7,20 @@
 //! # Examples
 //!
 //! ```
-//! use cobre_io::validation::{ErrorKind, ValidationContext};
+//! use cobre_io::validation::{ValidationContext, rules::RULES};
 //! use cobre_io::{generate_report};
 //!
+//! let [missing_file, stub_term] = ["structural.2", "referential.11"]
+//!     .map(|id| RULES.iter().find(|rule| rule.id == id).expect("rule is listed"));
+//!
 //! let mut ctx = ValidationContext::new();
-//! ctx.add_error(ErrorKind::FileNotFound, "system/hydros.json", None::<&str>, "file missing");
-//! ctx.add_warning(ErrorKind::UnusedEntity, "system/thermals.json", Some("T1"), "inactive");
+//! ctx.emit(missing_file, "system/hydros.json", None::<&str>, "file missing");
+//! ctx.emit(
+//!     stub_term,
+//!     "constraints/generic_constraints.json",
+//!     Some("GenericConstraint 1 term[0]"),
+//!     "GenericConstraint 1 term[0] references Contract 3 which is a stub entity with no LP effect",
+//! );
 //!
 //! let report = generate_report(&ctx);
 //! assert_eq!(report.error_count, 1);
@@ -74,7 +82,7 @@ impl ValidationReport {
     /// # Examples
     ///
     /// ```
-    /// use cobre_io::validation::{ErrorKind, ValidationContext};
+    /// use cobre_io::validation::ValidationContext;
     /// use cobre_io::generate_report;
     ///
     /// let ctx = ValidationContext::new();
@@ -100,13 +108,21 @@ impl ValidationReport {
 /// # Examples
 ///
 /// ```
-/// use cobre_io::validation::{ErrorKind, ValidationContext};
+/// use cobre_io::validation::{ValidationContext, rules::RULES};
 /// use cobre_io::generate_report;
 ///
+/// let [missing_file, unparsable, stub_term] = ["structural.2", "schema.2", "referential.11"]
+///     .map(|id| RULES.iter().find(|rule| rule.id == id).expect("rule is listed"));
+///
 /// let mut ctx = ValidationContext::new();
-/// ctx.add_error(ErrorKind::FileNotFound, "system/hydros.json", None::<&str>, "missing");
-/// ctx.add_error(ErrorKind::ParseError, "stages.json", None::<&str>, "malformed");
-/// ctx.add_warning(ErrorKind::UnusedEntity, "system/thermals.json", Some("T1"), "inactive");
+/// ctx.emit(missing_file, "system/hydros.json", None::<&str>, "missing");
+/// ctx.emit(unparsable, "stages.json", None::<&str>, "malformed");
+/// ctx.emit(
+///     stub_term,
+///     "constraints/generic_constraints.json",
+///     Some("GenericConstraint 1 term[0]"),
+///     "GenericConstraint 1 term[0] references Contract 3 which is a stub entity with no LP effect",
+/// );
 ///
 /// let report = generate_report(&ctx);
 /// assert_eq!(report.error_count, 2);
@@ -153,24 +169,24 @@ pub fn generate_report(ctx: &ValidationContext) -> ValidationReport {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::validation::{ErrorKind, ValidationContext};
+    use crate::validation::{ValidationContext, rules};
 
     fn make_context_with_errors_and_warnings() -> ValidationContext {
         let mut ctx = ValidationContext::new();
-        ctx.add_error(
-            ErrorKind::FileNotFound,
+        ctx.emit(
+            &rules::STRUCTURAL_REQUIRED_FILE_MISSING,
             "system/hydros.json",
             None::<&str>,
             "required file is missing",
         );
-        ctx.add_error(
-            ErrorKind::ParseError,
+        ctx.emit(
+            &rules::SCHEMA_FILE_UNPARSABLE,
             "stages.json",
             Some("stage_001"),
             "malformed JSON at line 42",
         );
-        ctx.add_warning(
-            ErrorKind::UnusedEntity,
+        ctx.emit(
+            &rules::REFERENTIAL_GENERIC_TERM_STUB_CONTRACT,
             "system/thermals.json",
             Some("T1"),
             "max_generation=0 for all stages",
@@ -215,8 +231,8 @@ mod tests {
     #[test]
     fn test_report_entry_fields() {
         let mut ctx = ValidationContext::new();
-        ctx.add_error(
-            ErrorKind::FileNotFound,
+        ctx.emit(
+            &rules::STRUCTURAL_REQUIRED_FILE_MISSING,
             "system/hydros.json",
             Some("hydro_042"),
             "required file is missing",
@@ -235,8 +251,8 @@ mod tests {
     #[test]
     fn test_generate_report_does_not_consume_context() {
         let mut ctx = ValidationContext::new();
-        ctx.add_error(
-            ErrorKind::FileNotFound,
+        ctx.emit(
+            &rules::STRUCTURAL_REQUIRED_FILE_MISSING,
             "system/hydros.json",
             None::<&str>,
             "missing",

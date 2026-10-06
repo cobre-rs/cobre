@@ -198,12 +198,16 @@ mod simulation_only {
             );
         }
 
-        let loaded_basis_cache = build_basis_cache_from_checkpoint(
+        let load = build_basis_cache_from_checkpoint(
             &checkpoint.stage_bases,
             &checkpoint.stage_cuts,
             &setup,
-        )
-        .expect("a current-build checkpoint must load without a dimension mismatch");
+        );
+        assert!(
+            load.unused.is_none(),
+            "every stored basis of a current-build checkpoint fits its own study"
+        );
+        let loaded_basis_cache = load.cache;
         assert_eq!(
             loaded_basis_cache.len(),
             n_stages,

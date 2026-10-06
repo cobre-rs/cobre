@@ -17,8 +17,9 @@ use cobre_io::{EntitySlot, OutputError, ProducerBlock};
 use crate::cut::fcf::FutureCostFunction;
 use crate::error::{ErrorClass, SddpError};
 use crate::policy::policy_load::{
-    FullFcf, PolicyStageManifest, build_basis_cache_from_checkpoint,
-    checkpoint_terminal_cost_scale_factor, rescale_checkpoint_cuts_for_load, validate_policy_load,
+    FullFcf, PolicyStageManifest, StoredBasisLoad, UnusedStoredBases,
+    build_basis_cache_from_checkpoint, checkpoint_terminal_cost_scale_factor,
+    rescale_checkpoint_cuts_for_load, validate_policy_load,
 };
 use crate::setup::StudySetup;
 use crate::training::training::TrainingResult;
@@ -62,8 +63,8 @@ pub enum FullFcfLoadError {
         /// The underlying read failure.
         source: OutputError,
     },
-    /// The checkpoint is incompatible with the study: cost scale, software,
-    /// manifests or stored bases.
+    /// The checkpoint is incompatible with the study: cost scale, software or
+    /// manifests.
     #[error(transparent)]
     Refused(SddpError),
     /// The future-cost function could not be built from the cuts.
@@ -132,14 +133,16 @@ pub struct CheckedFullFcfLoad {
     kind: FullFcfLoadKind,
     fcf: FutureCostFunction,
     basis_cache: Vec<Option<CapturedBasis>>,
+    unused_stored_bases: Option<UnusedStoredBases>,
     stored_basis_records: usize,
     producer: ProducerBlock,
 }
 
 /// Read, validate and decode the checkpoint in `policy_dir` against `setup`.
 ///
-/// `on_warning` receives each compatibility warning, right after validation
-/// and before the FCF and the basis cache are built. `setup` is not mutated.
+/// `on_warning` receives each compatibility warning right after validation,
+/// then, once the basis cache is built, one warning when stored bases do not fit
+/// the study. `setup` is not mutated.
 ///
 /// # Errors
 ///
@@ -235,14 +238,19 @@ pub fn check_full_fcf_load(
     }
     .map_err(|source| FullFcfLoadError::FcfConstruction { kind, source })?;
 
-    let basis_cache =
-        build_basis_cache_from_checkpoint(&checkpoint.stage_bases, &checkpoint.stage_cuts, setup)
-            .map_err(FullFcfLoadError::Refused)?;
+    let StoredBasisLoad {
+        cache: basis_cache,
+        unused: unused_stored_bases,
+    } = build_basis_cache_from_checkpoint(&checkpoint.stage_bases, &checkpoint.stage_cuts, setup);
+    if let Some(unused) = &unused_stored_bases {
+        on_warning(&unused.to_string());
+    }
 
     Ok(CheckedFullFcfLoad {
         kind,
         fcf,
         basis_cache,
+        unused_stored_bases,
         stored_basis_records: checkpoint.stage_bases.len(),
         producer: checkpoint.metadata.producer,
     })
@@ -253,6 +261,12 @@ impl CheckedFullFcfLoad {
     #[must_use]
     pub fn completed_iterations(&self) -> u64 {
         u64::from(self.producer.completed_iterations)
+    }
+
+    /// The stored bases the load left out, when any did not fit the study.
+    #[must_use]
+    pub fn unused_stored_bases(&self) -> Option<&UnusedStoredBases> {
+        self.unused_stored_bases.as_ref()
     }
 
     /// Install the loaded FCF, the stored basis cache (when the checkpoint

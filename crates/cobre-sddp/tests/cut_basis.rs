@@ -1575,7 +1575,8 @@ mod warm_start {
     use cobre_io::config::StoppingRuleConfig;
     use cobre_io::output::policy::{read_policy_checkpoint, write_policy_checkpoint};
     use cobre_sddp::{
-        FutureCostFunction, StudySetup, hydro_models::prepare_hydro_models,
+        FutureCostFunction, SolverStatsDelta, StoredBasisMisfit, StudySetup,
+        build_basis_cache_from_checkpoint, hydro_models::prepare_hydro_models,
         setup::prepare_stochastic,
     };
     use cobre_solver::ActiveSolver;
@@ -1897,6 +1898,118 @@ mod warm_start {
         assert!(
             total_active_after > fresh_active,
             "warm-start training should produce more total cuts"
+        );
+    }
+
+    #[test]
+    fn warm_start_skips_a_stored_basis_with_too_few_basic_entries_instead_of_aborting() {
+        const MISFIT_NODE: u32 = 1;
+        const MISFIT_STAGE: i32 = 1;
+        const OTHER_STAGE: i32 = 0;
+
+        let case_dir = d01_case_dir();
+        let config =
+            cobre_io::parse_config(&case_dir.join("config.json")).expect("config must parse");
+
+        let mut setup_fresh = build_setup(&case_dir, &config);
+        let comm = StubComm;
+        let mut solver = ActiveSolver::new().expect("ActiveSolver");
+        let fresh_outcome = setup_fresh
+            .train(&mut solver, &comm, 1, ActiveSolver::new, None, None)
+            .expect("train");
+        assert!(fresh_outcome.error.is_none());
+
+        let tmpdir = tempfile::tempdir().expect("tempdir");
+        let policy_dir = tmpdir.path().join("policy");
+        write_test_checkpoint(&policy_dir, &setup_fresh, &fresh_outcome.result, 42);
+
+        let mut checkpoint = read_policy_checkpoint(&policy_dir).expect("read checkpoint");
+        assert!(
+            checkpoint.stage_bases.len() >= 2,
+            "the checkpoint must store a basis for the root and for the misfit node"
+        );
+        let misfit = checkpoint
+            .stage_bases
+            .iter_mut()
+            .find(|record| record.stage_id == MISFIT_NODE)
+            .expect("the misfit node's basis is stored");
+        misfit.column_status.fill(0);
+        misfit.row_status.fill(0);
+
+        let mut setup_warm = build_setup(&case_dir, &config);
+        let proof = cobre_sddp::test_support::trivial_full_fcf_proof(
+            checkpoint.stage_cuts[0].state_dimension,
+            checkpoint.metadata.num_stages,
+        );
+        let pool_state_dimensions: Vec<usize> = setup_warm
+            .fcf
+            .pools
+            .iter()
+            .map(|p| p.state_dimension)
+            .collect();
+        let visit_bounds: Vec<u64> = setup_warm
+            .fcf
+            .pools
+            .iter()
+            .map(|p| u64::from(p.visit_stride))
+            .collect();
+        let warm_fcf = FutureCostFunction::new_with_warm_start(
+            &proof,
+            &checkpoint.stage_cuts,
+            &pool_state_dimensions,
+            &visit_bounds,
+            setup_warm.loop_params.forward_passes,
+            setup_warm.loop_params.max_iterations.saturating_add(1),
+        )
+        .expect("warm-start FCF");
+        setup_warm.replace_fcf(warm_fcf);
+
+        let load = build_basis_cache_from_checkpoint(
+            &checkpoint.stage_bases,
+            &checkpoint.stage_cuts,
+            &setup_warm,
+        );
+        let unused = load.unused.expect("the misfit record must be reported");
+        assert_eq!(unused.count, 1);
+        assert!(
+            matches!(unused.first_reason, StoredBasisMisfit::BasicCount { .. }),
+            "{:?}",
+            unused.first_reason
+        );
+        setup_warm.set_warm_start_basis_cache(load.cache);
+
+        let mut solver_warm = ActiveSolver::new().expect("ActiveSolver");
+        let warm_outcome = setup_warm
+            .train(&mut solver_warm, &comm, 1, ActiveSolver::new, None, None)
+            .expect("warm-start train");
+        assert!(warm_outcome.error.is_none(), "{:?}", warm_outcome.error);
+
+        let first_iteration_forward_at = |stage_id: i32| {
+            SolverStatsDelta::aggregate(
+                warm_outcome
+                    .result
+                    .solver_stats_log
+                    .iter()
+                    .filter(|e| {
+                        e.phase == "forward" && e.iteration == 1 && e.stage_id == Some(stage_id)
+                    })
+                    .map(|e| &e.delta),
+            )
+        };
+        let at_misfit = first_iteration_forward_at(MISFIT_STAGE);
+        let at_other = first_iteration_forward_at(OTHER_STAGE);
+        assert_eq!(
+            at_misfit.basis_offered, 0,
+            "the dropped node must cold-start in iteration 1"
+        );
+        assert!(
+            at_other.basis_offered > 0,
+            "the admitted node must warm-start in iteration 1"
+        );
+        assert_eq!(
+            at_misfit.basis_consistency_failures + at_other.basis_consistency_failures,
+            0,
+            "no basis offered to the solver may be rejected"
         );
     }
 }

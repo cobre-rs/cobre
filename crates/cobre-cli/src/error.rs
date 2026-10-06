@@ -27,7 +27,6 @@ use cobre_sddp::SddpError::PolicySoftwareMismatch;
 use cobre_sddp::SddpError::Simulation;
 use cobre_sddp::SddpError::Solver;
 use cobre_sddp::SddpError::Stochastic;
-use cobre_sddp::SddpError::StoredBasisDimensionMismatch;
 use cobre_sddp::SddpError::Validation;
 use cobre_sddp::SddpError::WireVersionMismatch;
 use cobre_sddp::SimulationError;
@@ -268,10 +267,9 @@ impl From<cobre_sddp::SddpError> for CliError {
                 "wire format version mismatch: encoded={encoded}, expected={expected}; \
                  restart all ranks with the same binary"
             ),
-            other @ (Stochastic(_)
-            | BasisShapeMismatch { .. }
-            | PolicySoftwareMismatch { .. }
-            | StoredBasisDimensionMismatch { .. }) => other.to_string(),
+            other @ (Stochastic(_) | BasisShapeMismatch { .. } | PolicySoftwareMismatch { .. }) => {
+                other.to_string()
+            }
         };
         match class {
             ErrorClass::InvalidInput | ErrorClass::IncompatiblePolicy => Self::Validation {
@@ -592,28 +590,6 @@ mod tests {
     }
 
     #[test]
-    fn from_sddp_error_stored_basis_dimension_mismatch_maps_to_validation() {
-        let sddp_err = SddpError::StoredBasisDimensionMismatch {
-            node_id: 3,
-            expected_cols: 4,
-            found_cols: 5,
-            expected_template_rows: 3,
-            found_rows: 6,
-            found_cut_rows: 2,
-        };
-        let cli_err = CliError::from(sddp_err);
-        assert!(
-            matches!(cli_err, CliError::Validation { .. }),
-            "SddpError::StoredBasisDimensionMismatch must map to CliError::Validation, got: {cli_err:?}"
-        );
-        assert_eq!(cli_err.exit_code(), 1);
-        let CliError::Validation { report, .. } = cli_err else {
-            unreachable!("checked above")
-        };
-        assert!(report.contains("stored basis for node"), "{report}");
-    }
-
-    #[test]
     fn from_sddp_error_communication_maps_to_internal() {
         let sddp_err = Communication(CommError::CollectiveFailed {
             operation: "allgatherv",
@@ -676,14 +652,6 @@ mod tests {
             PolicySoftwareMismatch {
                 policy_software: None,
                 policy_version: "0.0.1".to_string(),
-            },
-            StoredBasisDimensionMismatch {
-                node_id: 0,
-                expected_cols: 100,
-                found_cols: 90,
-                expected_template_rows: 50,
-                found_rows: 45,
-                found_cut_rows: 10,
             },
             Io(LoadError::IoError {
                 path: PathBuf::from("system/hydros.json"),

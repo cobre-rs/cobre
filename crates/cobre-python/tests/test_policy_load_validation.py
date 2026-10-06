@@ -5,9 +5,10 @@ routes unconditionally through the shared `cobre_sddp::validate_policy_load`
 entry point -- there is no per-call opt-out. This module verifies the
 Python-facing consequences of the unified validation path: the removed opt-out
 kwarg raises `TypeError`, a policy whose terminal entity manifest disagrees with
-the current study raises `ValueError`, and policy version mismatch and stored-basis
-dimension mismatch raise `PolicyIncompatibleError`. The compatible-load path is
-already exercised by `test_load_policy_then_simulate_matches_run` in `test_study.py`.
+the current study raises `ValueError`, and a policy version mismatch raises
+`PolicyIncompatibleError`. A stored basis that does not fit the study is skipped
+with one warning. The compatible-load path is already exercised by
+`test_load_policy_then_simulate_matches_run` in `test_study.py`.
 
 Run with (from the repo root):
     pytest crates/cobre-python/tests/test_policy_load_validation.py
@@ -91,7 +92,7 @@ def _copy_case_with_extra_thermal(src: pathlib.Path, dest: pathlib.Path) -> None
     Thermals add LP columns but no state, so a policy trained on this variant
     passes every `validate_policy_load` check against `src` (same state
     dimension, stage count, pools and slot manifest) and reaches the
-    stored-basis dimension check.
+    stored-basis fit rule.
     """
     for item in src.iterdir():
         target = dest / item.name
@@ -214,15 +215,14 @@ def test_load_policy_written_by_another_version_raises_policy_incompatible(
     )
 
 
-def test_load_policy_wider_stored_basis_raises_policy_incompatible(
-    tmp_path: pathlib.Path,
+def test_load_policy_with_a_wider_stored_basis_loads_and_warns_once(
+    tmp_path: pathlib.Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
     """A policy trained with an extra thermal (wider LP columns, identical
-    state) is refused when loaded into the original 1dtoy: the stored
-    basis's column count no longer matches its node's LP template.
+    state) loads into the original 1dtoy: each stored basis whose column count
+    no longer matches its node's LP is left out, with one warning per load.
     """
     import cobre  # noqa: PLC0415
-    import cobre.errors  # noqa: PLC0415
 
     variant_case = tmp_path / "variant_case"
     variant_case.mkdir()
@@ -239,11 +239,12 @@ def test_load_policy_wider_stored_basis_raises_policy_incompatible(
     )
 
     study = cobre.Study(VALID_CASE, output_dir=str(tmp_path / "study_dir"))
+    capfd.readouterr()  # discard the source run's own stderr
 
-    with pytest.raises(
-        cobre.errors.PolicyIncompatibleError, match="stored basis for node"
-    ):
-        study.load_policy(output_dir=str(variant_run_dir))
+    study.load_policy(output_dir=str(variant_run_dir))
+
+    err = capfd.readouterr().err
+    assert err.count("stored bases not used: ") == 1, err
 
 
 @pytest.mark.parametrize(

@@ -1283,12 +1283,12 @@ fn run_produces_deterministic_end_block_and_metadata() {
     );
 }
 
-// ── Stored-basis dimension mismatch at simulation-only load ──────────────────
+// ── Stored basis that does not fit, at simulation-only load ──────────────────
 
 /// `examples/1dtoy`'s two thermals plus a third on the same bus: adds LP
 /// columns but no state, so a policy trained on this variant passes every
 /// `validate_policy_load` check against the original 1dtoy and reaches the
-/// stored-basis dimension check.
+/// stored-basis fit rule.
 const THERMALS_WITH_EXTRA_JSON: &str = r#"{
     "thermals": [
         {
@@ -1338,13 +1338,13 @@ const CONFIG_SIMULATION_ONLY_JSON: &str = r#"{
 }"#;
 
 /// A policy trained on a 1dtoy variant with one extra thermal (wider LP
-/// columns, identical state) is refused when loaded for simulation-only into
-/// the original 1dtoy: the stored basis's column count no longer matches its
-/// node's LP template. Ends with the ordering assertion: the same policy,
-/// restamped to another cobre version, is refused by the version check
-/// instead — the version refusal fires first on every load path.
+/// columns, identical state) loads for simulation-only into the original 1dtoy:
+/// each stored basis whose column count no longer matches its node's LP is left
+/// out, one warning reports them, and the simulation runs. Ends with the
+/// ordering assertion: the same policy, restamped to another cobre version, is
+/// refused by the version check instead, before any basis is examined.
 #[test]
-fn simulation_only_refuses_a_policy_with_a_wider_stored_basis() {
+fn simulation_only_loads_a_policy_with_a_wider_stored_basis_and_warns() {
     let variant_dir = TempDir::new().unwrap();
     copy_dir_recursive(&case_dir("1dtoy"), variant_dir.path());
     write_file(
@@ -1374,18 +1374,22 @@ fn simulation_only_refuses_a_policy_with_a_wider_stored_basis() {
         CONFIG_SIMULATION_ONLY_JSON,
     );
 
-    cobre()
+    let run = cobre()
         .args([
             "run",
             sim_only_dir.path().to_str().unwrap(),
             "--output",
             output.path().to_str().unwrap(),
-            "--quiet",
         ])
         .assert()
-        .failure()
-        .code(1)
-        .stderr(predicate::str::contains("stored basis for node"));
+        .success();
+    let stderr = String::from_utf8_lossy(&run.get_output().stderr).into_owned();
+    assert_eq!(
+        stderr.matches("stored bases not used: ").count(),
+        1,
+        "the misfit must be reported exactly once: {stderr}"
+    );
+    assert_empty_file(&output.path().join("simulation/_SUCCESS"));
 
     restamp_policy_version(&output.path().join("policy"), "0.0.1");
 
@@ -1401,7 +1405,7 @@ fn simulation_only_refuses_a_policy_with_a_wider_stored_basis() {
         .failure()
         .code(1)
         .stderr(predicate::str::contains("written by cobre 0.0.1"))
-        .stderr(predicate::str::contains("stored basis for node").not());
+        .stderr(predicate::str::contains("stored bases not used").not());
 }
 
 fn policy_mode_config(mode: &str) -> String {

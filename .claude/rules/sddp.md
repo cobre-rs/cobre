@@ -466,6 +466,32 @@ record. Read: `policy/policy_export.rs` (`build_stage_basis_records`). Pinned by
 `exported_basis_records_count_the_cut_rows_each_basis_was_captured_with`
 (`tests/cut_basis.rs`).
 
+The load uses a stored basis for its node only when it fits that node's LP
+exactly. `admit_stored_basis` checks, in order, `found_cols == template_cols`,
+`found_rows == template_rows + num_cut_rows`, and a basic count (column and row
+statuses decoding to `Basic`) equal to `found_rows`. A record that fails is not
+used for its node and the load proceeds: its slot stays `None`, and
+`UnusedStoredBases` owns the one aggregated warning, `stored bases not used: …`.
+The basic count is checked because `reconstruct_basis` assumes it and a deficit
+aborts the run with `BasisShapeMismatch` (`cut/basis_reconstruct.rs`, "Basic-count
+invariant"); `reconstruct_basis` is never called for a dropped node, so the
+append-only pool and slot identity are untouched. The wrong-but-compiling
+alternatives: refusing the load over a basis, which only warm-starts a solve;
+admitting on shape alone, which lets a basic-count deficit reach
+`reconstruct_basis`; and adding a cold retry after `reconstruct_basis` fails,
+which hides a record this rule should have dropped. Read: `policy/policy_load.rs`
+(`build_basis_cache_for_nodes`, `admit_stored_basis`, `StoredBasisLoad`),
+`policy/full_fcf_load.rs` (`check_full_fcf_load`). Pinned by
+`stored_basis_whose_basic_count_differs_from_its_rows_is_dropped` and
+`unused_stored_bases_report_is_independent_of_record_order`
+(`policy/policy_load.rs`),
+`warm_start_skips_a_stored_basis_with_too_few_basic_entries_instead_of_aborting`
+(`tests/cut_basis.rs`),
+`simulation_only_loads_a_policy_with_a_wider_stored_basis_and_warns`
+(`crates/cobre-cli/tests/cli_run.rs`) and
+`test_load_policy_with_a_wider_stored_basis_loads_and_warns_once`
+(`crates/cobre-python/tests/test_policy_load_validation.py`).
+
 ## A stored basis warm-starts only at its own node (node-tag)
 
 A `CapturedBasis` carries the declared `node_id` it was captured at
@@ -520,7 +546,9 @@ WITHOUT weakening the node-tag filter above: the filter still matches `node_id` 
 node exactly, and the re-tag is sound ONLY because same-`pool_id` nodes share one
 frozen template, so a sibling's basis has identical column/cut-row shape and is
 structurally valid at the target leaf. Reuse routes through the tolerant
-slot-identity `reconstruct_basis` path, which re-validates shape.
+slot-identity `reconstruct_basis` path, which re-validates shape. A slot the
+stored-basis admit rule leaves empty is filled the same way, so a dropped
+enumerated leaf may warm from a fitting sibling.
 
 Relaxing the filter to a pool-id match instead of re-tagging — the exact
 wrong-but-compiling alternative the paragraph above forbids — would let a basis

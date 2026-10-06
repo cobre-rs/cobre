@@ -58,8 +58,8 @@ pub struct HydroFitTimings {
 pub use types::{
     EvaporationModel, EvaporationModelSet, EvaporationReferenceSource, EvaporationSource,
     FphaFitDeviationEntry, FphaHydroDetail, FphaPlane, HydroModelProvenance, HydroModelSummary,
-    LinearizedEvaporation, PrepareHydroModelsResult, ProductionModelSet, ProductionModelSource,
-    ResolvedProductionModel,
+    LinearizedEvaporation, NoTurbineCapacityHydro, PrepareHydroModelsResult, ProductionModelSet,
+    ProductionModelSource, ResolvedProductionModel,
 };
 // ── Top-level pipeline function ───────────────────────────────────────────────
 

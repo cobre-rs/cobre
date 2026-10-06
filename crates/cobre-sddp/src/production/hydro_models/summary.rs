@@ -5,11 +5,12 @@
 //! All counts are derived from the already-validated pipeline result; summary
 //! construction is infallible.
 
-use cobre_core::System;
+use cobre_core::{EntityId, System};
 
 use super::types::{
     EvaporationReferenceSource, EvaporationSource, FphaHydroDetail, HydroModelSummary,
-    PrepareHydroModelsResult, ProductionModelSource, ResolvedProductionModel,
+    NoTurbineCapacityHydro, PrepareHydroModelsResult, ProductionModelSource,
+    ResolvedProductionModel,
 };
 // ── Summary builder ───────────────────────────────────────────────────────────
 
@@ -27,6 +28,7 @@ pub fn build_hydro_model_summary(
     let mut n_fpha = 0usize;
     let mut total_planes = 0usize;
     let mut fpha_details: Vec<FphaHydroDetail> = Vec::new();
+    let mut no_turbine_capacity: Vec<NoTurbineCapacityHydro> = Vec::new();
 
     let has_study_stage = system.stages().iter().any(|s| s.id >= 0);
     let representative_stage = 0usize;
@@ -34,8 +36,13 @@ pub fn build_hydro_model_summary(
     for (hydro_pos, (entity_id, source)) in result.provenance.production_sources.iter().enumerate()
     {
         match source {
-            ProductionModelSource::DefaultConstant | ProductionModelSource::NoTurbineCapacity => {
+            ProductionModelSource::DefaultConstant => n_constant += 1,
+            ProductionModelSource::NoTurbineCapacity => {
                 n_constant += 1;
+                no_turbine_capacity.push(NoTurbineCapacityHydro {
+                    hydro_id: *entity_id,
+                    name: hydro_name(system, *entity_id),
+                });
             }
             ProductionModelSource::PrecomputedHyperplanes
             | ProductionModelSource::ComputedFromGeometry => {
@@ -52,21 +59,16 @@ pub fn build_hydro_model_summary(
 
                 total_planes += n_planes;
 
-                let name = system
-                    .hydros()
-                    .iter()
-                    .find(|h| h.id == *entity_id)
-                    .map_or_else(|| entity_id.0.to_string(), |h| h.name.clone());
-
                 fpha_details.push(FphaHydroDetail {
                     hydro_id: *entity_id,
-                    name,
+                    name: hydro_name(system, *entity_id),
                     source: *source,
                     n_planes,
                 });
             }
         }
     }
+    no_turbine_capacity.sort_by_key(|entry| entry.hydro_id);
 
     let mut n_evaporation = 0usize;
     let mut n_no_evaporation = 0usize;
@@ -102,11 +104,20 @@ pub fn build_hydro_model_summary(
         n_fpha,
         total_planes,
         fpha_details,
+        no_turbine_capacity,
         n_evaporation,
         n_no_evaporation,
         n_user_supplied_ref,
         n_default_midpoint_ref,
     }
+}
+
+fn hydro_name(system: &System, entity_id: EntityId) -> String {
+    system
+        .hydros()
+        .iter()
+        .find(|h| h.id == entity_id)
+        .map_or_else(|| entity_id.0.to_string(), |h| h.name.clone())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -800,5 +811,67 @@ mod tests {
             summary.fpha_details[0].n_planes, n_planes,
             "fpha_details[0].n_planes must match the fitted plane count"
         );
+    }
+
+    fn summary_with_no_turbine_capacity_out_of_id_order() -> HydroModelSummary {
+        let hydro_ids = [1i32, 2, 3];
+        let hydros = hydro_ids
+            .iter()
+            .map(|&id| make_hydro(id, HydroGenerationModel::Fpha))
+            .collect();
+        let system = make_system_for_summary(hydros);
+        let mut result = make_result_all_constant(&hydro_ids);
+        result.provenance.production_sources = vec![
+            (EntityId(3), ProductionModelSource::NoTurbineCapacity),
+            (EntityId(1), ProductionModelSource::NoTurbineCapacity),
+            (EntityId(2), ProductionModelSource::DefaultConstant),
+        ];
+        build_hydro_model_summary(&result, &system)
+    }
+
+    #[test]
+    fn no_turbine_capacity_lists_plants_ascending_by_hydro_id() {
+        let summary = summary_with_no_turbine_capacity_out_of_id_order();
+
+        assert_eq!(
+            summary.no_turbine_capacity,
+            vec![
+                NoTurbineCapacityHydro {
+                    hydro_id: EntityId(1),
+                    name: "Hydro1".to_string(),
+                },
+                NoTurbineCapacityHydro {
+                    hydro_id: EntityId(3),
+                    name: "Hydro3".to_string(),
+                },
+            ]
+        );
+        assert_eq!(summary.n_constant, 3);
+    }
+
+    #[test]
+    fn no_turbine_capacity_serializes_as_an_always_present_list() {
+        let listed = serde_json::to_value(summary_with_no_turbine_capacity_out_of_id_order())
+            .expect("summary serializes");
+        assert_eq!(
+            listed["no_turbine_capacity"],
+            serde_json::json!([
+                {"hydro_id": 1, "name": "Hydro1"},
+                {"hydro_id": 3, "name": "Hydro3"},
+            ])
+        );
+
+        let hydro_ids = [1i32, 2];
+        let hydros = hydro_ids
+            .iter()
+            .map(|&id| make_hydro(id, HydroGenerationModel::ConstantProductivity))
+            .collect();
+        let system = make_system_for_summary(hydros);
+        let empty = serde_json::to_value(build_hydro_model_summary(
+            &make_result_all_constant(&hydro_ids),
+            &system,
+        ))
+        .expect("summary serializes");
+        assert_eq!(empty["no_turbine_capacity"], serde_json::json!([]));
     }
 }

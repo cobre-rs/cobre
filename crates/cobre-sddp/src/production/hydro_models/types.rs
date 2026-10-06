@@ -266,7 +266,7 @@ pub enum EvaporationReferenceSource {
 
 /// Provenance record for all hydro plants' production and evaporation models.
 ///
-/// One entry per hydro plant in declaration order (canonical ID order).
+/// One entry per hydro plant in canonical `(operational_start_date, id)` order.
 #[derive(Debug, Clone)]
 pub struct HydroModelProvenance {
     /// `(entity_id, source)` pairs for each hydro's production model.
@@ -295,6 +295,15 @@ pub struct FphaHydroDetail {
     pub n_planes: usize,
 }
 
+/// A hydro plant listed in [`HydroModelSummary::no_turbine_capacity`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoTurbineCapacityHydro {
+    /// Entity identifier of the hydro plant.
+    pub hydro_id: EntityId,
+    /// Human-readable name of the hydro plant.
+    pub name: String,
+}
+
 /// Aggregated production- and evaporation-model counts for `cobre-cli` display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HydroModelSummary {
@@ -306,6 +315,10 @@ pub struct HydroModelSummary {
     pub total_planes: usize,
     /// Per-hydro detail for each FPHA hydro plant.
     pub fpha_details: Vec<FphaHydroDetail>,
+    /// Hydro plants that requested FPHA but have no turbine capacity
+    /// ([`ProductionModelSource::NoTurbineCapacity`]), sorted ascending by
+    /// `hydro_id`. They are also counted in `n_constant`.
+    pub no_turbine_capacity: Vec<NoTurbineCapacityHydro>,
     /// Number of hydro plants with linearized evaporation.
     pub n_evaporation: usize,
     /// Number of hydro plants with no evaporation model.
@@ -622,6 +635,7 @@ mod tests {
             n_fpha: 1,
             total_planes: 5,
             fpha_details: vec![detail],
+            no_turbine_capacity: Vec::new(),
             n_evaporation: 2,
             n_no_evaporation: 2,
             n_user_supplied_ref: 1,
@@ -888,6 +902,10 @@ mod tests {
                     n_planes: 3,
                 },
             ],
+            no_turbine_capacity: vec![NoTurbineCapacityHydro {
+                hydro_id: EntityId(13),
+                name: "Reservoir C".to_string(),
+            }],
             n_evaporation: 1,
             n_no_evaporation: 4,
             n_user_supplied_ref: 1,
@@ -971,6 +989,7 @@ mod tests {
             back.fpha_details[0].source,
             ProductionModelSource::PrecomputedHyperplanes
         );
+        assert_eq!(back.no_turbine_capacity, summary.no_turbine_capacity);
     }
 
     #[test]

@@ -117,8 +117,9 @@ pub use policy::resolved_parameters::{
 pub use production::energy_conversion::{EnergyConversionSet, HydroEnergyProductivityOverride};
 pub use production::hydro_models::{
     FphaFitDeviationEntry, FphaHydroDetail, HydroFitTimings, HydroModelSummary,
-    PrepareHydroModelsResult, ProductionModelSource, build_deviation_summary,
-    build_evaporation_model_rows, build_hydro_model_summary, prepare_hydro_models,
+    NoTurbineCapacityHydro, PrepareHydroModelsResult, ProductionModelSource,
+    build_deviation_summary, build_evaporation_model_rows, build_hydro_model_summary,
+    prepare_hydro_models,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use setup::lp_build_inputs::build_stage_templates_resolving_layout;

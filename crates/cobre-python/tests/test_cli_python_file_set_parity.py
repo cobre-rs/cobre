@@ -6,11 +6,11 @@ project's `CLAUDE.md`: "every output file the CLI writes must also be written
 by the Python bindings." The existing `test_*_parity.py` / `test_outputs.py`
 suite checks per-file byte/column parity one file at a time; none of them
 asserts that neither write path gains or loses a file the other does not.
-This module closes that gap: it runs both write paths end-to-end on one case
+This module closes that gap: it runs both write paths end-to-end on each case
 and asserts the two output trees contain the exact same SET of relative file
-paths. It compares file SETS ONLY -- never bytes, never columns, since
-content parity is already covered by the `test_*_parity.py` suite and
-duplicating it here would be dead coverage.
+paths. The equality gate compares file SETS ONLY -- never bytes, never
+columns, since content parity is already covered by the `test_*_parity.py`
+suite and duplicating it here would be dead coverage.
 
 `cobre-python` is excluded from the cargo workspace (it needs a Python
 interpreter to build), so `cargo test --workspace` never runs this gate; it
@@ -30,10 +30,16 @@ directly (`Path.rglob`), never through a pyarrow hive-partition dataset
 inference: `scenario_id` is both the Hive partition key AND an in-file Int32
 column, so `pyarrow.dataset`'s schema-merging would raise on the collision. A
 plain directory walk has no such ambiguity.
+
+The second case (`examples/deterministic/d57-fpha-zero-turbine-capacity`) has
+one plant that requests FPHA but has no turbine capacity. It is here to check
+that both write paths list that plant under the `no_turbine_capacity` key of
+`training/hydro_models.json`.
 """
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import shutil
@@ -44,6 +50,9 @@ from _cobre_cli import resolve_cli_binary, run_cli
 
 _REPO_ROOT = pathlib.Path(__file__).parents[3]
 D28_CASE = _REPO_ROOT / "examples" / "deterministic" / "d28-decomp-weekly-monthly"
+D57_CASE = (
+    _REPO_ROOT / "examples" / "deterministic" / "d57-fpha-zero-turbine-capacity"
+)
 
 _SCENARIO_PARTITION_RE = re.compile(r"scenario_id=(\d{4})")
 
@@ -114,8 +123,31 @@ def d28_python_output(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     return output_dir
 
 
+@pytest.fixture(scope="module")
+def d57_cli_output(
+    tmp_path_factory: pytest.TempPathFactory, cli_binary: pathlib.Path
+) -> pathlib.Path:
+    """Run D57 (one zero-turbine-capacity FPHA plant) through the compiled CLI binary."""
+    assert D57_CASE.is_dir(), f"the D57 fixture must exist at {D57_CASE}"
+    output_dir = tmp_path_factory.mktemp("d57_cli_out")
+    run_cli(D57_CASE, output_dir, cli_binary)
+    return output_dir
+
+
+@pytest.fixture(scope="module")
+def d57_python_output(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
+    """Run D57 through the module-level Python bindings entry point."""
+    import cobre.run  # noqa: PLC0415
+
+    assert D57_CASE.is_dir(), f"the D57 fixture must exist at {D57_CASE}"
+    output_dir = tmp_path_factory.mktemp("d57_python_out")
+    cobre.run.run(str(D57_CASE), output_dir=str(output_dir))
+    return output_dir
+
+
+@pytest.mark.parametrize("case", ["d28", "d57"])
 def test_cli_python_output_file_sets_are_equal(
-    d28_cli_output: pathlib.Path, d28_python_output: pathlib.Path
+    case: str, request: pytest.FixtureRequest
 ) -> None:
     """The CLI and Python write paths produce the exact same set of output files.
 
@@ -126,11 +158,30 @@ def test_cli_python_output_file_sets_are_equal(
     for a live demonstration) fails here with the exact missing/extra
     filename named in the assertion message.
     """
-    cli_files = _relative_files(d28_cli_output)
-    py_files = _relative_files(d28_python_output)
+    cli_output: pathlib.Path = request.getfixturevalue(f"{case}_cli_output")
+    py_output: pathlib.Path = request.getfixturevalue(f"{case}_python_output")
+    cli_files = _relative_files(cli_output)
+    py_files = _relative_files(py_output)
     assert cli_files == py_files, _file_set_diff_message(
-        d28_cli_output, d28_python_output, cli_files, py_files
+        cli_output, py_output, cli_files, py_files
     )
+
+
+def test_zero_turbine_case_lists_the_plant_on_both_paths(
+    d57_cli_output: pathlib.Path, d57_python_output: pathlib.Path
+) -> None:
+    """Both write paths list D57's zero-turbine-capacity plant in hydro_models.json.
+
+    Non-vacuity check for the D57 file-set case: the plant must reach the
+    `no_turbine_capacity` key of `training/hydro_models.json` on the CLI and
+    on the Python path alike.
+    """
+    expected = [{"hydro_id": 0, "name": "H0-Degenerate"}]
+    for root in (d57_cli_output, d57_python_output):
+        summary = json.loads((root / "training" / "hydro_models.json").read_text())
+        assert summary["no_turbine_capacity"] == expected, (
+            f"unexpected no_turbine_capacity in {root}"
+        )
 
 
 def test_case_exercises_the_drift_prone_output_surface(

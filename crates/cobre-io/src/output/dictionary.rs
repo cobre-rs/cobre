@@ -10,12 +10,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::{Float64Builder, Int8Builder, Int32Builder, RecordBatch};
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::DataType;
 use cobre_core::System;
 
 use crate::output::atomic::{write_bytes_atomic, write_parquet_atomic};
 use crate::output::error::OutputError;
-use crate::output::schemas::{OUTPUT_SCHEMAS, bounds_schema};
+use crate::output::schemas::{OUTPUT_SCHEMAS, SchemaRegistryEntry, bounds_schema};
 #[cfg(test)]
 use crate::output::schemas::{hydro_bus_generation_schema, hydros_schema};
 
@@ -211,12 +211,12 @@ fn write_entities_csv(path: &Path, system: &System) -> Result<(), OutputError> {
 
 // ─── variables.csv ───────────────────────────────────────────────────────────
 
-/// Every `(file, schema)` pair `variables.csv` documents — the single owner of
+/// Every `(file, entry)` pair `variables.csv` documents — the single owner of
 /// the list, shared with the no-empty-description test that guards it.
-fn variables_csv_schemas() -> Vec<(&'static str, Schema)> {
+fn variables_csv_schemas() -> Vec<(&'static str, &'static SchemaRegistryEntry)> {
     OUTPUT_SCHEMAS
         .iter()
-        .filter_map(|entry| entry.csv_label.map(|label| (label, (entry.schema_fn)())))
+        .filter_map(|entry| entry.csv_label.map(|label| (label, entry)))
         .collect()
 }
 
@@ -229,15 +229,15 @@ fn write_variables_csv(path: &Path) -> Result<(), OutputError> {
     wtr.write_record(["file", "column", "type", "unit", "description", "nullable"])
         .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
 
-    for (schema_name, schema) in &variables_csv_schemas() {
-        for field in schema.fields() {
+    for (label, entry) in &variables_csv_schemas() {
+        for field in (entry.schema_fn)().fields() {
             let type_str = arrow_type_str(field.data_type());
-            let unit = unit_for(schema_name, field.name());
-            let description = description_for(schema_name, field.name());
+            let unit = unit_for(entry.name, field.name());
+            let description = description_for(label, field.name());
             let nullable = if field.is_nullable() { "true" } else { "false" };
 
             wtr.write_record([
-                *schema_name,
+                *label,
                 field.name().as_str(),
                 type_str,
                 unit,
@@ -266,138 +266,66 @@ fn arrow_type_str(dt: &DataType) -> &'static str {
     }
 }
 
-/// Return the physical unit string for a given (file, column) pair.
-///
-/// Returns `""` for dimensionless columns or columns without a defined unit.
-// Rationale: one authoritative (file, column) → unit lookup table; identical
-// arms are intentional (same unit recurs across schemas), so splitting or
-// collapsing arms would degrade it as a catalog.
-#[allow(clippy::too_many_lines, clippy::match_same_arms)]
-fn unit_for(file: &str, column: &str) -> &'static str {
-    match column {
-        "scenario_id" | "stage_id" | "node_id" | "block_id" | "lag" | "iteration" | "rank"
-        | "forward_passes" => return "",
-        "generation_mw"
-        | "available_mw"
-        | "curtailment_mw"
-        | "direct_flow_mw"
-        | "reverse_flow_mw"
-        | "net_flow_mw"
-        | "losses_mw"
-        | "load_mw"
-        | "deficit_mw"
-        | "excess_mw"
-        | "spot_price"
-        | "pumped_flow_m3s"
-        | "power_consumption_mw"
-        | "anticipated_committed_mw"
-        | "anticipated_decision_mw"
-        | "power_mw" => return "MW",
-        "generation_mwh"
-        | "curtailment_mwh"
-        | "net_flow_mwh"
-        | "losses_mwh"
-        | "load_mwh"
-        | "deficit_mwh"
-        | "excess_mwh"
-        | "energy_consumption_mwh"
-        | "energy_mwh" => return "MWh",
-        "turbined_m3s"
-        | "spillage_m3s"
-        | "outflow_m3s"
-        | "evaporation_m3s"
-        | "diverted_inflow_m3s"
-        | "diverted_outflow_m3s"
-        | "incremental_inflow_m3s"
-        | "inflow_m3s"
-        | "turbined_slack_m3s"
-        | "outflow_slack_below_m3s"
-        | "outflow_slack_above_m3s"
-        | "evaporation_violation_pos_m3s"
-        | "evaporation_violation_neg_m3s"
-        | "inflow_nonnegativity_slack_m3s"
-        | "water_withdrawal_violation_pos_m3s"
-        | "water_withdrawal_violation_neg_m3s"
-        | "pumped_volume_hm3"
-        | "value_m3s" => return "m3/s",
-        "storage_initial_hm3"
-        | "storage_final_hm3"
-        | "storage_violation_below_hm3"
-        | "filling_target_violation_hm3"
-        | "in_transit_volume_hm3"
-        | "delayed_arrival_hm3" => return "hm3",
-        "total_cost"
-        | "immediate_cost"
-        | "discounted_immediate_cost"
-        | "future_cost"
-        | "thermal_cost"
-        | "anticipated_thermal_cost"
-        | "contract_cost"
-        | "deficit_cost"
-        | "excess_cost"
-        | "storage_violation_cost"
-        | "filling_target_cost"
-        | "hydro_violation_cost"
-        | "outflow_violation_below_cost"
-        | "outflow_violation_above_cost"
-        | "turbined_violation_cost"
-        | "generation_violation_cost"
-        | "evaporation_violation_cost"
-        | "withdrawal_violation_cost"
-        | "inflow_penalty_cost"
-        | "generic_violation_cost"
-        | "spillage_cost"
-        | "turbined_cost"
-        | "curtailment_cost"
-        | "exchange_cost"
-        | "pumping_cost"
-        | "generation_cost"
-        | "total_cost_convergence"
-        | "pumping_cost_csv"
-        | "price_per_mwh"
-        | "slack_cost" => return "$",
-        "time_forward_ms"
-        | "time_backward_ms"
-        | "time_total_ms"
-        | "forward_solve_ms"
-        | "forward_sample_ms"
-        | "backward_solve_ms"
-        | "backward_cut_ms"
-        | "cut_selection_ms"
-        | "mpi_allreduce_ms"
-        | "mpi_broadcast_ms"
-        | "io_write_ms"
-        | "state_exchange_ms"
-        | "cut_batch_build_ms"
-        | "bwd_setup_ms"
-        | "bwd_load_imbalance_ms"
-        | "bwd_scheduling_overhead_ms"
-        | "fwd_setup_ms"
-        | "fwd_load_imbalance_ms"
-        | "fwd_scheduling_overhead_ms"
-        | "overhead_ms"
-        | "lazy_scoring_ms"
-        | "solve_time_ms"
-        | "load_model_time_ms"
-        | "set_bounds_time_ms"
-        | "basis_set_time_ms"
-        | "selection_time_ms" => return "ms",
-        _ => {}
+const VARIES: &str = "varies";
+
+const UNIT_SUFFIXES: [(&str, &str); 7] = [
+    ("_mwh", "MWh"),
+    ("_mw", "MW"),
+    ("_hm3", "hm3"),
+    ("_m3s", "m3/s"),
+    ("_ms", "ms"),
+    ("_percent", "%"),
+    ("_cost", "$"),
+];
+
+const NAMED_UNITS: &[(&str, &str, &str)] = &[
+    ("buses", "spot_price", "$/MWh"),
+    ("contracts", "price_per_mwh", "$/MWh"),
+    ("hydros", "water_value_per_hm3", "$/hm3"),
+    ("convergence", "lower_bound", "$"),
+    ("convergence", "upper_bound", "$"),
+    ("convergence", "upper_bound_std", "$"),
+    ("fpha_hyperplanes", "gamma_0", "MW"),
+    ("fpha_hyperplanes", "gamma_v", "MW/hm3"),
+    ("fpha_hyperplanes", "gamma_q", "MW/(m3/s)"),
+    ("fpha_hyperplanes", "gamma_s", "MW/(m3/s)"),
+    ("fpha_deviation_points", "v", "hm3"),
+    ("fpha_deviation_points", "q", "m3/s"),
+    ("fpha_deviation_points", "fph_exact", "MW"),
+    ("fpha_deviation_points", "fpha_fitted", "MW"),
+    ("fpha_deviation_points", "deviation", "MW"),
+    ("bounds", "bound_value", VARIES),
+    ("generic_violations", "slack_value", VARIES),
+    ("generic_constraint_echo", "coefficient", VARIES),
+    ("generic_constraint_echo", "bound_lower", VARIES),
+    ("generic_constraint_echo", "bound_upper", VARIES),
+    ("generic_constraint_echo", "slack_penalty", VARIES),
+];
+
+fn suffix_unit(name: &str) -> &'static str {
+    UNIT_SUFFIXES
+        .iter()
+        .find(|(suffix, _)| name.ends_with(suffix))
+        .map_or("", |&(_, unit)| unit)
+}
+
+/// Unit of `column` in the registry schema named `schema`: `""` when the
+/// column has no unit, [`VARIES`] when the unit depends on the row.
+fn unit_for(schema: &str, column: &str) -> &'static str {
+    if let Some(&(_, _, unit)) = NAMED_UNITS
+        .iter()
+        .find(|&&(s, c, _)| s == schema && c == column)
+    {
+        return unit;
     }
-    match (file, column) {
-        ("hydros", "water_value_per_hm3") => "$/hm3",
-        ("hydros", "equivalent_productivity_mw_per_m3s") => "MW/(m3/s)",
-        ("hydros", "accumulated_productivity_mw_per_m3s") => "MW/(m3/s)",
-        ("hydros", "integrated_equivalent_productivity_mw_per_m3s") => "MW/(m3/s)",
-        ("hydros", "integrated_accumulated_productivity_mw_per_m3s") => "MW/(m3/s)",
-        ("hydros", "incremental_inflow_energy_mw") => "MW",
-        ("hydros", "stored_energy_initial_mwh") => "MWh",
-        ("hydros", "stored_energy_final_mwh") => "MWh",
-        ("hydros", "stored_energy_initial_mw") => "MW",
-        ("hydros", "stored_energy_final_mw") => "MW",
-        ("hydros", "generation_slack_mw") => "MW",
-        _ => "",
+    if let Some((numerator, denominator)) = column.rsplit_once("_per_") {
+        return match (suffix_unit(numerator), denominator) {
+            ("MW", "m3s") => "MW/(m3/s)",
+            ("m3/s", "hm3") => "(m3/s)/hm3",
+            _ => "",
+        };
     }
+    suffix_unit(column)
 }
 
 /// Return a short description for a given (file, column) pair.
@@ -589,7 +517,9 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("generic_violations", "stage_id") => "Stage index",
         ("generic_violations", "block_id") => "Block index within stage (nullable)",
         ("generic_violations", "constraint_id") => "Generic constraint identifier",
-        ("generic_violations", "slack_value") => "Constraint slack value",
+        ("generic_violations", "slack_value") => {
+            "Constraint slack value; its unit is that of the constraint identified by constraint_id"
+        }
         ("generic_violations", "slack_cost") => "Constraint slack penalty cost",
         ("scenario_summary", "probability") => {
             "Per-scenario leaf-path probability under a declared census; NULL under sampled selection"
@@ -1313,8 +1243,8 @@ mod tests {
 
     #[test]
     fn every_listed_schema_column_has_a_nonempty_description() {
-        for (file, schema) in &variables_csv_schemas() {
-            for field in schema.fields() {
+        for (file, entry) in &variables_csv_schemas() {
+            for field in (entry.schema_fn)().fields() {
                 let description = description_for(file, field.name());
                 assert!(
                     !description.is_empty(),
@@ -3153,6 +3083,516 @@ mod tests {
         assert_eq!(unit_for("hydros", "stored_energy_final_mwh"), "MWh");
     }
 
+    fn registry_columns() -> Vec<(&'static SchemaRegistryEntry, String)> {
+        OUTPUT_SCHEMAS
+            .iter()
+            .flat_map(|entry| {
+                (entry.schema_fn)()
+                    .fields()
+                    .iter()
+                    .map(|field| (entry, field.name().clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    const ORACLE_SUFFIXES: &[(&str, &str)] = &[
+        ("_mwh", "MWh"),
+        ("_mw", "MW"),
+        ("_hm3", "hm3"),
+        ("_m3s", "m3/s"),
+        ("_ms", "ms"),
+        ("_percent", "%"),
+        ("_cost", "$"),
+    ];
+    const PINNED_UNITS: &[(&str, &str, &str)] = &[
+        ("buses", "spot_price", "$/MWh"),
+        ("contracts", "price_per_mwh", "$/MWh"),
+        ("hydros", "water_value_per_hm3", "$/hm3"),
+        ("convergence", "lower_bound", "$"),
+        ("convergence", "upper_bound", "$"),
+        ("convergence", "upper_bound_std", "$"),
+        ("fpha_hyperplanes", "gamma_0", "MW"),
+        ("fpha_hyperplanes", "gamma_v", "MW/hm3"),
+        ("fpha_hyperplanes", "gamma_q", "MW/(m3/s)"),
+        ("fpha_hyperplanes", "gamma_s", "MW/(m3/s)"),
+        ("fpha_deviation_points", "v", "hm3"),
+        ("fpha_deviation_points", "q", "m3/s"),
+        ("fpha_deviation_points", "fph_exact", "MW"),
+        ("fpha_deviation_points", "fpha_fitted", "MW"),
+        ("fpha_deviation_points", "deviation", "MW"),
+        ("bounds", "bound_value", "varies"),
+        ("generic_violations", "slack_value", "varies"),
+        ("generic_constraint_echo", "coefficient", "varies"),
+        ("generic_constraint_echo", "bound_lower", "varies"),
+        ("generic_constraint_echo", "bound_upper", "varies"),
+        ("generic_constraint_echo", "slack_penalty", "varies"),
+        ("hydros", "equivalent_productivity_mw_per_m3s", "MW/(m3/s)"),
+        ("hydros", "accumulated_productivity_mw_per_m3s", "MW/(m3/s)"),
+        (
+            "hydros",
+            "integrated_equivalent_productivity_mw_per_m3s",
+            "MW/(m3/s)",
+        ),
+        (
+            "hydros",
+            "integrated_accumulated_productivity_mw_per_m3s",
+            "MW/(m3/s)",
+        ),
+        (
+            "evaporation_models",
+            "volume_slope_m3s_per_hm3",
+            "(m3/s)/hm3",
+        ),
+    ];
+    const NO_UNIT_COLUMNS: &[(&str, &[&str])] = &[
+        (
+            "costs",
+            &[
+                "scenario_id",
+                "stage_id",
+                "node_id",
+                "block_id",
+                "discount_factor",
+            ],
+        ),
+        (
+            "hydros",
+            &[
+                "scenario_id",
+                "stage_id",
+                "node_id",
+                "block_id",
+                "hydro_id",
+                "storage_binding_code",
+                "operative_state_code",
+            ],
+        ),
+        (
+            "hydro_bus_generation",
+            &[
+                "scenario_id",
+                "stage_id",
+                "node_id",
+                "block_id",
+                "hydro_id",
+                "bus_id",
+            ],
+        ),
+        (
+            "thermals",
+            &[
+                "scenario_id",
+                "stage_id",
+                "node_id",
+                "block_id",
+                "thermal_id",
+                "is_anticipated",
+                "operative_state_code",
+            ],
+        ),
+        (
+            "exchanges",
+            &[
+                "scenario_id",
+                "stage_id",
+                "node_id",
+                "block_id",
+                "line_id",
+                "operative_state_code",
+            ],
+        ),
+        (
+            "buses",
+            &["scenario_id", "stage_id", "node_id", "block_id", "bus_id"],
+        ),
+        (
+            "pumping_stations",
+            &[
+                "scenario_id",
+                "stage_id",
+                "node_id",
+                "block_id",
+                "pumping_station_id",
+                "operative_state_code",
+            ],
+        ),
+        (
+            "contracts",
+            &[
+                "scenario_id",
+                "stage_id",
+                "node_id",
+                "block_id",
+                "contract_id",
+                "operative_state_code",
+            ],
+        ),
+        (
+            "non_controllables",
+            &[
+                "scenario_id",
+                "stage_id",
+                "node_id",
+                "block_id",
+                "non_controllable_id",
+                "operative_state_code",
+            ],
+        ),
+        (
+            "inflow_lags",
+            &[
+                "scenario_id",
+                "stage_id",
+                "node_id",
+                "hydro_id",
+                "lag_index",
+            ],
+        ),
+        (
+            "in_transit",
+            &["scenario_id", "stage_id", "node_id", "hydro_id", "lag"],
+        ),
+        (
+            "transit_seed",
+            &["scenario_id", "hydro_id", "start_date", "end_date"],
+        ),
+        (
+            "generic_violations",
+            &[
+                "scenario_id",
+                "stage_id",
+                "node_id",
+                "block_id",
+                "constraint_id",
+            ],
+        ),
+        ("paths", &["scenario_id", "stage_id", "node_id"]),
+        ("scenario_summary", &["scenario_id", "probability"]),
+        (
+            "convergence",
+            &[
+                "iteration",
+                "upper_bound_kind",
+                "cuts_added",
+                "cuts_removed",
+                "cuts_active",
+                "forward_passes",
+                "lp_solves",
+                "mean_rows_in_lp",
+            ],
+        ),
+        ("iteration_timing", &["iteration", "rank", "worker_id"]),
+        (
+            "row_selection",
+            &[
+                "iteration",
+                "stage_id",
+                "cuts_populated",
+                "cuts_active_before",
+                "cuts_deactivated",
+                "cuts_reactivated",
+                "cuts_active_after",
+                "budget_evicted",
+                "active_after_budget",
+            ],
+        ),
+        (
+            "solver_iterations",
+            &[
+                "iteration",
+                "scenario_id",
+                "phase",
+                "stage_id",
+                "opening_index",
+                "rank",
+                "worker_id",
+                "lp_solves",
+                "lp_successes",
+                "lp_retries",
+                "lp_failures",
+                "retry_attempts",
+                "basis_offered",
+                "basis_consistency_failures",
+                "simplex_iterations",
+            ],
+        ),
+        (
+            "retry_histogram",
+            &["iteration", "phase", "stage_id", "retry_level", "count"],
+        ),
+        ("fixed_delivery", &["thermal_id", "start_date", "end_date"]),
+        (
+            "anticipated_lanes",
+            &[
+                "scenario_id",
+                "stage_id",
+                "node_id",
+                "thermal_id",
+                "delivery_date",
+            ],
+        ),
+        (
+            "generic_constraint_echo",
+            &[
+                "stage_id",
+                "block_id",
+                "constraint_id",
+                "constraint_name",
+                "term_index",
+                "variable_kind",
+                "variable",
+                "derived_shape",
+                "slack_enabled",
+            ],
+        ),
+        (
+            "bounds",
+            &[
+                "entity_type_code",
+                "entity_id",
+                "hydro_id",
+                "stage_id",
+                "block_id",
+                "bound_type_code",
+            ],
+        ),
+        (
+            "fpha_hyperplanes",
+            &["hydro_id", "stage_id", "plane_id", "kappa"],
+        ),
+        ("evaporation_models", &["hydro_id", "stage_id", "source"]),
+        (
+            "fpha_deviation_points",
+            &["hydro_id", "stage_id", "relative"],
+        ),
+        (
+            "noise_openings",
+            &["stage_id", "opening_index", "entity_index", "value"],
+        ),
+        ("inflow_seasonal_stats", &["hydro_id", "stage_id"]),
+        (
+            "inflow_ar_coefficients",
+            &["hydro_id", "stage_id", "lag", "coefficient"],
+        ),
+        (
+            "inflow_annual_component",
+            &["hydro_id", "stage_id", "annual_coefficient"],
+        ),
+        ("load_seasonal_stats", &["bus_id", "stage_id"]),
+    ];
+
+    #[test]
+    fn every_registry_column_has_a_classified_unit() {
+        let oracle_suffix_unit = |column: &str| {
+            ORACLE_SUFFIXES
+                .iter()
+                .find(|(suffix, _)| column.ends_with(suffix))
+                .copied()
+        };
+        let pinned_unit = |schema: &str, column: &str| {
+            PINNED_UNITS
+                .iter()
+                .find(|&&(s, c, _)| s == schema && c == column)
+                .map(|&(_, _, unit)| unit)
+        };
+        let is_no_unit = |schema: &str, column: &str| {
+            NO_UNIT_COLUMNS
+                .iter()
+                .any(|&(s, columns)| s == schema && columns.contains(&column))
+        };
+
+        let columns = registry_columns();
+        let mut problems: Vec<String> = Vec::new();
+        let mut powered_suffixes: Vec<&str> = Vec::new();
+
+        for (entry, column) in &columns {
+            let (schema, column) = (entry.name, column.as_str());
+            let pinned = pinned_unit(schema, column);
+            let no_unit = is_no_unit(schema, column);
+            if pinned.is_some() && no_unit {
+                problems.push(format!(
+                    "{schema}.{column}: both pinned and listed as no-unit"
+                ));
+            }
+            let expected = if let Some(unit) = pinned {
+                unit
+            } else if no_unit {
+                if let Some((suffix, _)) = oracle_suffix_unit(column) {
+                    problems.push(format!(
+                        "{schema}.{column}: listed as no-unit but ends in unit suffix {suffix:?}"
+                    ));
+                }
+                ""
+            } else if column.contains("_per_") {
+                problems.push(format!("{schema}.{column}: unpinned `_per_` column"));
+                continue;
+            } else if let Some((suffix, unit)) = oracle_suffix_unit(column) {
+                powered_suffixes.push(suffix);
+                unit
+            } else {
+                problems.push(format!("{schema}.{column}: unclassified column"));
+                continue;
+            };
+            let actual = unit_for(schema, column);
+            if actual != expected {
+                problems.push(format!(
+                    "{schema}.{column}: unit_for returned {actual:?}, expected {expected:?}"
+                ));
+            }
+        }
+
+        let names_registry_column = |schema: &str, column: &str| {
+            columns
+                .iter()
+                .any(|(entry, c)| entry.name == schema && c == column)
+        };
+        for &(schema, column, _) in PINNED_UNITS {
+            if !names_registry_column(schema, column) {
+                problems.push(format!(
+                    "PINNED_UNITS row {schema}.{column} names no registry column"
+                ));
+            }
+        }
+        for &(schema, no_unit_columns) in NO_UNIT_COLUMNS {
+            for &column in no_unit_columns {
+                if !names_registry_column(schema, column) {
+                    problems.push(format!(
+                        "NO_UNIT_COLUMNS entry {schema}.{column} names no registry column"
+                    ));
+                }
+            }
+        }
+        for &(suffix, _) in ORACLE_SUFFIXES {
+            if !powered_suffixes.contains(&suffix) {
+                problems.push(format!(
+                    "oracle suffix {suffix:?} matches no plain registry column"
+                ));
+            }
+        }
+
+        assert!(
+            problems.is_empty(),
+            "{} unit classification problem(s):\n{}",
+            problems.len(),
+            problems.join("\n")
+        );
+    }
+
+    #[test]
+    fn every_registry_unit_is_in_the_unit_vocabulary() {
+        const UNIT_VOCABULARY: &[&str] = &[
+            "",
+            "MW",
+            "MWh",
+            "m3/s",
+            "hm3",
+            "$",
+            "$/MWh",
+            "$/hm3",
+            "MW/(m3/s)",
+            "MW/hm3",
+            "(m3/s)/hm3",
+            "%",
+            "ms",
+            "varies",
+        ];
+        let problems: Vec<String> = registry_columns()
+            .iter()
+            .filter_map(|(entry, column)| {
+                let unit = unit_for(entry.name, column);
+                (!UNIT_VOCABULARY.contains(&unit)).then(|| {
+                    format!(
+                        "{}.{column}: unit {unit:?} is outside the vocabulary",
+                        entry.name
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            problems.is_empty(),
+            "{} unit(s) outside the vocabulary:\n{}",
+            problems.len(),
+            problems.join("\n")
+        );
+    }
+
+    #[test]
+    fn named_units_rows_name_registry_columns() {
+        let columns = registry_columns();
+        let mut problems: Vec<String> = Vec::new();
+        for (i, &(schema, column, _)) in NAMED_UNITS.iter().enumerate() {
+            if !columns
+                .iter()
+                .any(|(entry, c)| entry.name == schema && c == column)
+            {
+                problems.push(format!(
+                    "NAMED_UNITS row {schema}.{column} names no registry column"
+                ));
+            }
+            if NAMED_UNITS[..i]
+                .iter()
+                .any(|&(s, c, _)| s == schema && c == column)
+            {
+                problems.push(format!("NAMED_UNITS row {schema}.{column} appears twice"));
+            }
+        }
+        assert!(
+            problems.is_empty(),
+            "{} NAMED_UNITS problem(s):\n{}",
+            problems.len(),
+            problems.join("\n")
+        );
+    }
+
+    #[test]
+    fn varies_columns_in_variables_csv_name_the_column_that_sets_their_unit() {
+        const VARIES_COLUMNS: &[(&str, &str, &str)] =
+            &[("generic_violations", "slack_value", "constraint_id")];
+
+        let mut problems: Vec<String> = Vec::new();
+        let labeled = variables_csv_schemas();
+        let mut found: Vec<(&str, String)> = Vec::new();
+        for (_, entry) in &labeled {
+            for field in (entry.schema_fn)().fields() {
+                if unit_for(entry.name, field.name()) == "varies" {
+                    found.push((entry.name, field.name().clone()));
+                }
+            }
+        }
+        for (schema, column) in &found {
+            if !VARIES_COLUMNS
+                .iter()
+                .any(|&(s, c, _)| s == *schema && c == column)
+            {
+                problems.push(format!("{schema}.{column}: unexpected `varies` column"));
+            }
+        }
+        for &(schema, column, determiner) in VARIES_COLUMNS {
+            if !found.iter().any(|(s, c)| *s == schema && c == column) {
+                problems.push(format!("{schema}.{column}: expected unit `varies`"));
+            }
+            match labeled.iter().find(|(_, entry)| entry.name == schema) {
+                Some((label, _)) => {
+                    let description = description_for(label, column);
+                    if !description.contains(determiner) {
+                        problems.push(format!(
+                            "{schema}.{column}: description {description:?} does not name \
+                             {determiner}"
+                        ));
+                    }
+                }
+                None => problems.push(format!("{schema}: not a variables.csv schema")),
+            }
+        }
+        assert!(
+            problems.is_empty(),
+            "{} `varies` problem(s):\n{}",
+            problems.len(),
+            problems.join("\n")
+        );
+    }
+
     #[test]
     fn new_energy_columns_have_descriptions() {
         assert!(
@@ -3174,15 +3614,6 @@ mod tests {
         assert!(
             !description_for("hydros", "stored_energy_final_mwh").is_empty(),
             "stored_energy_final_mwh must have a description"
-        );
-    }
-
-    #[test]
-    fn old_productivity_field_returns_default_unit() {
-        assert_eq!(
-            unit_for("hydros", "productivity_mw_per_m3s"),
-            "",
-            "removed column must fall through to the default empty-string arm"
         );
     }
 

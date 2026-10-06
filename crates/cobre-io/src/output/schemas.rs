@@ -750,10 +750,13 @@ pub(crate) fn bounds_schema() -> Schema {
 }
 
 /// One row of the crate-internal registry of every output-schema function: a
-/// schema's constructor paired with its optional `training/dictionaries/variables.csv`
-/// grouping label. Each schema fn's own doc names the output path it
-/// describes; this table does not repeat it.
+/// schema's constructor paired with its registry name and its optional
+/// `training/dictionaries/variables.csv` grouping label. Each schema fn's own
+/// doc names the output path it describes; this table does not repeat it.
 pub(crate) struct SchemaRegistryEntry {
+    /// Registry name, unique across rows; keys per-column metadata such as
+    /// units.
+    pub(crate) name: &'static str,
     /// `file` column label in `variables.csv`, or `None` when this schema is
     /// not enumerated there.
     pub(crate) csv_label: Option<&'static str>,
@@ -768,130 +771,162 @@ pub(crate) struct SchemaRegistryEntry {
 /// rather than maintaining their own copies of the schema set.
 pub(crate) const OUTPUT_SCHEMAS: &[SchemaRegistryEntry] = &[
     SchemaRegistryEntry {
+        name: "costs",
         csv_label: Some("costs"),
         schema_fn: build_costs_schema,
     },
     SchemaRegistryEntry {
+        name: "hydros",
         csv_label: Some("hydros"),
         schema_fn: build_hydros_schema,
     },
     SchemaRegistryEntry {
+        name: "hydro_bus_generation",
         csv_label: Some("hydro_bus_generation"),
         schema_fn: build_hydro_bus_generation_schema,
     },
     SchemaRegistryEntry {
+        name: "thermals",
         csv_label: Some("thermals"),
         schema_fn: build_thermals_schema,
     },
     SchemaRegistryEntry {
+        name: "exchanges",
         csv_label: Some("exchanges"),
         schema_fn: build_exchanges_schema,
     },
     SchemaRegistryEntry {
+        name: "buses",
         csv_label: Some("buses"),
         schema_fn: build_buses_schema,
     },
     SchemaRegistryEntry {
+        name: "pumping_stations",
         csv_label: Some("pumping_stations"),
         schema_fn: build_pumping_stations_schema,
     },
     SchemaRegistryEntry {
+        name: "contracts",
         csv_label: Some("contracts"),
         schema_fn: build_contracts_schema,
     },
     SchemaRegistryEntry {
+        name: "non_controllables",
         csv_label: Some("non_controllables"),
         schema_fn: build_non_controllables_schema,
     },
     SchemaRegistryEntry {
+        name: "inflow_lags",
         csv_label: Some("inflow_lags"),
         schema_fn: build_inflow_lags_schema,
     },
     SchemaRegistryEntry {
+        name: "in_transit",
         csv_label: Some("in_transit"),
         schema_fn: build_in_transit_schema,
     },
     SchemaRegistryEntry {
+        name: "transit_seed",
         csv_label: Some("transit_seed"),
         schema_fn: build_transit_seed_schema,
     },
     SchemaRegistryEntry {
+        name: "generic_violations",
         csv_label: Some("generic_violations"),
         schema_fn: build_generic_violations_schema,
     },
     SchemaRegistryEntry {
+        name: "paths",
         csv_label: Some("paths"),
         schema_fn: paths_schema,
     },
     SchemaRegistryEntry {
+        name: "scenario_summary",
         csv_label: Some("scenario_summary"),
         schema_fn: scenario_summary_schema,
     },
     SchemaRegistryEntry {
+        name: "convergence",
         csv_label: Some("convergence"),
         schema_fn: convergence_schema,
     },
     SchemaRegistryEntry {
+        name: "iteration_timing",
         csv_label: Some("iteration_timing"),
         schema_fn: iteration_timing_schema,
     },
     SchemaRegistryEntry {
+        name: "row_selection",
         csv_label: Some("cut_selection"),
         schema_fn: row_selection_schema,
     },
     SchemaRegistryEntry {
+        name: "solver_iterations",
         csv_label: Some("solver_iterations"),
         schema_fn: solver_iterations_schema,
     },
     SchemaRegistryEntry {
+        name: "retry_histogram",
         csv_label: Some("retry_histogram"),
         schema_fn: retry_histogram_schema,
     },
     SchemaRegistryEntry {
+        name: "fixed_delivery",
         csv_label: None,
         schema_fn: fixed_delivery_schema,
     },
     SchemaRegistryEntry {
+        name: "anticipated_lanes",
         csv_label: None,
         schema_fn: build_anticipated_lanes_schema,
     },
     SchemaRegistryEntry {
+        name: "generic_constraint_echo",
         csv_label: None,
         schema_fn: generic_constraint_echo_schema,
     },
     SchemaRegistryEntry {
+        name: "bounds",
         csv_label: None,
         schema_fn: bounds_schema,
     },
     SchemaRegistryEntry {
+        name: "fpha_hyperplanes",
         csv_label: None,
         schema_fn: fpha_hyperplanes_schema,
     },
     SchemaRegistryEntry {
+        name: "evaporation_models",
         csv_label: None,
         schema_fn: evaporation_models_schema,
     },
     SchemaRegistryEntry {
+        name: "fpha_deviation_points",
         csv_label: None,
         schema_fn: fpha_deviation_points_schema,
     },
     SchemaRegistryEntry {
+        name: "noise_openings",
         csv_label: None,
         schema_fn: noise_openings_schema,
     },
     SchemaRegistryEntry {
+        name: "inflow_seasonal_stats",
         csv_label: None,
         schema_fn: inflow_seasonal_stats_schema,
     },
     SchemaRegistryEntry {
+        name: "inflow_ar_coefficients",
         csv_label: None,
         schema_fn: inflow_ar_coefficients_schema,
     },
     SchemaRegistryEntry {
+        name: "inflow_annual_component",
         csv_label: None,
         schema_fn: inflow_annual_component_schema,
     },
     SchemaRegistryEntry {
+        name: "load_seasonal_stats",
         csv_label: None,
         schema_fn: load_seasonal_stats_schema,
     },
@@ -1730,6 +1765,20 @@ mod tests {
                 "a schema fn appears more than once in OUTPUT_SCHEMAS"
             );
             seen_fns.push(fn_ptr);
+        }
+
+        let mut seen_names: Vec<&str> = Vec::with_capacity(OUTPUT_SCHEMAS.len());
+        for entry in OUTPUT_SCHEMAS {
+            assert!(
+                !entry.name.is_empty(),
+                "every OUTPUT_SCHEMAS row must carry a non-empty name"
+            );
+            assert!(
+                !seen_names.contains(&entry.name),
+                "schema name '{}' appears more than once in OUTPUT_SCHEMAS",
+                entry.name
+            );
+            seen_names.push(entry.name);
         }
     }
 

@@ -51,8 +51,8 @@ pub use manifest::{
 };
 pub use provenance::write_provenance_report;
 pub use results_writer::{
-    remove_success_marker, write_results, write_simulation_results, write_success_marker,
-    write_training_results,
+    remove_success_marker, write_results, write_simulation_results,
+    write_skipped_simulation_results, write_success_marker, write_training_results,
 };
 pub use scaling_report::write_scaling_report;
 pub use simulation_writer::{

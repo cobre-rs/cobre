@@ -11,9 +11,9 @@ in `PHASE_WRITERS`, and of every other function in either tree that calls it.
 A crate-local helper that writes counts as a write.
 
 Usage:
-    python3 scripts/ci/check_python_parity.py              # default: --max 0, --min-shared 20
-    python3 scripts/ci/check_python_parity.py --max 0 --min-shared 20
-    python3 scripts/ci/check_python_parity.py --min-shared 21  # floor breach check
+    python3 scripts/ci/check_python_parity.py              # default: --max 0, --min-shared 21
+    python3 scripts/ci/check_python_parity.py --max 0 --min-shared 21
+    python3 scripts/ci/check_python_parity.py --min-shared 22  # floor breach check
 
 Exit code 0 if parity holds (mismatches <= --max, shared >= --min-shared) and no
 write follows the marker, 1 otherwise.
@@ -400,8 +400,8 @@ def main() -> None:
     parser.add_argument(
         "--min-shared",
         type=int,
-        default=20,
-        help="Minimum shared write functions (default: 20). Exit 1 if below this floor. The floor exists to catch a gate that stopped seeing call sites; raise it when writers are added, never lower it.",
+        default=21,
+        help="Minimum shared write functions (default: 21). Exit 1 if below this floor. The floor exists to catch a gate that stopped seeing call sites; raise it when writers are added, never lower it.",
     )
     parser.add_argument(
         "--root",

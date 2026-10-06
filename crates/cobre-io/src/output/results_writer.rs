@@ -8,8 +8,9 @@ use super::dictionary::write_dictionaries;
 use super::error::OutputError;
 use super::manifest::{
     MetadataBounds, MetadataConfiguration, MetadataConvergence, MetadataIterations,
-    MetadataProblemDimensions, MetadataRowPool, MetadataScenarios, OutputContext, RunStatus,
-    SimulationMetadata, TrainingMetadata, write_simulation_metadata, write_training_metadata,
+    MetadataProblemDimensions, MetadataRowPool, MetadataScenarios, MetadataSimulationSolveStats,
+    OutputContext, RunStatus, SimulationMetadata, TrainingMetadata, write_simulation_metadata,
+    write_training_metadata,
 };
 use super::software::{SOFTWARE_NAME, SOFTWARE_VERSION};
 use super::training_writer::TrainingParquetWriter;
@@ -120,13 +121,52 @@ pub(crate) const SIMULATION_METADATA_FILE: &str = "simulation/metadata.json";
 /// # Errors
 ///
 /// Returns [`OutputError`] if metadata serialization or file I/O fails.
-#[allow(clippy::cast_precision_loss)]
 pub fn write_simulation_results(
     output_dir: &Path,
     simulation_output: &SimulationOutput,
     ctx: &OutputContext,
 ) -> Result<(), OutputError> {
-    let metadata = SimulationMetadata {
+    let metadata = simulation_metadata(simulation_output, RunStatus::Complete, ctx);
+    write_simulation_metadata(&output_dir.join(SIMULATION_METADATA_FILE), &metadata)?;
+
+    Ok(())
+}
+
+/// Write the metadata of a simulation that was skipped before any scenario
+/// ran: `status` partial, `n_scenarios` in total and none completed.
+///
+/// Creates the `simulation/` directory. Writes no `_SUCCESS` marker; that is
+/// the caller's last write.
+///
+/// # Errors
+///
+/// Returns [`OutputError`] if the directory cannot be created, or if metadata
+/// serialization or file I/O fails.
+pub fn write_skipped_simulation_results(
+    output_dir: &Path,
+    n_scenarios: u32,
+    ctx: &OutputContext,
+) -> Result<(), OutputError> {
+    create_output_dir(&output_dir.join("simulation"))?;
+    let skipped = SimulationOutput {
+        n_scenarios,
+        completed: 0,
+        failed: 0,
+        total_time_ms: 0,
+        cost: None,
+        solve_stats: MetadataSimulationSolveStats::default(),
+    };
+    let metadata = simulation_metadata(&skipped, RunStatus::Partial, ctx);
+    write_simulation_metadata(&output_dir.join(SIMULATION_METADATA_FILE), &metadata)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn simulation_metadata(
+    simulation_output: &SimulationOutput,
+    status: RunStatus,
+    ctx: &OutputContext,
+) -> SimulationMetadata {
+    SimulationMetadata {
         software: SOFTWARE_NAME.to_string(),
         software_version: SOFTWARE_VERSION.to_string(),
         hostname: ctx.hostname.clone(),
@@ -135,7 +175,7 @@ pub fn write_simulation_results(
         started_at: ctx.started_at.clone(),
         completed_at: ctx.completed_at.clone(),
         duration_seconds: simulation_output.total_time_ms as f64 / 1_000.0,
-        status: RunStatus::Complete,
+        status,
         scenarios: MetadataScenarios {
             total: simulation_output.n_scenarios,
             completed: simulation_output.completed,
@@ -144,10 +184,7 @@ pub fn write_simulation_results(
         cost: simulation_output.cost.clone(),
         solve_stats: simulation_output.solve_stats.clone(),
         distribution: ctx.distribution.clone(),
-    };
-    write_simulation_metadata(&output_dir.join(SIMULATION_METADATA_FILE), &metadata)?;
-
-    Ok(())
+    }
 }
 
 /// Write the training result tables and, when supplied, the simulation
@@ -715,6 +752,27 @@ mod tests {
             .expect("read_simulation_metadata must succeed");
         assert_eq!(metadata.scenarios.failed, 3);
         assert_eq!(metadata.status, RunStatus::Complete);
+    }
+
+    #[test]
+    fn skipped_simulation_metadata_is_partial_with_zero_completed_scenarios() {
+        use crate::output::manifest::read_simulation_metadata;
+
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!tmp.path().join("simulation").exists());
+
+        write_skipped_simulation_results(tmp.path(), 100, &make_output_context())
+            .expect("write_skipped_simulation_results must succeed");
+
+        let metadata = read_simulation_metadata(&tmp.path().join("simulation/metadata.json"))
+            .expect("read_simulation_metadata must succeed");
+        assert_eq!(metadata.status, RunStatus::Partial);
+        assert_eq!(metadata.scenarios.total, 100);
+        assert_eq!(metadata.scenarios.completed, 0);
+        assert_eq!(metadata.scenarios.failed, 0);
+        assert!(metadata.cost.is_none());
+        assert_eq!(metadata.duration_seconds, 0.0);
+        assert!(!tmp.path().join("simulation/_SUCCESS").exists());
     }
 
     #[test]

@@ -101,7 +101,7 @@ use cobre_stochastic::{
 use crate::{
     InflowNonNegativityMethod,
     block_clock::M3S_TO_HM3,
-    config::{CutManagementConfig, EventParams},
+    config::{CutManagementConfig, EventParams, ShutdownSource},
     cut::FutureCostFunction,
     cut_selection::CutSelectionStrategy,
     energy_conversion::{EnergyConversionSet, build_energy_conversion_set},
@@ -120,7 +120,7 @@ use crate::{
     risk_measure::{RiskMeasure, uniform_effective_measure},
     simulation::EntityCounts,
     simulation::extraction::TransitSeedArc,
-    stopping_rule::{StoppingRule, StoppingRuleSet},
+    stopping_rule::{StopDecision, StopMask, StoppingRule, StoppingRuleSet},
     time_value::{DeliveryCalendar, TimeValue},
     workspace::CapturedBasis,
 };
@@ -490,8 +490,8 @@ impl StudySetup {
 /// pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunPhasePlan {
-    /// Training runs; whether simulation follows is a separate post-training
-    /// check the caller still makes.
+    /// Training runs; [`PostTrainingSimulation::resolve`] decides whether
+    /// simulation follows.
     TrainedThenSimulated,
     /// Training is disabled; simulation runs from a stored policy.
     SimulateFromPolicy,
@@ -531,6 +531,156 @@ mod run_phase_plan_tests {
             RunPhasePlan::SimulateFromPolicy
         );
         assert_eq!(RunPhasePlan::resolve(false, false), RunPhasePlan::Nothing);
+    }
+}
+
+/// What a trained run does about its configured simulation, matched by both
+/// L4 entry points after the training outputs are written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostTrainingSimulation {
+    /// The configured simulation runs.
+    Run,
+    /// A signal stopped the run; the simulation is recorded as partial with no scenario run.
+    SkipAfterSignalStop,
+    /// No simulation was configured.
+    NotRequested,
+}
+
+impl PostTrainingSimulation {
+    /// Resolves the decision from whether simulation was requested, training's
+    /// final stop `decision`, and `post_write_level`, the shutdown level the
+    /// entry point sampled once after writing the training outputs (`0` is no
+    /// request, otherwise a [`ShutdownSource::level`]).
+    ///
+    /// A requested simulation is skipped when either input names a signal: the
+    /// decision carries [`StopMask::SIGNAL`], or `post_write_level` reads as a
+    /// signal. That holds whatever rule, budget or cooperative request ended
+    /// training; a cooperative request alone keeps the simulation.
+    #[must_use]
+    pub fn resolve(
+        simulate_requested: bool,
+        decision: &StopDecision,
+        post_write_level: usize,
+    ) -> Self {
+        if !simulate_requested {
+            return Self::NotRequested;
+        }
+        if decision.mask().contains(StopMask::SIGNAL)
+            || ShutdownSource::from_level(post_write_level) == Some(ShutdownSource::Signal)
+        {
+            Self::SkipAfterSignalStop
+        } else {
+            Self::Run
+        }
+    }
+}
+
+#[cfg(test)]
+mod post_training_simulation_tests {
+    use super::PostTrainingSimulation::{self, NotRequested, Run, SkipAfterSignalStop};
+    use crate::config::ShutdownSource;
+    use crate::{
+        ConvergenceMonitor, StopDecision, StopMask, StoppingMode, StoppingRule, StoppingRuleSet,
+        SyncResult,
+    };
+
+    fn first_iteration_decision(
+        iteration_limit: u64,
+        iteration_budget: u64,
+        shutdown: Option<ShutdownSource>,
+    ) -> StopDecision {
+        let rules = StoppingRuleSet {
+            rules: vec![StoppingRule::IterationLimit {
+                limit: iteration_limit,
+            }],
+            mode: StoppingMode::Any,
+        };
+        let mut monitor = ConvergenceMonitor::with_iteration_budget(rules, iteration_budget);
+        if let Some(source) = shutdown {
+            monitor.set_shutdown(source);
+        }
+        monitor.update(
+            100.0,
+            &SyncResult {
+                global_ub_mean: 110.0,
+                global_ub_std: 1.0,
+                ci_95_half_width: 0.5,
+                sync_time_ms: 0,
+            },
+            0.0,
+        )
+    }
+
+    #[test]
+    fn post_training_simulation_resolve_truth_table() {
+        let no_stop = first_iteration_decision(100, 100, None);
+        let configured_stop = first_iteration_decision(1, 100, None);
+        let budget_stop = first_iteration_decision(100, 1, None);
+        let cooperative_stop =
+            first_iteration_decision(100, 100, Some(ShutdownSource::Cooperative));
+        let signal_stop = first_iteration_decision(100, 100, Some(ShutdownSource::Signal));
+        let coincident_signal_stop = first_iteration_decision(1, 100, Some(ShutdownSource::Signal));
+
+        assert!(!no_stop.should_stop());
+        assert!(configured_stop.configured_stop());
+        assert!(budget_stop.mask().contains(StopMask::BUDGET_EXHAUSTED));
+        assert!(!budget_stop.configured_stop());
+        assert!(cooperative_stop.ended_by_shutdown());
+        assert!(signal_stop.ended_by_shutdown());
+        assert!(coincident_signal_stop.configured_stop());
+        assert!(coincident_signal_stop.mask().contains(StopMask::SIGNAL));
+
+        let levels = [
+            0,
+            ShutdownSource::Cooperative.level(),
+            ShutdownSource::Signal.level(),
+        ];
+        let cases = [
+            ("no stop", no_stop, [Run, Run, SkipAfterSignalStop]),
+            (
+                "configured stop",
+                configured_stop,
+                [Run, Run, SkipAfterSignalStop],
+            ),
+            ("budget stop", budget_stop, [Run, Run, SkipAfterSignalStop]),
+            (
+                "cooperative shutdown",
+                cooperative_stop,
+                [Run, Run, SkipAfterSignalStop],
+            ),
+            (
+                "signal shutdown",
+                signal_stop,
+                [
+                    SkipAfterSignalStop,
+                    SkipAfterSignalStop,
+                    SkipAfterSignalStop,
+                ],
+            ),
+            (
+                "signal at a configured stop",
+                coincident_signal_stop,
+                [
+                    SkipAfterSignalStop,
+                    SkipAfterSignalStop,
+                    SkipAfterSignalStop,
+                ],
+            ),
+        ];
+        for (name, decision, expected_when_requested) in cases {
+            for (level, expected) in levels.into_iter().zip(expected_when_requested) {
+                assert_eq!(
+                    PostTrainingSimulation::resolve(false, &decision, level),
+                    NotRequested,
+                    "{name}, post-write level {level}, not requested"
+                );
+                assert_eq!(
+                    PostTrainingSimulation::resolve(true, &decision, level),
+                    expected,
+                    "{name}, post-write level {level}, requested"
+                );
+            }
+        }
     }
 }
 

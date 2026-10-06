@@ -117,8 +117,8 @@ pub use output::{
     write_fpha_deviation_points, write_fpha_hyperplanes, write_generic_constraint_echo,
     write_hydro_model_summary, write_provenance_report, write_results, write_row_selection_records,
     write_scaling_report, write_simulation_metadata, write_simulation_results,
-    write_simulation_solver_stats, write_solver_stats, write_success_marker,
-    write_training_metadata, write_training_results,
+    write_simulation_solver_stats, write_skipped_simulation_results, write_solver_stats,
+    write_success_marker, write_training_metadata, write_training_results,
 };
 pub use penalties::parse_penalties;
 pub use post_study_stages::parse_post_study_stages;

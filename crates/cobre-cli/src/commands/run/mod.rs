@@ -7,6 +7,7 @@ use cobre_io::OutputContext;
 use cobre_io::now_iso8601;
 use cobre_sddp::SolverStatsDelta;
 use cobre_sddp::build_deviation_summary;
+use cobre_sddp::setup::PostTrainingSimulation;
 use cobre_sddp::setup::RunPhasePlan;
 use cobre_solver::active_solver_metadata_id;
 
@@ -52,7 +53,7 @@ impl From<CommBackendArg> for BackendKind {
 use outputs::{WriteTrainingArgs, write_training_outputs};
 use policy::{apply_training_policy, load_policy_for_simulation};
 use setup::{LoadBroadcastResult, broadcast_and_build_setup, run_pre_training, setup_communicator};
-use simulation::run_simulation_phase;
+use simulation::{run_simulation_phase, skip_simulation_phase};
 use training::run_training_phase;
 
 /// Arguments for the `cobre run` subcommand.
@@ -204,8 +205,21 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
                 return Err(CliError::from(training_error));
             }
 
-            if setup.simulation_config.n_scenarios > 0 {
-                run_simulation_phase(ctx, &system, &mut setup, &training.result, &hostname)?;
+            let n_scenarios = setup.simulation_config.n_scenarios;
+            match PostTrainingSimulation::resolve(
+                n_scenarios > 0,
+                &training.result.stop_decision,
+                0,
+            ) {
+                PostTrainingSimulation::Run => {
+                    run_simulation_phase(ctx, &system, &mut setup, &training.result, &hostname)?;
+                }
+                PostTrainingSimulation::SkipAfterSignalStop => {
+                    if ctx.is_root {
+                        skip_simulation_phase(ctx, &hostname, n_scenarios)?;
+                    }
+                }
+                PostTrainingSimulation::NotRequested => {}
             }
         }
         RunPhasePlan::SimulateFromPolicy => {

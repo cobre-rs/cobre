@@ -14,6 +14,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use pyo3::exceptions::{PyIndexError, PyOSError, PyValueError};
 use pyo3::prelude::*;
@@ -34,8 +35,9 @@ use crate::io::build_warnings_list;
 use crate::model::PySystem;
 use crate::run::{
     LoadedStudy, PhaseError, RunError, SimSummary, TrainingPhaseResult, apply_training_policy_mode,
-    build_study_setup, run_in_scoped_pool, run_simulation_phase_py, run_training_phase_py,
-    run_training_phase_py_streaming, write_training_outputs,
+    build_study_setup, resolved_thread_count, run_in_scoped_pool, run_simulation_phase_py,
+    run_training_phase_py, run_training_phase_py_streaming, write_skipped_simulation_py,
+    write_training_outputs,
 };
 
 /// Map a [`PhaseError`] to a Python exception through the single
@@ -318,6 +320,7 @@ impl Study {
     pub(crate) fn train_native(
         &mut self,
         on_iteration: Option<Py<PyAny>>,
+        shutdown_flag: &Arc<AtomicUsize>,
     ) -> Result<Policy, RunError> {
         if !self.config.training.enabled {
             let synthetic = TrainingResult::new(
@@ -359,8 +362,10 @@ impl Study {
                 setup.enable_periodic_checkpoints(system, &output_dir);
 
                 let (training, callback_error) = match on_iteration {
-                    Some(callback) => run_training_phase_py_streaming(setup, n, callback)?,
-                    None => (run_training_phase_py(setup, n)?, None),
+                    Some(callback) => {
+                        run_training_phase_py_streaming(setup, n, callback, shutdown_flag)?
+                    }
+                    None => (run_training_phase_py(setup, n, shutdown_flag)?, None),
                 };
 
                 write_training_outputs(
@@ -447,6 +452,15 @@ impl Study {
         run_in_scoped_pool(threads, |n| {
             run_simulation_phase_py(setup, &out_dir, system, training_result, n)
         })?
+    }
+
+    /// GIL-free skipped simulation: write partial metadata and the marker, return [`SimSummary`].
+    pub(crate) fn skip_simulation_native(&self) -> Result<SimSummary, PhaseError> {
+        Ok(write_skipped_simulation_py(
+            &self.output_dir,
+            self.setup.simulation_config.n_scenarios,
+            resolved_thread_count(self.threads),
+        )?)
     }
 }
 
@@ -637,7 +651,8 @@ impl Study {
     ///   re-raised verbatim AFTER the training artifacts are written.
     #[pyo3(signature = (on_iteration=None))]
     fn train(&mut self, py: Python<'_>, on_iteration: Option<Py<PyAny>>) -> PyResult<Policy> {
-        match py.detach(|| self.train_native(on_iteration)) {
+        let shutdown_flag = Arc::new(AtomicUsize::new(0));
+        match py.detach(|| self.train_native(on_iteration, &shutdown_flag)) {
             Ok(policy) => Ok(policy),
             Err(RunError::Callback(err)) => Err(err),
             Err(RunError::Load(err)) => Err(convert_error(ErrorSource::Load(&err))),

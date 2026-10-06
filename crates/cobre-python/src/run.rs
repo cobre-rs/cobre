@@ -21,7 +21,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 use chrono::NaiveDate;
@@ -82,6 +82,7 @@ use cobre_io::write_row_selection_records;
 use cobre_io::write_scaling_report;
 use cobre_io::write_simulation_results;
 use cobre_io::write_simulation_solver_stats;
+use cobre_io::write_skipped_simulation_results;
 use cobre_io::write_solver_stats;
 use cobre_io::write_success_marker;
 use cobre_io::write_training_results;
@@ -111,6 +112,7 @@ use cobre_sddp::policy::orchestration::build_season_manifest;
 use cobre_sddp::policy::orchestration::export_stochastic_artifacts;
 use cobre_sddp::policy::orchestration::write_checkpoint;
 use cobre_sddp::resolve_boundary_state_requirements;
+use cobre_sddp::setup::PostTrainingSimulation;
 use cobre_sddp::setup::RunPhasePlan;
 use cobre_sddp::solver_stats_log_to_rows;
 use cobre_sddp::study_horizon_end;
@@ -265,12 +267,16 @@ pub(crate) fn run_in_scoped_pool<T>(
 where
     T: Send,
 {
-    let n = threads.map_or(1, |t| t as usize);
+    let n = resolved_thread_count(threads);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(n)
         .build()
         .map_err(|e| format!("{INTERNAL_ERROR_PREFIX}: rayon pool construction failed: {e}"))?;
     Ok(pool.install(|| f(n)))
+}
+
+pub(crate) fn resolved_thread_count(threads: Option<u32>) -> usize {
+    threads.map_or(1, |t| t as usize)
 }
 
 /// Result of the training phase within `run_via_study`.
@@ -333,6 +339,7 @@ fn build_training_phase_result(
 pub(crate) fn run_training_phase_py(
     setup: &mut StudySetup,
     n_threads: usize,
+    shutdown_flag: &Arc<AtomicUsize>,
 ) -> Result<TrainingPhaseResult, PhaseError> {
     let started_at = now_iso8601();
     let mut solver = ActiveSolver::new().map_err(|e| {
@@ -349,7 +356,7 @@ pub(crate) fn run_training_phase_py(
             n_threads,
             ActiveSolver::new,
             Some(event_tx),
-            None,
+            Some(shutdown_flag),
         )
         .map_err(|e| PhaseError::Sddp {
             message: format!("{TRAINING_ERROR_PREFIX}: {e}"),
@@ -387,6 +394,7 @@ pub(crate) fn run_training_phase_py_streaming(
     setup: &mut StudySetup,
     n_threads: usize,
     on_iteration: Py<PyAny>,
+    shutdown_flag: &Arc<AtomicUsize>,
 ) -> Result<(TrainingPhaseResult, Option<PyErr>), PhaseError> {
     let started_at = now_iso8601();
     let mut solver = ActiveSolver::new().map_err(|e| {
@@ -396,9 +404,8 @@ pub(crate) fn run_training_phase_py_streaming(
         )
     })?;
     let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
-    let shutdown_flag = Arc::new(AtomicUsize::new(0));
 
-    let drain_flag = Arc::clone(&shutdown_flag);
+    let drain_flag = Arc::clone(shutdown_flag);
     let drain_handle =
         std::thread::spawn(move || drain_training_events(&event_rx, &drain_flag, &on_iteration));
 
@@ -408,7 +415,7 @@ pub(crate) fn run_training_phase_py_streaming(
         n_threads,
         ActiveSolver::new,
         Some(event_tx),
-        Some(&shutdown_flag),
+        Some(shutdown_flag),
     );
 
     // The channel is already closed: `event_tx` was moved into `setup.train`,
@@ -448,8 +455,6 @@ fn drain_training_events(
     shutdown_flag: &Arc<AtomicUsize>,
     on_iteration: &Py<PyAny>,
 ) -> (Vec<TrainingEvent>, Option<PyErr>) {
-    use std::sync::atomic::Ordering;
-
     let mut collected: Vec<TrainingEvent> = Vec::new();
     let mut captured_pyerr: Option<PyErr> = None;
 
@@ -791,6 +796,35 @@ pub(crate) fn run_simulation_phase_py(
         .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: simulation success marker: {e}"))?;
 
     Ok(sim_summary)
+}
+
+/// Write a skipped simulation's metadata and marker, in place of
+/// [`run_simulation_phase_py`]; no scenario runs.
+pub(crate) fn write_skipped_simulation_py(
+    output_dir: &Path,
+    n_scenarios: u32,
+    n_threads: usize,
+) -> Result<SimSummary, String> {
+    let now = now_iso8601();
+    let sim_ctx = OutputContext {
+        hostname: get_hostname(),
+        solver: active_solver_metadata_id().to_string(),
+        solver_version: Some(active_solver_version()),
+        started_at: now.clone(),
+        completed_at: now,
+        distribution: single_process_distribution(n_threads),
+        setup: None,
+        production_fit_deviation: None,
+    };
+    write_skipped_simulation_results(output_dir, n_scenarios, &sim_ctx)
+        .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: simulation results output: {e}"))?;
+    write_success_marker(&output_dir.join("simulation"))
+        .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: simulation success marker: {e}"))?;
+
+    Ok(SimSummary {
+        n_scenarios,
+        completed: 0,
+    })
 }
 
 /// Load the effective [`cobre_io::Config`] for a run.
@@ -1186,12 +1220,19 @@ pub(crate) fn run_via_study(
                     format!("{OUTPUT_WRITE_ERROR_PREFIX}: stale simulation outputs: {e}")
                 })?;
             }
-            let policy = study.train_native(on_iteration)?;
+            let shutdown_flag = Arc::new(AtomicUsize::new(0));
+            let policy = study.train_native(on_iteration, &shutdown_flag)?;
 
-            let simulation = if should_simulate {
-                Some(study.simulate_native(&policy, None)?)
-            } else {
-                None
+            let simulation = match PostTrainingSimulation::resolve(
+                should_simulate,
+                &policy.training_result().stop_decision,
+                shutdown_flag.load(Ordering::Relaxed),
+            ) {
+                PostTrainingSimulation::Run => Some(study.simulate_native(&policy, None)?),
+                PostTrainingSimulation::SkipAfterSignalStop => {
+                    Some(study.skip_simulation_native()?)
+                }
+                PostTrainingSimulation::NotRequested => None,
             };
 
             let result = policy.training_result();
@@ -1432,11 +1473,11 @@ fn iteration_summary_to_dict<'py>(
 /// iteration boundary with a `dict` describing the iteration (`"kind"`,
 /// `"iteration"`, `"lower_bound"`, `"upper_bound"`, `"gap"`, `"wall_time_ms"`).
 /// A truthy return requests a cooperative stop at the next iteration boundary;
-/// the run still writes its (partial) artifacts. A callback that raises
-/// propagates as the run's exception after artifacts are written. The callback
-/// runs in a dedicated drain thread under the GIL — never in the solver's hot
-/// loop. When `None` (the default), the run is bit-identical to the no-callback
-/// path.
+/// the run still writes its (partial) training artifacts, and the configured
+/// simulation still runs. A callback that raises propagates as the run's
+/// exception after artifacts are written. The callback runs in a dedicated
+/// drain thread under the GIL — never in the solver's hot loop. When `None`
+/// (the default), the run is bit-identical to the no-callback path.
 ///
 /// Warning diagnostics (simulation write warnings, policy validation warnings,
 /// and boundary reconciliation summaries) are written directly to standard error
@@ -1562,6 +1603,7 @@ mod tests {
     use super::{
         PhaseError, apply_training_policy_mode, boundary_phase_error, build_study_setup,
         drain_training_events, iteration_summary_to_dict, run_in_scoped_pool, run_via_study,
+        write_skipped_simulation_py,
     };
     use crate::errors::{BOUNDARY_CUT_ERROR_PREFIX, POLICY_VALIDATION_ERROR_PREFIX};
 
@@ -1847,6 +1889,28 @@ mod tests {
             .unwrap_or_else(|| panic!("missing key: {key}"))
             .extract()
             .expect("value must extract to requested type")
+    }
+
+    #[test]
+    fn skipped_simulation_writer_records_partial_metadata_and_marker() {
+        let output = tempfile::tempdir().expect("temp dir");
+
+        let summary = write_skipped_simulation_py(output.path(), 100, 1)
+            .expect("the skipped-simulation writer must succeed");
+
+        assert_eq!((summary.n_scenarios, summary.completed), (100, 0));
+        let sim_dir = output.path().join("simulation");
+        cobre_io::read_simulation_metadata(&sim_dir.join("metadata.json"))
+            .expect("simulation/metadata.json must decode");
+        let metadata: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(sim_dir.join("metadata.json"))
+                .expect("simulation/metadata.json must exist"),
+        )
+        .expect("simulation/metadata.json must be JSON");
+        assert_eq!(metadata["status"], "partial");
+        assert_eq!(metadata["scenarios"]["total"], 100);
+        assert_eq!(metadata["scenarios"]["completed"], 0);
+        assert!(sim_dir.join("_SUCCESS").is_file());
     }
 
     #[test]

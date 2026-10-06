@@ -7,7 +7,8 @@ the GIL released. They verify three behaviours:
 1. callback-vs-parquet parity — the callback observes exactly the iterations that
    are persisted to ``training/convergence.parquet``, with matching bounds/gap;
 2. cooperative early stop — a truthy return halts training at the next boundary
-   while still writing the run's (partial) artifacts;
+   while still writing the run's (partial) artifacts and running the configured
+   simulation;
 3. raising-callback propagation — an exception raised by the callback surfaces as
    the run's exception, after the partial ``training/metadata.json`` is written.
 
@@ -178,6 +179,31 @@ def test_callback_truthy_return_writes_partial_training_status(
     assert metadata["convergence"]["termination_reason"] == "graceful_shutdown", (
         metadata["convergence"]
     )
+
+
+def test_callback_truthy_return_keeps_configured_simulation(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A callback stop leaves training ``partial`` and still runs the simulation."""
+    import cobre.run  # noqa: PLC0415
+
+    def on_iteration(event: dict[str, Any]) -> bool:
+        return int(event["iteration"]) >= 2
+
+    result = cobre.run.run(
+        VALID_CASE,
+        output_dir=str(tmp_path),
+        on_iteration=on_iteration,
+    )
+
+    training = json.loads((tmp_path / "training" / "metadata.json").read_text())
+    assert training["status"] == "partial", training
+    simulation = json.loads((tmp_path / "simulation" / "metadata.json").read_text())
+    assert simulation["status"] == "complete", simulation
+    assert simulation["scenarios"]["completed"] == 100, simulation["scenarios"]
+    assert (tmp_path / "simulation" / "_SUCCESS").exists()
+    assert (tmp_path / "simulation" / "costs").exists()
+    assert result["simulation"] == {"n_scenarios": 100, "completed": 100}
 
 
 def test_callback_raises_propagates_with_partial_metadata(

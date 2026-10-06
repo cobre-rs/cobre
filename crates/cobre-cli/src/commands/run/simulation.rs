@@ -1,5 +1,6 @@
 //! Simulation phase for `cobre run`.
 
+use std::path::Path;
 use std::sync::mpsc;
 
 use console::Term;
@@ -14,6 +15,8 @@ use cobre_io::now_iso8601;
 use cobre_io::output::simulation_writer::ScenarioWritePayload;
 use cobre_io::output::simulation_writer::SimulationParquetWriter;
 use cobre_io::output::simulation_writer::SimulationPathRecord;
+use cobre_io::write_skipped_simulation_results;
+use cobre_io::write_success_marker;
 use cobre_sddp::SOLVER_STATS_DELTA_SCALAR_FIELDS;
 use cobre_sddp::SimulationWeighting;
 use cobre_sddp::SolverStatsDelta;
@@ -223,27 +226,55 @@ fn write_sim_outputs_on_root(
     global_path_rows: &[SimulationPathRecord],
     gathered_scenario_costs: &[(u32, f64, Option<f64>)],
 ) -> Result<(), CliError> {
-    let mpi_world_size = u32::try_from(ctx.topology.world_size).unwrap_or(u32::MAX);
-    let sim_ctx = OutputContext {
-        hostname: hostname.to_string(),
-        solver: active_solver_metadata_id().to_string(),
-        solver_version: Some(ctx.solver_version.clone()),
-        started_at: sim_started_at,
-        completed_at: now_iso8601(),
-        distribution: build_distribution_info(&ctx.topology, ctx.n_threads, mpi_world_size),
-        setup: None,
-        production_fit_deviation: None,
-    };
     write_simulation_outputs(&WriteSimulationArgs {
         output_dir: &ctx.output_dir,
         sim_output: merged_sim_output,
         sim_solver_stats: global_scenario_stats,
         sim_path_rows: global_path_rows,
         sim_scenario_costs: gathered_scenario_costs,
-        output_ctx: &sim_ctx,
+        output_ctx: &simulation_output_context(ctx, hostname, sim_started_at),
         quiet: ctx.quiet,
         stderr: &ctx.stderr,
     })
+}
+
+fn simulation_output_context(
+    ctx: &RunContext<impl Communicator>,
+    hostname: &str,
+    started_at: String,
+) -> OutputContext {
+    let mpi_world_size = u32::try_from(ctx.topology.world_size).unwrap_or(u32::MAX);
+    OutputContext {
+        hostname: hostname.to_string(),
+        solver: active_solver_metadata_id().to_string(),
+        solver_version: Some(ctx.solver_version.clone()),
+        started_at,
+        completed_at: now_iso8601(),
+        distribution: build_distribution_info(&ctx.topology, ctx.n_threads, mpi_world_size),
+        setup: None,
+        production_fit_deviation: None,
+    }
+}
+
+/// Write the skipped simulation's outputs on rank 0, in place of
+/// [`run_simulation_phase`]; no rank runs a scenario.
+pub(super) fn skip_simulation_phase(
+    ctx: &RunContext<impl Communicator>,
+    hostname: &str,
+    n_scenarios: u32,
+) -> Result<(), CliError> {
+    let sim_ctx = simulation_output_context(ctx, hostname, now_iso8601());
+    write_skipped_simulation_outputs(&ctx.output_dir, n_scenarios, &sim_ctx)
+}
+
+fn write_skipped_simulation_outputs(
+    output_dir: &Path,
+    n_scenarios: u32,
+    output_ctx: &OutputContext,
+) -> Result<(), CliError> {
+    write_skipped_simulation_results(output_dir, n_scenarios, output_ctx)
+        .map_err(CliError::from)?;
+    write_success_marker(&output_dir.join("simulation")).map_err(CliError::from)
 }
 
 /// Print the simulation summary from aggregated solver stats and cost statistics.
@@ -423,12 +454,15 @@ mod tests {
         BackendKind, CommData, CommError, Communicator, ExecutionTopology, HostInfo, LocalBackend,
         ReduceOp,
     };
+    use cobre_io::{
+        DistributionInfo, HostLayout, OutputContext, RunStatus, read_simulation_metadata,
+    };
     use cobre_sddp::SimulationWeighting;
     use cobre_sddp::setup::{
         NodeGraph, NodeId, NodeOpenings, NodeRuntime, OpeningSource, StageIdx, Traversal,
     };
 
-    use super::run_simulation_phase;
+    use super::{run_simulation_phase, write_skipped_simulation_outputs};
     use crate::commands::run::setup::broadcast_and_build_setup;
     use crate::commands::run::training::run_training_phase;
     use crate::commands::run::{CommBackendArg, RunArgs, RunContext};
@@ -597,6 +631,46 @@ mod tests {
                 .is_file(),
             "rank 0 must have written its own partitions before the reconcile"
         );
+    }
+
+    #[test]
+    fn skipped_simulation_outputs_write_partial_metadata_then_the_marker() {
+        let output = TempDir::new().expect("output tempdir must be creatable");
+        let output_ctx = OutputContext {
+            hostname: "localhost".to_string(),
+            solver: "highs".to_string(),
+            solver_version: None,
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            completed_at: "2026-01-01T00:00:00Z".to_string(),
+            distribution: DistributionInfo {
+                backend: "local".to_string(),
+                world_size: 1,
+                ranks_participated: 1,
+                num_hosts: 1,
+                threads_per_rank: 1,
+                mpi_library: None,
+                mpi_standard: None,
+                thread_level: None,
+                slurm_job_id: None,
+                hosts: vec![HostLayout {
+                    hostname: "localhost".to_string(),
+                    ranks: vec![0],
+                }],
+            },
+            setup: None,
+            production_fit_deviation: None,
+        };
+
+        write_skipped_simulation_outputs(output.path(), 100, &output_ctx)
+            .expect("the skipped-simulation writer must succeed");
+
+        let sim_dir = output.path().join("simulation");
+        let metadata = read_simulation_metadata(&sim_dir.join("metadata.json"))
+            .expect("simulation/metadata.json must decode");
+        assert_eq!(metadata.status, RunStatus::Partial);
+        assert_eq!(metadata.scenarios.total, 100);
+        assert_eq!(metadata.scenarios.completed, 0);
+        assert!(sim_dir.join("_SUCCESS").is_file());
     }
 
     /// A single-node, single-leaf graph — enough to resolve a `Traversal` in

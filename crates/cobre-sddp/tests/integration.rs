@@ -52,6 +52,7 @@ use cobre_sddp::{
     inflow_method::InflowNonNegativityMethod,
     lead_time::AnticipatedResolution,
     risk_measure::RiskMeasure,
+    setup::PostTrainingSimulation,
     test_support::{StageContextFixture, equipment_free_geometry, permissive_state_boxes},
     train,
 };
@@ -947,10 +948,13 @@ fn train_stops_at_iteration_limit() {
     assert_eq!(result.result.reason, "iteration_limit");
 }
 
-/// Train under the production rule shape (`[IterationLimit{20}]`, no
-/// `GracefulShutdown` entry) with a shutdown request of `level` stored during
-/// iteration 1.
-fn train_with_a_shutdown_during_iteration_1(level: usize) -> cobre_sddp::TrainingOutcome {
+/// Train under the production rule shape (`[IterationLimit{iteration_limit}]`,
+/// no `GracefulShutdown` entry) with a shutdown request of `level` stored during
+/// iteration 1. Returns the outcome and the shutdown flag training read.
+fn train_with_a_shutdown_during_iteration_1(
+    iteration_limit: u64,
+    level: usize,
+) -> (cobre_sddp::TrainingOutcome, Arc<AtomicUsize>) {
     let fx = Fixture::new(2);
     let mut fcf = make_fcf(fx.n_stages);
     let mut solver = MockSolver::with_fixed(100.0);
@@ -959,7 +963,9 @@ fn train_with_a_shutdown_during_iteration_1(level: usize) -> cobre_sddp::Trainin
     let comm = ShutdownComm::new(Arc::clone(&shutdown_flag), level);
 
     let rules = StoppingRuleSet {
-        rules: vec![StoppingRule::IterationLimit { limit: 20 }],
+        rules: vec![StoppingRule::IterationLimit {
+            limit: iteration_limit,
+        }],
         mode: StoppingMode::Any,
     };
 
@@ -967,13 +973,13 @@ fn train_with_a_shutdown_during_iteration_1(level: usize) -> cobre_sddp::Trainin
     let geometry = equipment_free_geometry(&[1usize, 1]);
     let stage_ctx_fixture = StageContextFixture::new(&fx.templates, &state_boxes, &geometry);
     let stage_ctx = stage_ctx_fixture.ctx();
-    train(
+    let outcome = train(
         &mut solver,
         TrainingConfig {
             loop_config: LoopConfig {
                 forward_passes: 1,
                 training_enumerated: false,
-                max_iterations: 20,
+                max_iterations: iteration_limit,
                 start_iteration: 0,
                 n_fwd_threads: 1,
                 stopping_rules: rules,
@@ -1019,12 +1025,14 @@ fn train_with_a_shutdown_during_iteration_1(level: usize) -> cobre_sddp::Trainin
         None,
         SolverProfiles::default(),
     )
-    .unwrap()
+    .unwrap();
+    (outcome, shutdown_flag)
 }
 
 #[test]
 fn train_stops_on_graceful_shutdown() {
-    let result = train_with_a_shutdown_during_iteration_1(ShutdownSource::Cooperative.level());
+    let (result, _) =
+        train_with_a_shutdown_during_iteration_1(20, ShutdownSource::Cooperative.level());
 
     assert_eq!(result.result.reason, "graceful_shutdown");
     assert_eq!(result.result.iterations, 1);
@@ -1040,7 +1048,7 @@ fn train_stops_on_graceful_shutdown() {
 
 #[test]
 fn train_records_a_signal_shutdown_source() {
-    let result = train_with_a_shutdown_during_iteration_1(ShutdownSource::Signal.level());
+    let (result, _) = train_with_a_shutdown_during_iteration_1(20, ShutdownSource::Signal.level());
 
     assert_eq!(result.result.reason, "graceful_shutdown");
     assert_eq!(result.result.iterations, 1);
@@ -1050,6 +1058,68 @@ fn train_records_a_signal_shutdown_source() {
             .stop_decision
             .mask()
             .contains(StopMask::SIGNAL)
+    );
+}
+
+#[test]
+fn signal_stop_skips_the_configured_simulation() {
+    let (outcome, _) = train_with_a_shutdown_during_iteration_1(20, ShutdownSource::Signal.level());
+    let decision = outcome.result.stop_decision;
+
+    assert_eq!(outcome.result.reason, "graceful_shutdown");
+    assert_eq!(outcome.result.iterations, 1);
+    assert!(decision.mask().contains(StopMask::SIGNAL));
+    assert_eq!(
+        PostTrainingSimulation::resolve(true, &decision, 0),
+        PostTrainingSimulation::SkipAfterSignalStop
+    );
+}
+
+#[test]
+fn coincident_signal_stop_reports_the_rule_and_skips_the_simulation() {
+    let (outcome, _) = train_with_a_shutdown_during_iteration_1(1, ShutdownSource::Signal.level());
+    let decision = outcome.result.stop_decision;
+
+    assert_eq!(outcome.result.reason, "iteration_limit");
+    assert!(decision.configured_stop());
+    assert!(!decision.ended_by_shutdown());
+    assert!(decision.mask().contains(StopMask::SIGNAL));
+    assert_eq!(
+        PostTrainingSimulation::resolve(true, &decision, 0),
+        PostTrainingSimulation::SkipAfterSignalStop
+    );
+}
+
+#[test]
+fn callback_stop_keeps_the_configured_simulation() {
+    let (outcome, _) =
+        train_with_a_shutdown_during_iteration_1(20, ShutdownSource::Cooperative.level());
+    let decision = outcome.result.stop_decision;
+
+    assert_eq!(outcome.result.reason, "graceful_shutdown");
+    assert!(!decision.mask().contains(StopMask::SIGNAL));
+    assert_eq!(
+        PostTrainingSimulation::resolve(true, &decision, 0),
+        PostTrainingSimulation::Run
+    );
+}
+
+#[test]
+fn signal_after_the_final_stop_decision_skips_the_configured_simulation() {
+    let (outcome, shutdown_flag) = train_with_a_shutdown_during_iteration_1(1, 0);
+    let decision = outcome.result.stop_decision;
+    shutdown_flag.fetch_max(ShutdownSource::Signal.level(), Ordering::Relaxed);
+
+    assert_eq!(outcome.result.reason, "iteration_limit");
+    assert!(decision.configured_stop());
+    assert!(!decision.mask().contains(StopMask::SIGNAL));
+    assert_eq!(
+        PostTrainingSimulation::resolve(true, &decision, 0),
+        PostTrainingSimulation::Run
+    );
+    assert_eq!(
+        PostTrainingSimulation::resolve(true, &decision, shutdown_flag.load(Ordering::Relaxed)),
+        PostTrainingSimulation::SkipAfterSignalStop
     );
 }
 

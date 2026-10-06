@@ -109,6 +109,30 @@ pub fn quarterly_season_map() -> SeasonMap {
     }
 }
 
+/// A sparse-id ring [`SeasonMap`] (`Custom`): ids `0` Jan, `1` Feb, `2` Mar,
+/// `12` Apr-Jun, `13` Jul-Sep.
+#[must_use]
+pub fn sparse_ring_season_map() -> SeasonMap {
+    let def = |id: usize, month_start: u32, month_end: Option<u32>| SeasonDefinition {
+        id,
+        label: format!("S{id}"),
+        month_start,
+        day_start: None,
+        month_end,
+        day_end: None,
+    };
+    SeasonMap {
+        cycle_type: SeasonCycleType::Custom,
+        seasons: vec![
+            def(0, 1, None),
+            def(1, 2, None),
+            def(2, 3, None),
+            def(12, 4, Some(6)),
+            def(13, 7, Some(9)),
+        ],
+    }
+}
+
 /// A weekly [`SeasonMap`] (52 seasons, `Week1`..`Week52`,
 /// [`SeasonCycleType::Weekly`]).
 #[must_use]

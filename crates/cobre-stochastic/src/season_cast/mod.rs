@@ -3,6 +3,12 @@
 //!
 //! Resolves the concrete calendar `[start, end)` window and total duration for
 //! a stage's season-period occurrence, and the next chronological occurrence.
+//! The backward walk over those occurrences also feeds the stitched lag-season
+//! lookup, [`StitchedSeasonMap`].
+
+mod stitched;
+
+pub use stitched::StitchedSeasonMap;
 
 use chrono::{Datelike, NaiveDate, TimeDelta, Weekday};
 use cobre_core::PostStudyStage;
@@ -231,14 +237,16 @@ pub fn next_season_period_window(
 }
 
 /// Resolve the period window immediately preceding `current`, the exact
-/// inverse of [`next_season_period_window`].
+/// inverse of [`next_season_period_window`], with the season id the backward
+/// walk records for it. This is the walk's single step.
 #[must_use]
-pub(crate) fn previous_season_period_window(
+pub(crate) fn previous_occurrence(
     season_map: &SeasonMap,
-    season_def: &SeasonDefinition,
+    current_id: usize,
     current: &SeasonPeriodWindow,
-) -> Option<SeasonPeriodWindow> {
-    match season_map.cycle_type {
+) -> Option<(usize, SeasonPeriodWindow)> {
+    let season_def = season_map.seasons.iter().find(|s| s.id == current_id)?;
+    let previous = match season_map.cycle_type {
         SeasonCycleType::Monthly => {
             let season_month = season_def.month_start;
             let year = current.start.year();
@@ -284,10 +292,11 @@ pub(crate) fn previous_season_period_window(
                 hours: f64::from(days) * 24.0,
             })
         }
-    }
+    }?;
+    Some((season_map.season_for_date(previous.start)?, previous))
 }
 
-/// Walk `previous_season_period_window` `k` times from `anchor` (`k == 0` returns `anchor`).
+/// Walk [`previous_occurrence`] `k` times from `anchor` (`k == 0` returns `anchor`).
 #[must_use]
 pub fn nth_previous_occurrence(
     season_map: &SeasonMap,
@@ -298,9 +307,7 @@ pub fn nth_previous_occurrence(
     let mut window = anchor.clone();
     let mut current_id = season_def.id;
     for _ in 0..k {
-        let current_def = season_map.seasons.iter().find(|s| s.id == current_id)?;
-        window = previous_season_period_window(season_map, current_def, &window)?;
-        current_id = season_map.season_for_date(window.start)?;
+        (current_id, window) = previous_occurrence(season_map, current_id, &window)?;
     }
     Some(window)
 }
@@ -609,7 +616,7 @@ impl<'a> StageCalendar<'a> {
 
     /// Backward occurrence-window sequence: entry `0` is this calendar's own
     /// in-progress occurrence of `season_def`, entries `1..=max_k` are the
-    /// consecutive results of walking [`previous_season_period_window`], each
+    /// consecutive results of walking [`previous_occurrence`], each
     /// computed exactly once — equivalent to calling [`Self::season_occurrence`]
     /// independently for every `k` in `0..=max_k`, but without restarting the
     /// walk from the anchor each time.
@@ -633,14 +640,8 @@ impl<'a> StageCalendar<'a> {
         occurrences.push(window.clone());
 
         for _ in 0..max_k {
-            let Some(current_def) = season_map.seasons.iter().find(|s| s.id == current_id) else {
-                break;
-            };
-            let Some(previous) = previous_season_period_window(season_map, current_def, &window)
+            let Some((next_id, previous)) = previous_occurrence(season_map, current_id, &window)
             else {
-                break;
-            };
-            let Some(next_id) = season_map.season_for_date(previous.start) else {
                 break;
             };
             current_id = next_id;

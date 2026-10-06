@@ -866,4 +866,44 @@ mod tests {
              `penalties.json`: {description:?}"
         );
     }
+
+    #[test]
+    fn generic_parameters_schema_enumerates_every_parameter_kind() {
+        let schemas = generate_schemas().unwrap();
+        let parameters = schema_named(&schemas, "generic_parameters.schema.json");
+        let pointer = "/$defs/ScalarParameterJsonEntry/properties/kind/$ref";
+        let reference = parameters
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("generic_parameters.schema.json has no {pointer}"));
+        let kind_def = reference
+            .strip_prefix('#')
+            .and_then(|def_pointer| parameters.pointer(def_pointer))
+            .unwrap_or_else(|| panic!("generic_parameters.schema.json has no {reference}"));
+        let listed: Vec<&Value> = match (kind_def.get("oneOf"), kind_def.get("enum")) {
+            (Some(Value::Array(variants)), _) => {
+                variants.iter().map(|variant| &variant["const"]).collect()
+            }
+            (_, Some(Value::Array(values))) => values.iter().collect(),
+            _ => panic!("{reference} has neither a oneOf nor an enum array: {kind_def}"),
+        };
+        let mut kinds: Vec<&str> = listed
+            .into_iter()
+            .map(|kind| {
+                kind.as_str()
+                    .unwrap_or_else(|| panic!("{reference} lists a non-string kind: {kind}"))
+            })
+            .collect();
+        kinds.sort_unstable();
+        assert_eq!(
+            kinds,
+            [
+                "computed",
+                "constant",
+                "per_stage",
+                "per_stage_block",
+                "seasonal"
+            ]
+        );
+    }
 }

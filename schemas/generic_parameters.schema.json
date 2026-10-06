@@ -190,6 +190,36 @@
       "format": "int32",
       "type": "integer"
     },
+    "RawParameterKind": {
+      "description": "`kind` discriminator of a `generic_parameters.json` entry.",
+      "oneOf": [
+        {
+          "const": "constant",
+          "description": "One value for every stage, in `value`.",
+          "type": "string"
+        },
+        {
+          "const": "per_stage",
+          "description": "One value per stage, in `values` keyed by stage id.",
+          "type": "string"
+        },
+        {
+          "const": "seasonal",
+          "description": "One value per season, in `values` keyed by season id.",
+          "type": "string"
+        },
+        {
+          "const": "computed",
+          "description": "A quantity derived from hydro data, in `computed_spec`.",
+          "type": "string"
+        },
+        {
+          "const": "per_stage_block",
+          "description": "One value per stage and block, in `block_values`.",
+          "type": "string"
+        }
+      ]
+    },
     "ScalarParameterJsonEntry": {
       "additionalProperties": false,
       "description": "One parameter entry.\n\nAn unknown key, such as the retired `values_source`, is a parse error that\nnames the key.",
@@ -237,8 +267,8 @@
           "type": "integer"
         },
         "kind": {
-          "description": "Discriminator: `\"constant\"`, `\"per_stage\"`, `\"seasonal\"`, or `\"computed\"`.\nThe presence of `value` / `values` / `computed_spec` is determined by\nthis field at parse time.",
-          "type": "string"
+          "$ref": "#/$defs/RawParameterKind",
+          "description": "Selects which payload field (`value`, `values`, `computed_spec` or\n`block_values`) the entry carries."
         },
         "name": {
           "description": "Human-readable name; unique within the file. Used as the `@name` reference\nfrom `generic_constraints.json`.",

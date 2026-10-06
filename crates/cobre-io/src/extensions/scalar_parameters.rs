@@ -75,12 +75,10 @@
 //! - `block_values` present on a non-`"per_stage_block"` entry, or absent on a
 //!   `"per_stage_block"` entry.
 //! - Non-finite `value` fields (NaN, ±∞).
-//! - Unknown JSON fields (caught by `#[serde(deny_unknown_fields)]`); for
-//!   example, a stale `"values_source"` field from an old fixture is rejected.
 //!
-//! Top-level parse failures (malformed JSON) return
-//! [`crate::LoadError::ParseError`].  I/O failures return
-//! [`crate::LoadError`].
+//! Top-level parse failures (malformed JSON) and unknown JSON fields, such as a
+//! stale `"values_source"`, return [`crate::LoadError::ParseError`].  I/O
+//! failures return [`crate::LoadError`].
 //!
 //! ## Output ordering
 //!
@@ -127,10 +125,9 @@ pub(crate) struct ScalarParameterJsonEntry {
     /// Human-readable name; unique within the file. Used as the `@name` reference
     /// from `generic_constraints.json`.
     name: String,
-    /// Discriminator: `"constant"`, `"per_stage"`, `"seasonal"`, or `"computed"`.
-    /// The presence of `value` / `values` / `computed_spec` is determined by
-    /// this field at parse time.
-    kind: String,
+    /// Selects which payload field (`value`, `values`, `computed_spec` or
+    /// `block_values`) the entry carries.
+    kind: RawParameterKind,
     /// Scalar value. Required when `kind == "constant"`; must be absent for all
     /// other kinds.
     value: Option<f64>,
@@ -148,6 +145,35 @@ pub(crate) struct ScalarParameterJsonEntry {
     block_values: Option<Vec<(i32, i32, f64)>>,
 }
 
+/// `kind` discriminator of a `generic_parameters.json` entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) enum RawParameterKind {
+    /// One value for every stage, in `value`.
+    Constant,
+    /// One value per stage, in `values` keyed by stage id.
+    PerStage,
+    /// One value per season, in `values` keyed by season id.
+    Seasonal,
+    /// A quantity derived from hydro data, in `computed_spec`.
+    Computed,
+    /// One value per stage and block, in `block_values`.
+    PerStageBlock,
+}
+
+impl RawParameterKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Constant => "constant",
+            Self::PerStage => "per_stage",
+            Self::Seasonal => "seasonal",
+            Self::Computed => "computed",
+            Self::PerStageBlock => "per_stage_block",
+        }
+    }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Parse `constraints/generic_parameters.json` and return a fully-assembled,
@@ -160,6 +186,7 @@ pub(crate) struct ScalarParameterJsonEntry {
 /// | File not found or permission denied           | [`LoadError`]              |
 /// | Malformed JSON                                | [`LoadError::ParseError`]      |
 /// | Unknown JSON field in any entry               | [`LoadError::ParseError`]      |
+/// | Unknown `kind` value in any entry             | [`LoadError::ParseError`]      |
 /// | Duplicate `id` across entries                 | [`LoadError::SchemaError`]     |
 /// | Duplicate `name` across entries               | [`LoadError::SchemaError`]     |
 /// | Empty or whitespace-trimmed `name`            | [`LoadError::SchemaError`]     |
@@ -250,30 +277,23 @@ fn convert_entry_to_kind(
     entry: &ScalarParameterJsonEntry,
     path: &Path,
 ) -> Result<ParameterKind, LoadError> {
-    if entry.kind != "per_stage_block" && entry.block_values.is_some() {
+    if entry.kind != RawParameterKind::PerStageBlock && entry.block_values.is_some() {
         return Err(LoadError::SchemaError {
             path: path.to_path_buf(),
             field: format!("scalar_parameters[{i}].block_values"),
             message: format!(
-                "\"block_values\" is only valid for kind \"per_stage_block\", not {:?}",
-                entry.kind
+                "\"block_values\" is only valid for kind \"per_stage_block\", not \"{}\"",
+                entry.kind.as_str()
             ),
         });
     }
 
-    match entry.kind.as_str() {
-        "constant" => convert_constant(i, entry, path),
-        "per_stage" => convert_per_stage(i, entry, path),
-        "seasonal" => convert_seasonal(i, entry, path),
-        "computed" => convert_computed(i, entry, path),
-        "per_stage_block" => convert_per_stage_block(i, entry, path),
-        other => Err(LoadError::SchemaError {
-            path: path.to_path_buf(),
-            field: format!("scalar_parameters[{i}].kind"),
-            message: format!(
-                "unknown kind {other:?}; legal values are: constant, per_stage, seasonal, computed, per_stage_block"
-            ),
-        }),
+    match entry.kind {
+        RawParameterKind::Constant => convert_constant(i, entry, path),
+        RawParameterKind::PerStage => convert_per_stage(i, entry, path),
+        RawParameterKind::Seasonal => convert_seasonal(i, entry, path),
+        RawParameterKind::Computed => convert_computed(i, entry, path),
+        RawParameterKind::PerStageBlock => convert_per_stage_block(i, entry, path),
     }
 }
 
@@ -726,7 +746,7 @@ mod tests {
             &ScalarParameterJsonEntry {
                 id: 1,
                 name: "p".to_string(),
-                kind: "constant".to_string(),
+                kind: RawParameterKind::Constant,
                 value: Some(f64::NAN),
                 values: None,
                 computed_spec: None,
@@ -953,6 +973,54 @@ mod tests {
                 );
             }
             other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    // ── kind: unlisted kind rejected ───────────────────────────────────────────
+
+    #[test]
+    fn scalar_parameters_json_rejects_unknown_kind_naming_every_kind() {
+        let json = r#"{
+            "scalar_parameters": [
+                { "id": 1, "name": "p", "kind": "bogus", "value": 1.0 }
+            ]
+        }"#;
+        let tmp = write_json(json);
+        let err = parse_scalar_parameters_json(tmp.path()).unwrap_err();
+        match err {
+            LoadError::ParseError { message, .. } => {
+                for spelling in [
+                    "bogus",
+                    "constant",
+                    "per_stage",
+                    "seasonal",
+                    "computed",
+                    "per_stage_block",
+                ] {
+                    assert!(
+                        message.contains(&format!("`{spelling}`")),
+                        "message should name `{spelling}`, got: {message}"
+                    );
+                }
+            }
+            other => panic!("expected ParseError for an unlisted kind, got: {other:?}"),
+        }
+    }
+
+    // ── kind: as_str matches the JSON spelling ─────────────────────────────────
+
+    #[test]
+    fn raw_parameter_kind_as_str_is_its_json_spelling() {
+        for kind in [
+            RawParameterKind::Constant,
+            RawParameterKind::PerStage,
+            RawParameterKind::Seasonal,
+            RawParameterKind::Computed,
+            RawParameterKind::PerStageBlock,
+        ] {
+            let parsed: RawParameterKind =
+                serde_json::from_str(&format!("\"{}\"", kind.as_str())).unwrap();
+            assert_eq!(parsed, kind);
         }
     }
 }

@@ -702,6 +702,81 @@ fn extract_hydro_storage_values_from_primal() {
 }
 
 #[test]
+fn hydro_rows_report_the_incremental_inflow_as_inflow_m3s() {
+    let dims = test_support::GeometryDims {
+        hydro_count: 2,
+        max_par_order: 1,
+        n_thermals: 1,
+        n_lines: 1,
+        n_buses: 1,
+        n_blks: 1,
+        has_inflow_penalty: false,
+        max_deficit_segments: 1,
+        n_anticipated: 0,
+        lead_stages: 0,
+        anticipated_plants: AnticipatedPlants::default(),
+    };
+    let indexer = test_support::geometry(&dims, vec![], &[], vec![]);
+    let study_dims = test_support::study_dims();
+    let state = test_support::state_layout(2, 1);
+    let mut primal = make_primal_2_1([100.0, 200.0], [50.0, 60.0], [90.0, 180.0], 999.5);
+    primal.resize(indexer.generation_below_slack.end, 0.0);
+    let objective_coeffs = vec![0.0; primal.len()];
+    let dual = vec![0.0; geometry_row_capacity(&indexer)];
+    let row_lower = vec![0.0; geometry_row_capacity(&indexer)];
+    let ec = zero_energy_conversion(2, 1);
+    let inflow_m3s_per_hydro = [37.5, 81.25];
+
+    let result = extract_stage_result(
+        &SolutionView {
+            primal: &primal,
+            dual: &dual,
+            objective: 1500.0,
+            objective_coeffs: &objective_coeffs,
+            row_lower: &row_lower,
+        },
+        &StageExtractionSpec {
+            study_dims: &study_dims,
+            geometry: &indexer,
+            hydro_cell_index: &test_support::identity_hydro_cell_index(256),
+            state: &state,
+            entity_counts: &make_entity_counts_2_hydros(),
+            inflow_m3s_per_hydro: &inflow_m3s_per_hydro,
+            block_hours: &[100.0],
+            generic_constraint_entries: &[],
+            ncs_col_upper: &[],
+            pumping_consumption_mw_per_m3s: &[],
+            contract_prices: &[],
+            contract_slots: &[],
+            diversion_upstream: &HashMap::new(),
+            hydro_productivities: &[1.0, 1.0],
+            col_scale: &[],
+            row_scale: &[],
+            cumulative_discount_factor: 1.0,
+            cost_scale_factor: 1_000_000.0,
+            energy_conversion: &ec,
+            hydro_min_storage_hm3: &[0.0; 2],
+            stage_index: 0,
+            horizon: &HorizonMode::Finite { num_stages: 1 },
+            anticipated_windows: &[],
+            study_stage_ids: &[],
+        },
+        0,
+    );
+
+    assert_eq!(result.hydros.len(), 2);
+    for (hydro, &inflow) in result.hydros.iter().zip(&inflow_m3s_per_hydro) {
+        assert_eq!(
+            hydro.inflow_m3s.to_bits(),
+            hydro.incremental_inflow_m3s.to_bits(),
+            "hydro {}: inflow_m3s must be the incremental inflow",
+            hydro.hydro_id
+        );
+        assert_eq!(hydro.incremental_inflow_m3s.to_bits(), inflow.to_bits());
+    }
+}
+
+#[test]
 fn extract_inflow_lag_values_from_primal() {
     // inflow_lags[2]=50.0 for hydro 0 lag 0, [3]=60.0 for hydro 1 lag 0
     let study_dims = test_support::study_dims();

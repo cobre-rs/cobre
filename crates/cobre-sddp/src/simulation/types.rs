@@ -122,7 +122,8 @@ pub struct SimulationHydroResult {
     pub diverted_outflow_m3s: Option<f64>,
     /// Incremental (local) natural inflow in m³/s.
     pub incremental_inflow_m3s: f64,
-    /// Total inflow to the reservoir in m³/s (incremental + upstream).
+    /// Incremental (local) natural inflow in m³/s; the same value as
+    /// [`Self::incremental_inflow_m3s`].
     pub inflow_m3s: f64,
     /// Reservoir storage at the start of the block in hm³.
     pub storage_initial_hm3: f64,

@@ -158,7 +158,8 @@ pub struct HydroWriteRecord {
     pub diverted_outflow_m3s: Option<f64>,
     /// Incremental natural inflow in m³/s.
     pub incremental_inflow_m3s: f64,
-    /// Total inflow to the reservoir in m³/s.
+    /// Incremental (local) natural inflow in m³/s; the same value as
+    /// `incremental_inflow_m3s`.
     pub inflow_m3s: f64,
     /// Reservoir storage at block start in hm³.
     pub storage_initial_hm3: f64,

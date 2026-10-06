@@ -383,7 +383,9 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("hydros", "diverted_inflow_m3s") => "Diverted inflow received (nullable)",
         ("hydros", "diverted_outflow_m3s") => "Diverted outflow sent (nullable)",
         ("hydros", "incremental_inflow_m3s") => "Incremental (local) inflow",
-        ("hydros", "inflow_m3s") => "Total inflow including upstream contributions",
+        ("hydros", "inflow_m3s") => {
+            "Incremental (local) inflow, the same value as incremental_inflow_m3s"
+        }
         ("hydros", "storage_initial_hm3") => "Reservoir storage at start of stage",
         ("hydros", "storage_final_hm3") => "Reservoir storage at end of stage",
         ("hydros", "generation_mw") => "Hydro generation",
@@ -497,7 +499,7 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("non_controllables", "operative_state_code") => "Operative state code",
         ("inflow_lags", "stage_id") => "Stage index",
         ("inflow_lags", "hydro_id") => "Hydro plant identifier",
-        ("inflow_lags", "lag_index") => "AR lag index (1-based)",
+        ("inflow_lags", "lag_index") => "AR lag index (0-based; 0 = most recent past period)",
         ("inflow_lags", "inflow_m3s") => "Historical inflow for this lag",
         ("in_transit", "stage_id") => "Stage index",
         ("in_transit", "hydro_id") => "Downstream hydro plant identifier",
@@ -3614,6 +3616,28 @@ mod tests {
         assert!(
             !description_for("hydros", "stored_energy_final_mwh").is_empty(),
             "stored_energy_final_mwh must have a description"
+        );
+    }
+
+    #[test]
+    fn hydros_inflow_m3s_description_states_the_incremental_inflow() {
+        let desc = description_for("hydros", "inflow_m3s");
+        assert!(
+            desc.starts_with("Incremental (local) inflow")
+                && !desc.contains("Total")
+                && !desc.contains("upstream"),
+            "hydros.inflow_m3s holds the incremental (local) inflow, got: {desc:?}"
+        );
+    }
+
+    #[test]
+    fn inflow_lags_lag_index_description_states_zero_based_order() {
+        let desc = description_for("inflow_lags", "lag_index");
+        assert!(
+            desc.contains("0-based")
+                && desc.contains("0 = most recent")
+                && !desc.contains("1-based"),
+            "inflow_lags.lag_index is 0-based with 0 = the most recent past period, got: {desc:?}"
         );
     }
 

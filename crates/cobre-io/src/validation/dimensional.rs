@@ -5,26 +5,15 @@
 //! are only performed when the optional data is present (non-empty `Vec` or
 //! `Some`).
 //!
-//! The primary entry point is `validate_dimensional_consistency`.
-//!
-//! ## Rules implemented
-//!
-//! | # | Rule | Source File |
-//! |---|------|-------------|
-//! | 1 | Every active hydro must have an `InflowModel` for every study stage. | `scenarios/inflow_seasonal_stats.parquet` |
-//! | 2 | Every bus must have a `LoadModel` for every study stage. | `scenarios/load_seasonal_stats.parquet` |
-//! | 3 | For each `CorrelationGroup`, `matrix.len() == entities.len()`. | `scenarios/correlation.json` |
-//! | 4 | For each `CorrelationGroup`, every row `matrix[i].len() == entities.len()`. | `scenarios/correlation.json` |
-//! | 5 | Every `profile_name` in the correlation schedule exists in `profiles`. | `scenarios/correlation.json` |
-//! | 6 | Every FPHA-configured hydro must have at least 1 row in `fpha_hyperplanes`, except a hydro with no turbine capacity (`Hydro::has_turbine_capacity`). | `system/fpha_hyperplanes.parquet` |
-//! | 7 | Every FPHA- or `LinearizedHead`-configured hydro must have rows in `hydro_geometry`: ≥ 1 if FPHA is configured, ≥ 2 otherwise. | `system/hydro_geometry.parquet` |
+//! The primary entry point is `validate_dimensional_consistency`. Its rules are the
+//! `dimensional.*` entries of [`RULES`](super::rules::RULES).
 
 use std::collections::{HashMap, HashSet};
 
 use cobre_core::Hydro;
 use cobre_core::entities::HydroGenerationModel;
 
-use super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::{ValidationContext, rules, schema::ParsedData};
 use crate::extensions::{ProductionModelConfig, SelectionMode};
 
 // ── validate_dimensional_consistency ─────────────────────────────────────────
@@ -34,7 +23,7 @@ use crate::extensions::{ProductionModelConfig, SelectionMode};
 /// Every coverage rule runs unconditionally — earlier failures do not
 /// short-circuit later rules. A rule whose optional data is absent (empty `Vec`
 /// or `None`) is silently skipped. Each failure adds one
-/// [`ErrorKind::DimensionMismatch`] entry to `ctx`; the function is infallible.
+/// `ErrorKind::DimensionMismatch` entry to `ctx`; the function is infallible.
 // Rationale: all rules share one pass over the same parsed data and must run
 // unconditionally so the caller receives a complete diagnostic set; one function per
 // rule would force separate traversals or an intermediary structure with no benefit.
@@ -69,8 +58,8 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
                 }
 
                 if !inflow_pairs.contains(&(hydro.id.0, stage_id)) {
-                    ctx.add_error(
-                        ErrorKind::DimensionMismatch,
+                    ctx.emit(
+                        &rules::DIMENSIONAL_INFLOW_STATS_COVERAGE,
                         "scenarios/inflow_seasonal_stats.parquet",
                         Some(format!("Hydro {}", hydro.id.0)),
                         format!(
@@ -93,8 +82,8 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
         for bus in &data.buses {
             for &stage_id in &study_stage_ids {
                 if !load_pairs.contains(&(bus.id.0, stage_id)) {
-                    ctx.add_error(
-                        ErrorKind::DimensionMismatch,
+                    ctx.emit(
+                        &rules::DIMENSIONAL_LOAD_STATS_COVERAGE,
                         "scenarios/load_seasonal_stats.parquet",
                         Some(format!("Bus {}", bus.id.0)),
                         format!(
@@ -114,8 +103,8 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
                 let n_rows = group.matrix.len();
 
                 if n_rows != n_entities {
-                    ctx.add_error(
-                        ErrorKind::DimensionMismatch,
+                    ctx.emit(
+                        &rules::DIMENSIONAL_CORRELATION_ROW_COUNT,
                         "scenarios/correlation.json",
                         Some(format!("group '{}' in profile '{}'", group.name, profile_name)),
                         format!(
@@ -128,8 +117,8 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
 
                 for (i, row) in group.matrix.iter().enumerate() {
                     if row.len() != n_entities {
-                        ctx.add_error(
-                            ErrorKind::DimensionMismatch,
+                        ctx.emit(
+                            &rules::DIMENSIONAL_CORRELATION_ROW_LENGTH,
                             "scenarios/correlation.json",
                             Some(format!("group '{}' in profile '{}'", group.name, profile_name)),
                             format!(
@@ -144,8 +133,8 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
 
         for entry in &correlation.schedule {
             if !correlation.profiles.contains_key(&entry.profile_name) {
-                ctx.add_error(
-                    ErrorKind::DimensionMismatch,
+                ctx.emit(
+                    &rules::DIMENSIONAL_CORRELATION_PROFILE,
                     "scenarios/correlation.json",
                     Some(format!("schedule stage_id={}", entry.stage_id)),
                     format!(
@@ -177,8 +166,8 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
                 continue;
             }
             if !hydros_with_hyperplanes.contains(&hydro_id) {
-                ctx.add_error(
-                    ErrorKind::DimensionMismatch,
+                ctx.emit(
+                    &rules::DIMENSIONAL_FPHA_HYPERPLANES,
                     "system/fpha_hyperplanes.parquet",
                     Some(format!("Hydro {hydro_id}")),
                     format!(
@@ -210,8 +199,8 @@ pub(crate) fn validate_dimensional_consistency(data: &ParsedData, ctx: &mut Vali
                 2
             };
             if count < min_required {
-                ctx.add_error(
-                    ErrorKind::DimensionMismatch,
+                ctx.emit(
+                    &rules::DIMENSIONAL_GEOMETRY_ROWS,
                     "system/hydro_geometry.parquet",
                     Some(format!("Hydro {hydro_id}")),
                     format!(

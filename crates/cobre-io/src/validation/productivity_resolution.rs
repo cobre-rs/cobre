@@ -11,8 +11,8 @@
 //!   per-hydro-default row.
 //!
 //! Supplying a value from both sources for the same `(hydro, stage)`
-//! is a [`ErrorKind::SchemaViolation`]; supplying neither is a
-//! [`ErrorKind::DimensionMismatch`].
+//! is a `ErrorKind::SchemaViolation`; supplying neither is a
+//! `ErrorKind::DimensionMismatch`.
 //! FPHA hydros are skipped: their `ρ_eq` derives from `VHA` + `ρ_esp`,
 //! with the parquet override winning when present, and the JSON
 //! parser already rejects `productivity_mw_per_m3s` for FPHA.
@@ -23,7 +23,7 @@ use cobre_core::{EntityId, entities::HydroGenerationModel, temporal::Stage};
 
 use crate::{
     extensions::{HydroEnergyProductivityRow, ProductionModelConfig, SelectionMode},
-    validation::{ErrorKind, ValidationContext},
+    validation::{ValidationContext, rules},
 };
 
 use super::schema::ParsedData;
@@ -58,8 +58,8 @@ pub(crate) fn validate_productivity_resolution(data: &ParsedData, ctx: &mut Vali
 
             match (parquet_value, json_value) {
                 (Some(p), Some(j)) => {
-                    ctx.add_error(
-                        ErrorKind::SchemaViolation,
+                    ctx.emit(
+                        &rules::PRODUCTIVITY_SUPPLIED_TWICE,
                         "system/hydro_energy_productivity.parquet",
                         Some(format!("hydro_id={}, stage_id={}", hydro.id.0, stage.id)),
                         format!(
@@ -73,8 +73,8 @@ pub(crate) fn validate_productivity_resolution(data: &ParsedData, ctx: &mut Vali
                     );
                 }
                 (None, None) => {
-                    ctx.add_error(
-                        ErrorKind::DimensionMismatch,
+                    ctx.emit(
+                        &rules::PRODUCTIVITY_MISSING,
                         "system/hydro_production_models.json",
                         Some(format!("hydro_id={}, stage_id={}", hydro.id.0, stage.id)),
                         format!(

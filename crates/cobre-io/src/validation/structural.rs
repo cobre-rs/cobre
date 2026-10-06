@@ -4,12 +4,12 @@
 //! optional files are present.  This layer does **not** parse any file content;
 //! it only tests for the existence of paths on disk. It also rejects any file
 //! whose input contract has been withdrawn but is still present
-//! ([`ErrorKind::BusinessRuleViolation`]).
+//! (`ErrorKind::BusinessRuleViolation`).
 //!
 //! Call [`validate_structure`] with a path to the case root and a mutable
 //! [`ValidationContext`].  It returns a [`FileManifest`] recording, for each
 //! [`InputFile`], whether that file was found on disk.  Missing required files
-//! produce [`ErrorKind::FileNotFound`] entries in the context.  Missing
+//! produce `ErrorKind::FileNotFound` entries in the context.  Missing
 //! optional files leave [`FileManifest::present`] `false` for that key without
 //! adding any error.
 //!
@@ -27,7 +27,7 @@
 
 use std::path::Path;
 
-use super::{ErrorKind, ValidationContext};
+use super::{ValidationContext, rules};
 
 // ── InputFile ────────────────────────────────────────────────────────────────
 
@@ -430,9 +430,9 @@ const REMOVED_FILES: &[RemovedFile] = &[
 /// returning a [`FileManifest`] of which files are present.
 ///
 /// A present file sets its manifest flag to `true`. An absent **required** file
-/// adds an [`ErrorKind::FileNotFound`] error; an absent **optional** file leaves
+/// adds an `ErrorKind::FileNotFound` error; an absent **optional** file leaves
 /// its flag `false` with no error. A present file listed in `REMOVED_FILES`
-/// adds an [`ErrorKind::BusinessRuleViolation`] error naming its replacement.
+/// adds an `ErrorKind::BusinessRuleViolation` error naming its replacement.
 /// This function does **not** read or parse any file content.
 #[must_use]
 pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> FileManifest {
@@ -440,8 +440,8 @@ pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> File
 
     for removed in REMOVED_FILES {
         if case_root.join(removed.relative).exists() {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::STRUCTURAL_REMOVED_FILE_PRESENT,
                 removed.relative,
                 None::<&str>,
                 format!(
@@ -456,8 +456,8 @@ pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> File
         if case_root.join(entry.relative).exists() {
             manifest.set_present(entry.key);
         } else if entry.required {
-            ctx.add_error(
-                ErrorKind::FileNotFound,
+            ctx.emit(
+                &rules::STRUCTURAL_REQUIRED_FILE_MISSING,
                 entry.relative,
                 None::<&str>,
                 format!(
@@ -477,6 +477,7 @@ pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> File
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::validation::ErrorKind;
     use std::fs;
     use tempfile::TempDir;
 

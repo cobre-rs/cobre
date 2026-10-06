@@ -26,6 +26,7 @@
 pub mod dimensional;
 pub mod productivity_resolution;
 pub mod referential;
+pub mod rules;
 pub mod scalar_parameters;
 pub mod schema;
 pub mod semantic;
@@ -34,6 +35,8 @@ pub mod structural;
 use std::path::PathBuf;
 
 use crate::LoadError;
+
+use self::rules::ValidationRule;
 
 // ── Severity ─────────────────────────────────────────────────────────────────
 
@@ -168,6 +171,23 @@ impl ValidationContext {
         self.entries.push(ValidationEntry {
             severity: Severity::Warning,
             kind,
+            file: file.into(),
+            entity: entity.map(Into::into),
+            message: message.into(),
+        });
+    }
+
+    /// Adds a diagnostic for `rule`, with the rule's own kind and severity.
+    pub fn emit(
+        &mut self,
+        rule: &ValidationRule,
+        file: impl Into<PathBuf>,
+        entity: Option<impl Into<String>>,
+        message: impl Into<String>,
+    ) {
+        self.entries.push(ValidationEntry {
+            severity: rule.severity,
+            kind: rule.kind,
             file: file.into(),
             entity: entity.map(Into::into),
             message: message.into(),

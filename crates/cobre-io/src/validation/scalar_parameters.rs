@@ -1,16 +1,10 @@
 //! Scalar parameter cross-validation against the parsed hydro slice.
 //!
-//! Provides [`validate_scalar_parameters`], which performs three checks on a
-//! [`Vec<ScalarParameter>`] that has already passed the per-file structural and
-//! schema validations from `constraints/generic_parameters.json`:
-//!
-//! - **Check A** — every [`ParameterKind::Computed`] references a `hydro_id`
-//!   that exists in the supplied hydro slice.
-//! - **Check B** — every [`ParameterKind::PerStage`] vector has exactly
-//!   `n_stages` elements.
-//! - **Check C** — all parameter `id`s are unique and all `name`s are unique
-//!   across the full parameter list (defense in depth against callers that
-//!   bypass the loader).
+//! Provides [`validate_scalar_parameters`], which checks a [`Vec<ScalarParameter>`] that has
+//! already passed the per-file structural and schema validations from
+//! `constraints/generic_parameters.json`. Its rules are the `scalar_parameters.*` entries of
+//! [`RULES`](super::rules::RULES); the uniqueness rule is defense in depth against callers
+//! that bypass the loader.
 //!
 //! The function never short-circuits.  Every violation is appended to `ctx`
 //! before the function returns, so the caller receives a complete diagnostic
@@ -20,12 +14,12 @@ use std::collections::HashSet;
 
 use cobre_core::{ComputedParameter, EntityId, Hydro, ParameterKind, ScalarParameter};
 
-use super::{ErrorKind, ValidationContext};
+use super::{ValidationContext, rules};
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Cross-validates a parameter list against the parsed hydros and stage count
-/// (Checks A/B/C, above).
+/// (the `scalar_parameters.*` rules).
 ///
 /// Appends one [`super::ValidationEntry`] to `ctx` per violation found; the
 /// function is infallible — all results flow through `ctx`. `n_stages` counts
@@ -54,8 +48,8 @@ fn check_computed_hydro_references(
         if let ParameterKind::Computed { computed_spec: c } = param.kind {
             let hid = hydro_id_of(c);
             if !hydro_ids.contains(&hid) {
-                ctx.add_error(
-                    ErrorKind::InvalidReference,
+                ctx.emit(
+                    &rules::SCALAR_PARAMETER_UNDECLARED_HYDRO,
                     "constraints/generic_parameters.json",
                     Some(format!("{}.computed_spec.hydro_id", param.name)),
                     format!(
@@ -77,8 +71,8 @@ fn check_per_stage_lengths(
         if let ParameterKind::PerStage { ref values } = param.kind {
             let actual = values.len();
             if actual != n_stages {
-                ctx.add_error(
-                    ErrorKind::SchemaViolation,
+                ctx.emit(
+                    &rules::SCALAR_PARAMETER_STAGE_COUNT,
                     "constraints/generic_parameters.json",
                     Some(param.name.as_str()),
                     format!(
@@ -97,8 +91,8 @@ fn check_global_uniqueness(parameters: &[ScalarParameter], ctx: &mut ValidationC
 
     for param in parameters {
         if !seen_ids.insert(param.id) {
-            ctx.add_error(
-                ErrorKind::SchemaViolation,
+            ctx.emit(
+                &rules::SCALAR_PARAMETER_DUPLICATE,
                 "constraints/generic_parameters.json",
                 Some(format!("id={}", param.id.0)),
                 format!(
@@ -109,8 +103,8 @@ fn check_global_uniqueness(parameters: &[ScalarParameter], ctx: &mut ValidationC
         }
 
         if !seen_names.insert(param.name.as_str()) {
-            ctx.add_error(
-                ErrorKind::SchemaViolation,
+            ctx.emit(
+                &rules::SCALAR_PARAMETER_DUPLICATE,
                 "constraints/generic_parameters.json",
                 Some(param.name.as_str()),
                 format!("duplicate parameter name '{}'", param.name),
@@ -150,6 +144,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::validation::ErrorKind;
 
     // ── Fixture helpers ───────────────────────────────────────────────────────
 

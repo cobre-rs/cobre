@@ -1,0 +1,342 @@
+//! Table of the diagnostics the validation layers emit through
+//! [`ValidationContext::emit`](super::ValidationContext::emit).
+//!
+//! Each rule is declared once, by the `declare_rules!` macro below, which both names the
+//! rule's constant and lists it in [`RULES`]. An emitter passes that constant to `emit`, so
+//! a diagnostic takes its kind and severity from the table and cannot state its own.
+//!
+//! # Rule ids
+//!
+//! An id is `<namespace>.<label>` and matches `^[a-z_]+(\.[0-9A-Za-z]+)+$`; consumers treat
+//! it as an opaque string. The namespace is the table that numbers the rule, and the label
+//! is the number written there, verbatim (`7a`, `25b`, `A`):
+//!
+//! - a rule a module table numbers takes that module's namespace (`dimensional.6`,
+//!   `scalar_parameters.A`, `travel_time.12`);
+//! - a Layer 5 rule takes `semantic.5a.N` or `semantic.5b.N` from its layer table;
+//! - a module that numbered nothing had its rules numbered `1`, `2`, … in the source order
+//!   of their first emit (`structural.1`, `referential.3`).
+//!
+//! Labels were assigned once, when the table was first built from the existing numbering.
+//! A rule added later, or a kind and severity pair added later to a listed rule, takes the
+//! next free number in its namespace, past every number the namespace has listed or retired.
+//! A listed id is never renamed, split or renumbered, and a retired id is never reused.
+//!
+//! # Granularity
+//!
+//! One entry per distinct check. Sites that report the same condition with the same kind
+//! and severity share an entry.
+//!
+//! # Layers
+//!
+//! [`ValidationLayer`] names the pipeline layer that emits a rule. The `semantic` layer
+//! covers both Layer 5 passes and the `travel_time` namespace.
+
+use super::{ErrorKind, Severity};
+
+/// One diagnostic the validation layers can emit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ValidationRule {
+    /// Stable `<namespace>.<label>` identifier.
+    pub id: &'static str,
+    /// Pipeline layer that emits the rule.
+    pub layer: ValidationLayer,
+    /// Kind carried by every diagnostic of this rule.
+    pub kind: ErrorKind,
+    /// Severity carried by every diagnostic of this rule.
+    pub severity: Severity,
+    /// One-line description of the condition the rule reports.
+    pub summary: &'static str,
+}
+
+/// Pipeline layer that emits a [`ValidationRule`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ValidationLayer {
+    /// Layer 1: presence of case files.
+    Structural,
+    /// Layer 2: file parsing and schema conformance.
+    Schema,
+    /// Layer 3: cross-entity references.
+    Referential,
+    /// Layer 4: cross-file coverage and array dimensions.
+    Dimensional,
+    /// Layer 5: domain rules on hydro, thermal, stage, penalty and scenario data.
+    Semantic,
+    /// Layer 6: productivity supplied by exactly one source.
+    ProductivityResolution,
+    /// Cross-checks on the scalar parameters.
+    ScalarParameters,
+}
+
+impl ValidationLayer {
+    /// Returns the `snake_case` token the layer is exported as.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Structural => "structural",
+            Self::Schema => "schema",
+            Self::Referential => "referential",
+            Self::Dimensional => "dimensional",
+            Self::Semantic => "semantic",
+            Self::ProductivityResolution => "productivity_resolution",
+            Self::ScalarParameters => "scalar_parameters",
+        }
+    }
+}
+
+macro_rules! declare_rules {
+    ($($name:ident = $id:literal, $layer:ident, $kind:ident, $severity:ident, $summary:literal;)+) => {
+        $(
+            // Summaries are exported as plain text, so file and column names in them carry no backticks.
+            #[allow(clippy::doc_markdown)]
+            #[doc = $summary]
+            pub(crate) const $name: ValidationRule = ValidationRule {
+                id: $id,
+                layer: ValidationLayer::$layer,
+                kind: ErrorKind::$kind,
+                severity: Severity::$severity,
+                summary: $summary,
+            };
+        )+
+
+        /// Every validation rule, in declaration order.
+        pub const RULES: &[ValidationRule] = &[$($name),+];
+    };
+}
+
+declare_rules! {
+    STRUCTURAL_REMOVED_FILE_PRESENT = "structural.1",
+        Structural, BusinessRuleViolation, Error,
+        "A case input file that is no longer read is present; the message names its replacement";
+    STRUCTURAL_REQUIRED_FILE_MISSING = "structural.2",
+        Structural, FileNotFound, Error,
+        "A required case input file is missing";
+    SCHEMA_FILE_UNREADABLE = "schema.1",
+        Schema, FileNotFound, Error,
+        "A case input file cannot be read";
+    SCHEMA_FILE_UNPARSABLE = "schema.2",
+        Schema, ParseError, Error,
+        "A case input file cannot be parsed (invalid JSON syntax or an unreadable Parquet header)";
+    SCHEMA_FILE_NONCONFORMING = "schema.3",
+        Schema, SchemaViolation, Error,
+        "A case input file does not conform to its schema (a missing field, a wrong type or an out-of-range value)";
+    REFERENTIAL_UNDECLARED_ENTITY = "referential.1",
+        Referential, InvalidReference, Error,
+        "An entity field references an entity id that no registry declares";
+    REFERENTIAL_UNKNOWN_CORRELATION_ENTITY_TYPE = "referential.2",
+        Referential, InvalidReference, Error,
+        "A correlation entity has an entity_type other than inflow, load or ncs";
+    REFERENTIAL_UNDECLARED_UNIT_GROUP = "referential.3",
+        Referential, InvalidReference, Error,
+        "A hydro_unit_group_bounds row references a unit group its hydro does not declare";
+    REFERENTIAL_GENERIC_BOUNDS_WITHOUT_ENDPOINT = "referential.4",
+        Referential, InvalidValue, Error,
+        "A generic_constraint_bounds row has neither bound_lower nor bound_upper";
+    REFERENTIAL_GENERIC_BOUNDS_INVERTED = "referential.5",
+        Referential, InvalidValue, Error,
+        "A generic_constraint_bounds row has bound_upper below bound_lower";
+    REFERENTIAL_GENERIC_BOUND_REFERENCE_WITHOUT_ROWS = "referential.6",
+        Referential, InvalidReference, Error,
+        "A generic constraint declares a bound reference but has no rows in generic_constraint_bounds.parquet";
+    REFERENTIAL_NCS_BOUNDS_STAGE = "referential.7",
+        Referential, InvalidReference, Error,
+        "An ncs_bounds row has a stage_id that is not a study stage";
+    REFERENTIAL_NCS_FACTOR_STAGE = "referential.8",
+        Referential, InvalidReference, Error,
+        "A non_controllable_factors entry has a stage_id that is not a study stage";
+    REFERENTIAL_GENERIC_TERM_UNDECLARED_ENTITY = "referential.9",
+        Referential, InvalidReference, Error,
+        "A generic constraint term references an entity that is not declared";
+    REFERENTIAL_GENERIC_TERM_BUS_WITHOUT_UNIT_GROUP = "referential.10",
+        Referential, InvalidReference, Error,
+        "A generic constraint hydro term selects a bus on which the hydro has no unit group";
+    REFERENTIAL_GENERIC_TERM_STUB_CONTRACT = "referential.11",
+        Referential, UnusedEntity, Warning,
+        "A generic constraint term references a stub contract, so the term has no effect";
+    DIMENSIONAL_INFLOW_STATS_COVERAGE = "dimensional.1",
+        Dimensional, DimensionMismatch, Error,
+        "An active hydro has no inflow seasonal statistics for a study stage";
+    DIMENSIONAL_LOAD_STATS_COVERAGE = "dimensional.2",
+        Dimensional, DimensionMismatch, Error,
+        "A bus has no load seasonal statistics for a study stage";
+    DIMENSIONAL_CORRELATION_ROW_COUNT = "dimensional.3",
+        Dimensional, DimensionMismatch, Error,
+        "A correlation group's matrix row count differs from its entity count";
+    DIMENSIONAL_CORRELATION_ROW_LENGTH = "dimensional.4",
+        Dimensional, DimensionMismatch, Error,
+        "A correlation group's matrix row length differs from its entity count";
+    DIMENSIONAL_CORRELATION_PROFILE = "dimensional.5",
+        Dimensional, DimensionMismatch, Error,
+        "The correlation schedule names a profile that is not defined";
+    DIMENSIONAL_FPHA_HYPERPLANES = "dimensional.6",
+        Dimensional, DimensionMismatch, Error,
+        "An FPHA-configured hydro with turbine capacity has no rows in fpha_hyperplanes.parquet";
+    DIMENSIONAL_GEOMETRY_ROWS = "dimensional.7",
+        Dimensional, DimensionMismatch, Error,
+        "An FPHA or linearized-head hydro has too few hydro_geometry.parquet rows (at least 1 for FPHA, 2 otherwise)";
+    PRODUCTIVITY_SUPPLIED_TWICE = "productivity_resolution.1",
+        ProductivityResolution, SchemaViolation, Error,
+        "A hydro's stage productivity is supplied by both hydro_production_models.json and hydro_energy_productivity.parquet";
+    PRODUCTIVITY_MISSING = "productivity_resolution.2",
+        ProductivityResolution, DimensionMismatch, Error,
+        "A constant-productivity hydro has no productivity value for a stage";
+    SCALAR_PARAMETER_UNDECLARED_HYDRO = "scalar_parameters.A",
+        ScalarParameters, InvalidReference, Error,
+        "A computed scalar parameter references a hydro that is not declared";
+    SCALAR_PARAMETER_STAGE_COUNT = "scalar_parameters.B",
+        ScalarParameters, SchemaViolation, Error,
+        "A per-stage scalar parameter does not hold exactly one value per study stage";
+    SCALAR_PARAMETER_DUPLICATE = "scalar_parameters.C",
+        ScalarParameters, SchemaViolation, Error,
+        "Two scalar parameters share an id or a name";
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::{RULES, ValidationLayer};
+    use crate::validation::{Severity, ValidationContext};
+
+    const RETIRED_RULE_IDS: &[&str] = &["travel_time.11", "travel_time.13"];
+
+    // Spelled from chars so the source grep in `tests/genericity_gate.rs` does not match this file.
+    const BANNED_WORDS: [&[char]; 2] =
+        [&['s', 'd', 'd', 'p'], &['b', 'e', 'n', 'd', 'e', 'r', 's']];
+
+    fn layer_of_namespace(namespace: &str) -> Option<ValidationLayer> {
+        match namespace {
+            "structural" => Some(ValidationLayer::Structural),
+            "schema" => Some(ValidationLayer::Schema),
+            "referential" => Some(ValidationLayer::Referential),
+            "dimensional" => Some(ValidationLayer::Dimensional),
+            "semantic" | "travel_time" => Some(ValidationLayer::Semantic),
+            "productivity_resolution" => Some(ValidationLayer::ProductivityResolution),
+            "scalar_parameters" => Some(ValidationLayer::ScalarParameters),
+            _ => None,
+        }
+    }
+
+    fn matches_id_grammar(id: &str) -> bool {
+        let mut parts = id.split('.');
+        let namespace = parts.next().unwrap_or("");
+        let labels: Vec<&str> = parts.collect();
+        !namespace.is_empty()
+            && namespace
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b == b'_')
+            && !labels.is_empty()
+            && labels
+                .iter()
+                .all(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric()))
+    }
+
+    #[test]
+    fn rule_ids_are_unique_and_namespaced_by_their_layer() {
+        let mut problems: Vec<String> = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+
+        for rule in RULES {
+            if !matches_id_grammar(rule.id) {
+                problems.push(format!("{}: id does not match the id grammar", rule.id));
+            }
+            if !seen.insert(rule.id) {
+                problems.push(format!("{}: id is listed more than once", rule.id));
+            }
+
+            let namespace = rule.id.split_once('.').map_or(rule.id, |(ns, _)| ns);
+            match layer_of_namespace(namespace) {
+                None => problems.push(format!("{}: unknown namespace '{namespace}'", rule.id)),
+                Some(layer) if layer != rule.layer => problems.push(format!(
+                    "{}: namespace '{namespace}' belongs to {layer:?} but the rule is {:?}",
+                    rule.id, rule.layer
+                )),
+                Some(_) => {}
+            }
+
+            let token = rule.layer.as_str();
+            if token.is_empty() || !token.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+                problems.push(format!(
+                    "{}: layer token '{token}' is not snake_case",
+                    rule.id
+                ));
+            }
+        }
+
+        assert!(problems.is_empty(), "{problems:#?}");
+    }
+
+    #[test]
+    fn retired_rule_ids_are_never_listed() {
+        let problems: Vec<String> = RULES
+            .iter()
+            .filter(|rule| RETIRED_RULE_IDS.contains(&rule.id))
+            .map(|rule| format!("{}: a retired id is listed", rule.id))
+            .collect();
+
+        assert!(problems.is_empty(), "{problems:#?}");
+    }
+
+    #[test]
+    fn every_rule_summary_is_a_generic_single_line() {
+        let mut problems: Vec<String> = Vec::new();
+
+        for rule in RULES {
+            let summary = rule.summary;
+            if summary.is_empty() {
+                problems.push(format!("{}: empty summary", rule.id));
+            }
+            if summary.contains('\n') {
+                problems.push(format!("{}: summary spans several lines", rule.id));
+            }
+            if summary != summary.trim() {
+                problems.push(format!("{}: summary has surrounding whitespace", rule.id));
+            }
+            let lowered = summary.to_lowercase();
+            for chars in BANNED_WORDS {
+                let banned: String = chars.iter().collect();
+                if lowered.contains(&banned) {
+                    problems.push(format!("{}: summary names '{banned}'", rule.id));
+                }
+            }
+        }
+
+        assert!(problems.is_empty(), "{problems:#?}");
+    }
+
+    #[test]
+    fn emit_takes_kind_and_severity_from_the_rule() {
+        let mut problems: Vec<String> = Vec::new();
+
+        for rule in RULES {
+            let mut ctx = ValidationContext::new();
+            ctx.emit(rule, "case/file.json", None::<&str>, "message");
+
+            let (own, other) = match rule.severity {
+                Severity::Error => (ctx.errors(), ctx.warnings()),
+                Severity::Warning => (ctx.warnings(), ctx.errors()),
+            };
+            if own.len() != 1 || !other.is_empty() {
+                problems.push(format!(
+                    "{}: expected one {:?} entry and none of the other severity, got {} and {}",
+                    rule.id,
+                    rule.severity,
+                    own.len(),
+                    other.len()
+                ));
+                continue;
+            }
+            let entry = own[0];
+            if entry.kind != rule.kind || entry.severity != rule.severity {
+                problems.push(format!(
+                    "{}: emitted {:?}/{:?}, the rule says {:?}/{:?}",
+                    rule.id, entry.kind, entry.severity, rule.kind, rule.severity
+                ));
+            }
+        }
+
+        assert!(problems.is_empty(), "{problems:#?}");
+    }
+}

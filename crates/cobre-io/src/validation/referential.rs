@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use cobre_core::AffineBound;
 
-use super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::{ValidationContext, rules, schema::ParsedData};
 
 // ── validate_referential_integrity ───────────────────────────────────────────
 
@@ -125,8 +125,8 @@ fn emit_dangling_ref_at(
     id: i32,
     ctx: &mut ValidationContext,
 ) {
-    ctx.add_error(
-        ErrorKind::InvalidReference,
+    ctx.emit(
+        &rules::REFERENTIAL_UNDECLARED_ENTITY,
         descriptor.file,
         Some(location),
         format!(
@@ -595,8 +595,8 @@ fn check_scenario_references(
                             "NonControllableSource",
                         ),
                         other => {
-                            ctx.add_error(
-                                ErrorKind::InvalidReference,
+                            ctx.emit(
+                                &rules::REFERENTIAL_UNKNOWN_CORRELATION_ENTITY_TYPE,
                                 "scenarios/correlation.json",
                                 Some(format!("CorrelationEntity({other}, {})", entity.id.0)),
                                 format!(
@@ -700,8 +700,8 @@ fn check_bounds_references(data: &ParsedData, ctx: &mut ValidationContext, ids: 
             .get(&row.hydro_id.0)
             .is_some_and(|groups| groups.contains(&row.hydro_unit_group_id.0))
         {
-            ctx.add_error(
-                ErrorKind::InvalidReference,
+            ctx.emit(
+                &rules::REFERENTIAL_UNDECLARED_UNIT_GROUP,
                 "constraints/hydro_unit_group_bounds.parquet",
                 Some(format!("HydroUnitGroupBoundsRow[{i}]")),
                 format!(
@@ -927,8 +927,8 @@ fn check_generic_constraint_bounds_validity(data: &ParsedData, ctx: &mut Validat
             && lower_affine.is_none()
             && upper_affine.is_none()
         {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::REFERENTIAL_GENERIC_BOUNDS_WITHOUT_ENDPOINT,
                 "constraints/generic_constraint_bounds.parquet",
                 Some(format!("GenericConstraintBoundsRow[{i}]")),
                 format!(
@@ -949,8 +949,8 @@ fn check_generic_constraint_bounds_validity(data: &ParsedData, ctx: &mut Validat
         if let (Some(bound_lower), Some(bound_upper)) = (static_lower, static_upper)
             && bound_upper < bound_lower
         {
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::REFERENTIAL_GENERIC_BOUNDS_INVERTED,
                 "constraints/generic_constraint_bounds.parquet",
                 Some(format!("GenericConstraintBoundsRow[{i}]")),
                 format!(
@@ -973,8 +973,8 @@ fn check_generic_constraint_bounds_validity(data: &ParsedData, ctx: &mut Validat
         if (gc.bound_lower_affine.is_some() || gc.bound_upper_affine.is_some())
             && !constraints_with_rows.contains(&gc.id.0)
         {
-            ctx.add_error(
-                ErrorKind::InvalidReference,
+            ctx.emit(
+                &rules::REFERENTIAL_GENERIC_BOUND_REFERENCE_WITHOUT_ROWS,
                 "constraints/generic_constraints.json",
                 Some(format!("GenericConstraint {}", gc.id.0)),
                 format!(
@@ -1003,8 +1003,8 @@ fn check_ncs_bounds_and_factors(
             emit_dangling_ref(&NCS_BOUNDS_ROW_NCS, "NcsBoundsRow", i, row.ncs_id.0, ctx);
         }
         if !study_stage_ids.contains(&row.stage_id) {
-            ctx.add_error(
-                ErrorKind::InvalidReference,
+            ctx.emit(
+                &rules::REFERENTIAL_NCS_BOUNDS_STAGE,
                 "constraints/ncs_bounds.parquet",
                 Some(format!("NcsBoundsRow[{i}]")),
                 format!(
@@ -1026,8 +1026,8 @@ fn check_ncs_bounds_and_factors(
             );
         }
         if !study_stage_ids.contains(&entry.stage_id) {
-            ctx.add_error(
-                ErrorKind::InvalidReference,
+            ctx.emit(
+                &rules::REFERENTIAL_NCS_FACTOR_STAGE,
                 "scenarios/non_controllable_factors.json",
                 Some(format!("NcsFactorEntry[{i}]")),
                 format!(
@@ -1041,10 +1041,10 @@ fn check_ncs_bounds_and_factors(
 
 /// Validate that a [`VariableRef`](cobre_core::VariableRef) references an existing entity.
 ///
-/// A dangling reference is an [`ErrorKind::InvalidReference`] error for every
+/// A dangling reference is an `ErrorKind::InvalidReference` error for every
 /// modeled entity type. `Contract` is the sole remaining stub (data-complete but
 /// contributing no LP variables), so a dangling `Contract` reference is downgraded
-/// to an [`ErrorKind::UnusedEntity`] warning, not an error.
+/// to an `ErrorKind::UnusedEntity` warning, not an error.
 fn validate_variable_ref_entity(
     var: &cobre_core::VariableRef,
     label: &str,
@@ -1067,8 +1067,8 @@ fn validate_variable_ref_entity(
         | VariableRef::HydroUsefulVolumeInitial { hydro_id, .. }
         | VariableRef::HydroUsefulVolumeFinal { hydro_id, .. } => {
             if !ids.hydro.contains(&hydro_id.0) {
-                ctx.add_error(
-                    ErrorKind::InvalidReference,
+                ctx.emit(
+                    &rules::REFERENTIAL_GENERIC_TERM_UNDECLARED_ENTITY,
                     file,
                     Some(label.to_string()),
                     format!("{label} references non-existent Hydro {}", hydro_id.0),
@@ -1082,8 +1082,8 @@ fn validate_variable_ref_entity(
             hydro_id, bus_id, ..
         } => {
             if !ids.hydro.contains(&hydro_id.0) {
-                ctx.add_error(
-                    ErrorKind::InvalidReference,
+                ctx.emit(
+                    &rules::REFERENTIAL_GENERIC_TERM_UNDECLARED_ENTITY,
                     file,
                     Some(label.to_string()),
                     format!("{label} references non-existent Hydro {}", hydro_id.0),
@@ -1094,8 +1094,8 @@ fn validate_variable_ref_entity(
                     .get(&hydro_id.0)
                     .is_some_and(|buses| buses.contains(&b.0))
             {
-                ctx.add_error(
-                    ErrorKind::InvalidReference,
+                ctx.emit(
+                    &rules::REFERENTIAL_GENERIC_TERM_BUS_WITHOUT_UNIT_GROUP,
                     file,
                     Some(label.to_string()),
                     format!(
@@ -1108,8 +1108,8 @@ fn validate_variable_ref_entity(
         VariableRef::ThermalGeneration { thermal_id, .. }
         | VariableRef::AnticipatedDecision { thermal_id, .. } => {
             if !ids.thermal.contains(&thermal_id.0) {
-                ctx.add_error(
-                    ErrorKind::InvalidReference,
+                ctx.emit(
+                    &rules::REFERENTIAL_GENERIC_TERM_UNDECLARED_ENTITY,
                     file,
                     Some(label.to_string()),
                     format!("{label} references non-existent Thermal {}", thermal_id.0),
@@ -1120,8 +1120,8 @@ fn validate_variable_ref_entity(
         | VariableRef::LineReverse { line_id, .. }
         | VariableRef::LineExchange { line_id, .. } => {
             if !ids.line.contains(&line_id.0) {
-                ctx.add_error(
-                    ErrorKind::InvalidReference,
+                ctx.emit(
+                    &rules::REFERENTIAL_GENERIC_TERM_UNDECLARED_ENTITY,
                     file,
                     Some(label.to_string()),
                     format!("{label} references non-existent Line {}", line_id.0),
@@ -1130,8 +1130,8 @@ fn validate_variable_ref_entity(
         }
         VariableRef::BusDeficit { bus_id, .. } | VariableRef::BusExcess { bus_id, .. } => {
             if !ids.bus.contains(&bus_id.0) {
-                ctx.add_error(
-                    ErrorKind::InvalidReference,
+                ctx.emit(
+                    &rules::REFERENTIAL_GENERIC_TERM_UNDECLARED_ENTITY,
                     file,
                     Some(label.to_string()),
                     format!("{label} references non-existent Bus {}", bus_id.0),
@@ -1141,8 +1141,8 @@ fn validate_variable_ref_entity(
         VariableRef::PumpingFlow { station_id, .. }
         | VariableRef::PumpingPower { station_id, .. } => {
             if !ids.pumping.contains(&station_id.0) {
-                ctx.add_error(
-                    ErrorKind::InvalidReference,
+                ctx.emit(
+                    &rules::REFERENTIAL_GENERIC_TERM_UNDECLARED_ENTITY,
                     file,
                     Some(label.to_string()),
                     format!(
@@ -1155,8 +1155,8 @@ fn validate_variable_ref_entity(
         VariableRef::ContractImport { contract_id, .. }
         | VariableRef::ContractExport { contract_id, .. } => {
             if !ids.contract.contains(&contract_id.0) {
-                ctx.add_warning(
-                    ErrorKind::UnusedEntity,
+                ctx.emit(
+                    &rules::REFERENTIAL_GENERIC_TERM_STUB_CONTRACT,
                     file,
                     Some(label.to_string()),
                     format!(
@@ -1169,8 +1169,8 @@ fn validate_variable_ref_entity(
         VariableRef::NonControllableGeneration { source_id, .. }
         | VariableRef::NonControllableCurtailment { source_id, .. } => {
             if !ids.ncs.contains(&source_id.0) {
-                ctx.add_error(
-                    ErrorKind::InvalidReference,
+                ctx.emit(
+                    &rules::REFERENTIAL_GENERIC_TERM_UNDECLARED_ENTITY,
                     file,
                     Some(label.to_string()),
                     format!(
@@ -1220,6 +1220,7 @@ mod tests {
         },
         test_support::{make_hydro, make_minimal_case, make_unit_group},
         validation::{
+            ErrorKind,
             schema::{ParsedData, validate_schema},
             structural::validate_structure,
         },

@@ -243,3 +243,81 @@ def test_load_policy_wider_stored_basis_raises_policy_incompatible(
         cobre.errors.PolicyIncompatibleError, match="stored basis for node"
     ):
         study.load_policy(output_dir=str(variant_run_dir))
+
+
+@pytest.mark.parametrize(
+    ("mode", "unmet_requirement"),
+    [
+        ("warm_start", "Cannot warm-start without a prior policy."),
+        ("resume", "Cannot resume without a prior checkpoint."),
+    ],
+)
+def test_training_load_without_a_policy_directory_raises_solver_error(
+    tmp_path: pathlib.Path, mode: str, unmet_requirement: str
+) -> None:
+    """Warm-start and resume against an output dir with no policy raise
+    `SolverError` naming the missing directory and what the load needed."""
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+
+    study = cobre.Study(
+        VALID_CASE,
+        output_dir=str(tmp_path),
+        config_overrides={"policy.mode": mode},
+    )
+
+    with pytest.raises(cobre.errors.SolverError) as exc_info:
+        study.train()
+
+    message = str(exc_info.value)
+    assert message.startswith("Policy directory not found: "), message
+    assert message.endswith(f". {unmet_requirement}"), message
+
+
+def test_warm_start_from_an_unreadable_checkpoint_raises_solver_error(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A warm-start whose checkpoint manifest cannot be parsed raises
+    `SolverError` with the read-failure message."""
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+
+    cobre.run.run(VALID_CASE, output_dir=str(tmp_path))
+    (tmp_path / "policy" / "manifest.bin").write_bytes(b"garbage")
+
+    study = cobre.Study(
+        VALID_CASE,
+        output_dir=str(tmp_path),
+        config_overrides={"policy.mode": "warm_start"},
+    )
+
+    with pytest.raises(cobre.errors.SolverError) as exc_info:
+        study.train()
+
+    message = str(exc_info.value)
+    assert message.startswith("failed to read policy checkpoint: "), message
+
+
+def test_warm_start_from_another_version_raises_policy_incompatible(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A warm-start from a checkpoint written by another cobre version raises
+    `PolicyIncompatibleError` with the `policy validation error: ` prefix."""
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+
+    cobre.run.run(VALID_CASE, output_dir=str(tmp_path))
+    other_version = _restamp_policy_version(tmp_path / "policy")
+
+    study = cobre.Study(
+        VALID_CASE,
+        output_dir=str(tmp_path),
+        config_overrides={"policy.mode": "warm_start"},
+    )
+
+    with pytest.raises(cobre.errors.PolicyIncompatibleError) as exc_info:
+        study.train()
+
+    message = str(exc_info.value)
+    assert message.startswith("policy validation error: "), message
+    assert f"written by cobre {other_version}" in message, message

@@ -20,6 +20,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use cobre_io::remove_success_marker;
+use cobre_sddp::policy::full_fcf_load::{
+    FullFcfLoadError, FullFcfLoadKind, check_full_fcf_load, locate_policy_dir,
+};
 use cobre_sddp::{
     FutureCostFunction, HydroModelSummary, ModelProvenanceReport, StochasticSummary, StudySetup,
     TrainingResult,
@@ -31,9 +34,8 @@ use crate::io::build_warnings_list;
 use crate::model::PySystem;
 use crate::run::{
     LoadedStudy, PhaseError, RunError, SimSummary, TrainingPhaseResult, apply_training_policy_mode,
-    build_study_setup, reconstruct_policy_from_checkpoint, run_in_scoped_pool,
-    run_simulation_phase_py, run_training_phase_py, run_training_phase_py_streaming,
-    write_training_outputs,
+    build_study_setup, run_in_scoped_pool, run_simulation_phase_py, run_training_phase_py,
+    run_training_phase_py_streaming, write_training_outputs,
 };
 
 /// Map a [`PhaseError`] to a Python exception through the single
@@ -45,6 +47,7 @@ fn phase_error_to_pyerr(err: PhaseError) -> PyErr {
     match err {
         PhaseError::Message(msg) => convert_error(ErrorSource::Message(msg)),
         PhaseError::Load(err) => convert_error(ErrorSource::Load(&err)),
+        PhaseError::PolicyLoad(err) => convert_error(ErrorSource::PolicyLoad(&err)),
         PhaseError::Sddp { error, message } => convert_error(ErrorSource::Sddp {
             error: &error,
             message,
@@ -394,15 +397,21 @@ impl Study {
     }
 
     /// GIL-free policy reconstruction: read checkpoint from disk, validate, return [`Policy`].
-    pub(crate) fn load_policy_native(&self, output_dir: Option<PathBuf>) -> Result<Policy, String> {
+    pub(crate) fn load_policy_native(
+        &self,
+        output_dir: Option<PathBuf>,
+    ) -> Result<Policy, FullFcfLoadError> {
         let out_dir = output_dir.unwrap_or_else(|| self.output_dir.clone());
-        let policy_dir = out_dir.join(&self.setup.policy_path);
-
         let setup = &self.setup;
         let system = self.system.as_ref();
 
+        let kind = FullFcfLoadKind::SimulationOnly;
+        let policy_dir = locate_policy_dir(kind, &out_dir, setup)?;
         let (fcf, training_result) =
-            reconstruct_policy_from_checkpoint(setup, system, &policy_dir)?;
+            check_full_fcf_load(kind, &policy_dir, system, setup, &mut |msg| {
+                eprintln!("cobre-python: policy validation warning: {msg}");
+            })?
+            .into_simulation_policy();
         Ok(Policy {
             training_result,
             fcf,
@@ -625,6 +634,7 @@ impl Study {
             Ok(policy) => Ok(policy),
             Err(RunError::Callback(err)) => Err(err),
             Err(RunError::Load(err)) => Err(convert_error(ErrorSource::Load(&err))),
+            Err(RunError::PolicyLoad(err)) => Err(convert_error(ErrorSource::PolicyLoad(&err))),
             Err(RunError::Sddp { error, message }) => Err(convert_error(ErrorSource::Sddp {
                 error: &error,
                 message,
@@ -640,8 +650,8 @@ impl Study {
     /// Reads `<output_dir>/<policy_path>/` (`output_dir` defaults to this study's
     /// construction-time `output_dir`), reconstructs the
     /// [`FutureCostFunction`] and a synthetic [`TrainingResult`] via the shared
-    /// [`reconstruct_policy_from_checkpoint`] helper, and packages them into a
-    /// [`Policy`]. The returned policy carries `frozen_templates = None`;
+    /// [`check_full_fcf_load`] entry, and packages them into a [`Policy`]. The
+    /// returned policy carries `frozen_templates = None`;
     /// [`Study::simulate`] re-freezes the stage templates from the FCF at startup,
     /// exactly as the monolithic simulation-only path does.
     ///
@@ -659,7 +669,7 @@ impl Study {
     #[allow(clippy::needless_pass_by_value)]
     fn load_policy(&self, py: Python<'_>, output_dir: Option<PathBuf>) -> PyResult<Policy> {
         py.detach(|| self.load_policy_native(output_dir))
-            .map_err(|msg| convert_error(ErrorSource::Message(msg)))
+            .map_err(|err| convert_error(ErrorSource::PolicyLoad(&err)))
     }
 
     /// Run the simulation phase against this study's in-memory [`StudySetup`]

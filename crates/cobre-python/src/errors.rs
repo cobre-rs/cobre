@@ -26,6 +26,7 @@ use pyo3::types::{PyTuple, PyType};
 
 use cobre_io::{LoadError, OutputError};
 use cobre_sddp::SddpError;
+use cobre_sddp::policy::full_fcf_load::{FullFcfLoadError, FullFcfLoadKind};
 
 pyo3::create_exception!(
     errors,
@@ -174,6 +175,8 @@ pub(crate) enum ErrorSource<'a> {
         /// The verbatim descriptive message.
         message: String,
     },
+    /// A full-FCF policy-load failure (warm-start, resume or simulation-only).
+    PolicyLoad(&'a FullFcfLoadError),
     /// A string-prefixed message from run/study with no typed source.
     Message(String),
 }
@@ -250,6 +253,24 @@ fn convert_error_with(py: Python<'_>, source: ErrorSource<'_>) -> PyErr {
             } => solver_error_infeasible(py, &message, *stage, *iteration, *scenario),
             SddpError::Simulation(_) => new_leaf_err(py, &SIMULATION_ERROR, &message),
             _other => solver_error_plain(py, &message),
+        },
+        ErrorSource::PolicyLoad(err) => match err {
+            FullFcfLoadError::MissingPolicyDirectory { .. } | FullFcfLoadError::Read { .. } => {
+                solver_error_plain(py, &err.to_string())
+            }
+            FullFcfLoadError::Refused(source) => new_leaf_err(
+                py,
+                &POLICY_INCOMPATIBLE_ERROR,
+                &format!("{POLICY_VALIDATION_ERROR_PREFIX}: {source}"),
+            ),
+            FullFcfLoadError::FcfConstruction { kind, source } => {
+                let label = match kind {
+                    FullFcfLoadKind::WarmStart => "warm-start FCF construction error",
+                    FullFcfLoadKind::Resume => "resume FCF construction error",
+                    FullFcfLoadKind::SimulationOnly => "FCF reconstruction error",
+                };
+                solver_error_plain(py, &format!("{label}: {source}"))
+            }
         },
         ErrorSource::Message(msg) => message_prefix_to_pyerr(py, &msg),
     }
@@ -415,10 +436,11 @@ pub(crate) fn register_errors(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ErrorSource, INTERNAL_ERROR, LeafClass, SIMULATION_ERROR, SOLVER_ERROR, VALIDATION_ERROR,
-        convert_error_with,
+        ErrorSource, INTERNAL_ERROR, LeafClass, POLICY_INCOMPATIBLE_ERROR, SIMULATION_ERROR,
+        SOLVER_ERROR, VALIDATION_ERROR, convert_error_with,
     };
     use cobre_sddp::SddpError;
+    use cobre_sddp::policy::full_fcf_load::{FullFcfLoadError, FullFcfLoadKind};
     use pyo3::prelude::*;
 
     /// Assert the bound `PyErr` value is an instance of the supplied leaf class
@@ -575,6 +597,72 @@ mod tests {
             let training_rendered: String =
                 training_err.value(py).str().unwrap().extract().unwrap();
             assert_eq!(training_rendered, training_msg);
+        });
+    }
+
+    /// Every policy-load refusal raises the class and the message text Python
+    /// callers see today; the inner error's text is read from its own `Display`.
+    #[test]
+    fn convert_error_policy_load_keeps_each_refusal_class_and_message() {
+        let kinds = [
+            (
+                FullFcfLoadKind::WarmStart,
+                "warm-start FCF construction error",
+            ),
+            (FullFcfLoadKind::Resume, "resume FCF construction error"),
+            (FullFcfLoadKind::SimulationOnly, "FCF reconstruction error"),
+        ];
+        Python::initialize();
+        Python::attach(|py| {
+            let check = |err: &FullFcfLoadError, leaf: &LeafClass, expected: &str| {
+                let converted = convert_error_with(py, ErrorSource::PolicyLoad(err));
+                assert_leaf(py, &converted, leaf);
+                let rendered: String = converted.value(py).str().unwrap().extract().unwrap();
+                assert_eq!(rendered, expected);
+            };
+
+            for (kind, _) in kinds {
+                let err = FullFcfLoadError::MissingPolicyDirectory {
+                    kind,
+                    path: "/study/policy".into(),
+                };
+                let expected = err.to_string();
+                assert!(expected.starts_with("Policy directory not found: /study/policy. "));
+                check(&err, &SOLVER_ERROR, &expected);
+            }
+
+            let empty = tempfile::tempdir().expect("temp dir");
+            let read_failure = cobre_io::read_policy_checkpoint(empty.path())
+                .expect_err("an empty directory holds no checkpoint");
+            let expected = format!("failed to read policy checkpoint: {read_failure}");
+            check(
+                &FullFcfLoadError::Read {
+                    source: read_failure,
+                },
+                &SOLVER_ERROR,
+                &expected,
+            );
+
+            let mismatch = SddpError::PolicySoftwareMismatch {
+                policy_software: Some("another-program".to_string()),
+                policy_version: "0.0.1".to_string(),
+            };
+            let expected = format!("policy validation error: {mismatch}");
+            check(
+                &FullFcfLoadError::Refused(mismatch),
+                &POLICY_INCOMPATIBLE_ERROR,
+                &expected,
+            );
+
+            for (kind, label) in kinds {
+                let source = SddpError::Validation("malformed cuts".to_string());
+                let expected = format!("{label}: {source}");
+                check(
+                    &FullFcfLoadError::FcfConstruction { kind, source },
+                    &SOLVER_ERROR,
+                    &expected,
+                );
+            }
         });
     }
 }

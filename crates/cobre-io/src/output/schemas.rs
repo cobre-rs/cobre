@@ -67,7 +67,7 @@ fn build_costs_schema() -> Schema {
 
 static COSTS_SCHEMA: LazyLock<Arc<Schema>> = LazyLock::new(|| Arc::new(build_costs_schema()));
 
-/// Schema for `simulation/costs/` — stage and block-level cost breakdown.
+/// Schema of the stage and block-level cost breakdown.
 ///
 /// See output-schemas.md SS5.1.
 pub(crate) fn costs_schema() -> Arc<Schema> {
@@ -145,7 +145,7 @@ fn build_hydros_schema() -> Schema {
 
 static HYDROS_SCHEMA: LazyLock<Arc<Schema>> = LazyLock::new(|| Arc::new(build_hydros_schema()));
 
-/// Schema for `simulation/hydros/` — hydro plant dispatch results.
+/// Schema of the hydro plant dispatch results.
 ///
 /// See output-schemas.md SS5.2.
 pub(crate) fn hydros_schema() -> Arc<Schema> {
@@ -168,7 +168,7 @@ fn build_hydro_bus_generation_schema() -> Schema {
 static HYDRO_BUS_GENERATION_SCHEMA: LazyLock<Arc<Schema>> =
     LazyLock::new(|| Arc::new(build_hydro_bus_generation_schema()));
 
-/// Schema for `simulation/hydro_bus_generation/` — per-cell hydro dispatch results.
+/// Schema of the per-cell hydro dispatch results.
 ///
 /// One row per (stage, block, hydro, bus) — one LP cell.
 pub(crate) fn hydro_bus_generation_schema() -> Arc<Schema> {
@@ -193,7 +193,7 @@ fn build_thermals_schema() -> Schema {
 
 static THERMALS_SCHEMA: LazyLock<Arc<Schema>> = LazyLock::new(|| Arc::new(build_thermals_schema()));
 
-/// Schema for `simulation/thermals/` — thermal unit dispatch results.
+/// Schema of the thermal unit dispatch results.
 ///
 /// See output-schemas.md SS5.3.
 pub(crate) fn thermals_schema() -> Arc<Schema> {
@@ -220,7 +220,7 @@ fn build_exchanges_schema() -> Schema {
 static EXCHANGES_SCHEMA: LazyLock<Arc<Schema>> =
     LazyLock::new(|| Arc::new(build_exchanges_schema()));
 
-/// Schema for `simulation/exchanges/` — transmission line flow results.
+/// Schema of the transmission line flow results.
 ///
 /// See output-schemas.md SS5.4.
 pub(crate) fn exchanges_schema() -> Arc<Schema> {
@@ -245,7 +245,7 @@ fn build_buses_schema() -> Schema {
 
 static BUSES_SCHEMA: LazyLock<Arc<Schema>> = LazyLock::new(|| Arc::new(build_buses_schema()));
 
-/// Schema for `simulation/buses/` — bus load balance results.
+/// Schema of the bus load balance results.
 ///
 /// See output-schemas.md SS5.5.
 pub(crate) fn buses_schema() -> Arc<Schema> {
@@ -270,7 +270,7 @@ fn build_pumping_stations_schema() -> Schema {
 static PUMPING_STATIONS_SCHEMA: LazyLock<Arc<Schema>> =
     LazyLock::new(|| Arc::new(build_pumping_stations_schema()));
 
-/// Schema for `simulation/pumping_stations/` — pumping station results.
+/// Schema of the pumping station results.
 ///
 /// See output-schemas.md SS5.6.
 pub(crate) fn pumping_stations_schema() -> Arc<Schema> {
@@ -294,7 +294,7 @@ fn build_contracts_schema() -> Schema {
 static CONTRACTS_SCHEMA: LazyLock<Arc<Schema>> =
     LazyLock::new(|| Arc::new(build_contracts_schema()));
 
-/// Schema for `simulation/contracts/` — energy contract results.
+/// Schema of the energy contract results.
 ///
 /// See output-schemas.md SS5.7.
 pub(crate) fn contracts_schema() -> Arc<Schema> {
@@ -320,7 +320,7 @@ fn build_non_controllables_schema() -> Schema {
 static NON_CONTROLLABLES_SCHEMA: LazyLock<Arc<Schema>> =
     LazyLock::new(|| Arc::new(build_non_controllables_schema()));
 
-/// Schema for `simulation/non_controllables/` — non-controllable source results.
+/// Schema of the non-controllable source results.
 ///
 /// See output-schemas.md SS5.8.
 pub(crate) fn non_controllables_schema() -> Arc<Schema> {
@@ -340,7 +340,7 @@ fn build_inflow_lags_schema() -> Schema {
 static INFLOW_LAGS_SCHEMA: LazyLock<Arc<Schema>> =
     LazyLock::new(|| Arc::new(build_inflow_lags_schema()));
 
-/// Schema for `simulation/inflow_lags/` — autoregressive inflow state variables.
+/// Schema of the autoregressive inflow state variables.
 ///
 /// See output-schemas.md SS5.10.
 pub(crate) fn inflow_lags_schema() -> Arc<Schema> {
@@ -361,7 +361,7 @@ fn build_in_transit_schema() -> Schema {
 static IN_TRANSIT_SCHEMA: LazyLock<Arc<Schema>> =
     LazyLock::new(|| Arc::new(build_in_transit_schema()));
 
-/// Schema for `simulation/in_transit/` — travel-time in-transit water volumes.
+/// Schema of the travel-time in-transit water volumes.
 ///
 /// One row per (stage, downstream plant, maturity lag). Written only when the
 /// system declares a travel-time arc.
@@ -382,8 +382,8 @@ fn build_transit_seed_schema() -> Schema {
 static TRANSIT_SEED_SCHEMA: LazyLock<Arc<Schema>> =
     LazyLock::new(|| Arc::new(build_transit_seed_schema()));
 
-/// Schema for `simulation/transit_seed/` — rolling release-window seed for a
-/// continuing run's own upstream-release input.
+/// Schema of the rolling release-window seed for a continuing run's own
+/// upstream-release input.
 ///
 /// Scenario-level: unlike every other simulation partition, a window's own
 /// `[start_date, end_date)` span anchors the row, not a stage/node index, so
@@ -393,8 +393,8 @@ pub(crate) fn transit_seed_schema() -> Arc<Schema> {
     Arc::clone(&TRANSIT_SEED_SCHEMA)
 }
 
-/// Schema for `anticipated/fixed_deliveries.parquet` — the run-level echo of
-/// declared fixed post-horizon commitment windows.
+/// Schema of the run-level echo of declared fixed post-horizon commitment
+/// windows.
 ///
 /// One row per anticipated plant × fixed window, carrying the window's real
 /// delivery dates (`start_date`/`end_date` as `Date32`) and its committed
@@ -426,8 +426,8 @@ fn build_anticipated_lanes_schema() -> Schema {
 static ANTICIPATED_LANES_SCHEMA: LazyLock<Arc<Schema>> =
     LazyLock::new(|| Arc::new(build_anticipated_lanes_schema()));
 
-/// Schema for `simulation/anticipated_lanes/` — post-horizon commitment lane
-/// results, keyed `(thermal_id, delivery_date)`.
+/// Schema of the post-horizon commitment lane results, keyed
+/// `(thermal_id, delivery_date)`.
 ///
 /// One row per resolved post-study commitment lane per terminal scenario,
 /// written only when the system declares `post_study_stages`.
@@ -449,14 +449,14 @@ fn build_generic_violations_schema() -> Schema {
 static GENERIC_VIOLATIONS_SCHEMA: LazyLock<Arc<Schema>> =
     LazyLock::new(|| Arc::new(build_generic_violations_schema()));
 
-/// Schema for `simulation/violations/generic/` — generic constraint violations.
+/// Schema of the generic constraint violations.
 ///
 /// See output-schemas.md SS5.11.
 pub(crate) fn generic_violations_schema() -> Arc<Schema> {
     Arc::clone(&GENERIC_VIOLATIONS_SCHEMA)
 }
 
-/// Schema for `simulation/paths.parquet` — the per-scenario node-path trace.
+/// Schema of the per-scenario node-path trace.
 ///
 /// Run-level and unpartitioned (never Hive-partitioned): exactly the
 /// `(scenario_id, stage_id, node_id)` axis prefix, all non-null `Int32`. Joins to
@@ -465,8 +465,7 @@ pub(crate) fn paths_schema() -> Schema {
     Schema::new(simulation_row_prefix())
 }
 
-/// Schema for `simulation/scenario_summary.parquet` — the run-level,
-/// unpartitioned per-scenario summary.
+/// Schema of the run-level, unpartitioned per-scenario summary.
 ///
 /// `scenario_id` is the non-null `Int32` join key shared with every entity file
 /// and `paths.parquet` (the `simulation_row_prefix` convention); a wider type
@@ -481,7 +480,7 @@ pub(crate) fn scenario_summary_schema() -> Schema {
     ])
 }
 
-/// Schema for `training/convergence.parquet` — iteration-level convergence log.
+/// Schema of the iteration-level convergence log.
 ///
 /// See output-schemas.md SS6.1.
 pub(crate) fn convergence_schema() -> Schema {
@@ -504,7 +503,7 @@ pub(crate) fn convergence_schema() -> Schema {
     ])
 }
 
-/// Schema for `training/timing/iterations.parquet` — per-iteration timing breakdown.
+/// Schema of the per-iteration timing breakdown.
 ///
 /// Row semantics: one row per `(iteration, rank)` for rank-only sequential values
 /// (`worker_id = NULL`), and one row per `(iteration, rank, worker_id)` for
@@ -541,8 +540,8 @@ pub(crate) fn iteration_timing_schema() -> Schema {
     ])
 }
 
-/// Schema for `training/solver/iterations.parquet` -- per-iteration, per-phase
-/// solver statistics for diagnosing LP conditioning and retry behavior.
+/// Schema of the per-iteration, per-phase solver statistics for diagnosing LP
+/// conditioning and retry behavior.
 ///
 /// One row per (iteration, phase, `stage_id`, `opening_index`) tuple for backward
 /// rows; forward and `lower_bound` rows carry `opening_index = NULL`, and
@@ -575,8 +574,8 @@ pub(crate) fn solver_iterations_schema() -> Schema {
     ])
 }
 
-/// Schema for `training/solver/retry_histogram.parquet` -- per-level retry
-/// success counts, normalized from the solver iterations table.
+/// Schema of the per-level retry success counts for training and simulation
+/// rows, normalized from the solver iterations table.
 ///
 /// Sparse: one row per (iteration, phase, `stage_id`, `retry_level`) tuple where
 /// `count > 0`. `stage_id` is `NULL` for the forward, `lower_bound`, and
@@ -591,8 +590,7 @@ pub(crate) fn retry_histogram_schema() -> Schema {
     ])
 }
 
-/// Schema for `training/cut_selection/iterations.parquet` — per-stage
-/// row-selection statistics.
+/// Schema of the per-stage row-selection statistics.
 ///
 /// One row per (iteration, `stage_id`) pair. The nullable `budget_evicted` and
 /// `active_after_budget` columns are `None` when budget enforcement is disabled.
@@ -637,8 +635,8 @@ pub(crate) fn generic_constraint_echo_schema() -> Schema {
     ])
 }
 
-/// Schema for `hydro_models/fpha_hyperplanes.parquet` — fitted FPHA hyperplane
-/// coefficients, mirroring the `system/fpha_hyperplanes.parquet` input schema.
+/// Schema of the fitted FPHA hyperplane coefficients, mirroring the
+/// `system/fpha_hyperplanes.parquet` input schema.
 pub(crate) fn fpha_hyperplanes_schema() -> Schema {
     Schema::new(vec![
         Field::new("hydro_id", DataType::Int32, false),
@@ -655,8 +653,7 @@ pub(crate) fn fpha_hyperplanes_schema() -> Schema {
     ])
 }
 
-/// Schema for `hydro_models/evaporation_models.parquet` — per-hydro
-/// evaporation model coefficients.
+/// Schema of the per-hydro evaporation model coefficients.
 pub(crate) fn evaporation_models_schema() -> Schema {
     Schema::new(vec![
         Field::new("hydro_id", DataType::Int32, false),
@@ -668,8 +665,7 @@ pub(crate) fn evaporation_models_schema() -> Schema {
     ])
 }
 
-/// Schema for `hydro_models/fpha_deviation_points.parquet` — per-(hydro,
-/// stage) FPHA fit deviation diagnostics.
+/// Schema of the per-(hydro, stage) FPHA fit deviation diagnostics.
 pub(crate) fn fpha_deviation_points_schema() -> Schema {
     Schema::new(vec![
         Field::new("hydro_id", DataType::Int32, false),
@@ -683,8 +679,7 @@ pub(crate) fn fpha_deviation_points_schema() -> Schema {
     ])
 }
 
-/// Schema for `stochastic/noise_openings.parquet` — per-(stage, opening,
-/// entity) noise realizations.
+/// Schema of the per-(stage, opening, entity) noise realizations.
 pub(crate) fn noise_openings_schema() -> Schema {
     Schema::new(vec![
         Field::new("stage_id", DataType::Int32, false),
@@ -694,8 +689,7 @@ pub(crate) fn noise_openings_schema() -> Schema {
     ])
 }
 
-/// Schema for `stochastic/inflow_seasonal_stats.parquet` — fitted
-/// per-(hydro, stage) seasonal inflow statistics.
+/// Schema of the fitted per-(hydro, stage) seasonal inflow statistics.
 pub(crate) fn inflow_seasonal_stats_schema() -> Schema {
     Schema::new(vec![
         Field::new("hydro_id", DataType::Int32, false),
@@ -705,8 +699,7 @@ pub(crate) fn inflow_seasonal_stats_schema() -> Schema {
     ])
 }
 
-/// Schema for `stochastic/inflow_ar_coefficients.parquet` — fitted
-/// per-(hydro, stage, lag) AR coefficients.
+/// Schema of the fitted per-(hydro, stage, lag) AR coefficients.
 pub(crate) fn inflow_ar_coefficients_schema() -> Schema {
     Schema::new(vec![
         Field::new("hydro_id", DataType::Int32, false),
@@ -716,8 +709,7 @@ pub(crate) fn inflow_ar_coefficients_schema() -> Schema {
     ])
 }
 
-/// Schema for `stochastic/inflow_annual_component.parquet` — fitted
-/// per-(hydro, stage) annual inflow component.
+/// Schema of the fitted per-(hydro, stage) annual inflow component.
 pub(crate) fn inflow_annual_component_schema() -> Schema {
     Schema::new(vec![
         Field::new("hydro_id", DataType::Int32, false),
@@ -728,8 +720,7 @@ pub(crate) fn inflow_annual_component_schema() -> Schema {
     ])
 }
 
-/// Schema for `stochastic/load_seasonal_stats.parquet` — fitted per-(bus,
-/// stage) seasonal load statistics.
+/// Schema of the fitted per-(bus, stage) seasonal load statistics.
 pub(crate) fn load_seasonal_stats_schema() -> Schema {
     Schema::new(vec![
         Field::new("bus_id", DataType::Int32, false),
@@ -739,8 +730,7 @@ pub(crate) fn load_seasonal_stats_schema() -> Schema {
     ])
 }
 
-/// Schema for `training/dictionaries/bounds.parquet` — per-entity, per-stage
-/// resolved bound values.
+/// Schema of the per-entity, per-stage resolved bound values.
 pub(crate) fn bounds_schema() -> Schema {
     Schema::new(vec![
         Field::new("entity_type_code", DataType::Int8, false),

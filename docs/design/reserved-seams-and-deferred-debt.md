@@ -722,6 +722,24 @@ message, and its peer-failure test changes with it.
 that keys on the MPI launcher's exit code for a pre-training export or
 simulation failure.
 
+### Module-doc column tables that repeat the output column descriptions
+
+**What it is.** The module docs of `crates/cobre-io/src/output/stochastic.rs`
+and `crates/cobre-io/src/output/hydro_models.rs` carry column tables (column,
+Parquet type, description) for the `stochastic/` Parquet exports and for
+`hydro_models/fpha_hyperplanes.parquet`. `description_for` in
+`crates/cobre-io/src/output/dictionary.rs` owns those column descriptions, and
+the schema functions in `crates/cobre-io/src/output/schemas.rs` own the
+types, so each table is a second copy that no test compares. Resolution
+options for an owner pick: delete the tables and point the module docs at the
+dictionary, or keep only what the dictionary does not state, such as row
+order and the round trip with the matching input file.
+
+**Owner.** The output data-model owner.
+
+**Trigger.** A column of one of these schemas is added, renamed or redefined,
+so that the same edit is needed in the dictionary and in a module doc.
+
 ## Deferred-debt register — whole-lifecycle audit findings
 
 Findings of the full `cobre run` lifecycle read, described by behavior. Each

@@ -219,15 +219,11 @@ fn fill_parallel_water_entries(
             // Frozen-storage identity `v_h − v_h_in = 0`: emit ONLY the two storage entries
             // above. Any inflow/upstream/AR-lag/withdrawal/evaporation coupling left here
             // makes `β_h` stale-nonzero — a wrong cut that still compiles.
-            fill_prefilling_shortcircuit(ctx, stage, h_idx, layout, col_entries);
+            fill_prefilling_shortcircuit(ctx, stage, stage_idx, h_idx, layout, col_entries);
             continue;
         }
 
-        // The maturing-now bucket `b_1^in`: a SINGLE entry — the confluence sum over
-        // every upstream arc lives in the state variable itself. Absent with no arc.
-        if let Some(col) = maturing_bucket_in_col(layout.state, HydroSys::new(h_idx)) {
-            col_entries[col].push((row, -1.0));
-        }
+        push_maturing_bucket_coupling(ctx, stage, stage_idx, layout, h_idx, h_idx, col_entries);
 
         for blk in 0..n_blks {
             let tau_h = layout.clock.tau(BlockIdx::new(blk));
@@ -429,7 +425,8 @@ fn fill_arc_release_block_entries(
 ///
 /// A `PreFilling` hydro emits `K` per-block frozen identities `Sᵏ − Sᵏ⁻¹ = 0` (any
 /// coupling left on a frozen row makes `β_h` stale-nonzero — a wrong cut that compiles),
-/// short-circuiting per block via [`fill_prefilling_shortcircuit`].
+/// short-circuiting per block via [`fill_prefilling_shortcircuit`], maturing bucket
+/// included.
 fn fill_chronological_water_entries(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,
@@ -454,29 +451,11 @@ fn fill_chronological_water_entries(
                     .block_storage_col(HydroSys::new(h_idx), Boundary::from_index(k - 1, n_blks))]
                 .push((row, -1.0));
             }
-            fill_prefilling_shortcircuit(ctx, stage, h_idx, layout, col_entries);
+            fill_prefilling_shortcircuit(ctx, stage, stage_idx, h_idx, layout, col_entries);
             continue;
         }
 
-        // The incoming maturing bucket `b_1^in` delivers over this stage's blocks by the
-        // fixed `arrival_density` (fixed-delivery-density contract) — one entry per block.
-        if let Some(col_first_slot_in) = maturing_bucket_in_col(layout.state, HydroSys::new(h_idx))
-        {
-            let arrival_density =
-                resolve_bucket_arrival_density(ctx, layout.clock, stage_idx, hydro.id, n_blks);
-            debug_assert!(
-                (arrival_density.iter().sum::<f64>() - 1.0).abs() < 1e-9,
-                "hydro {h_idx} stage {stage_idx}: arrival_density must sum to 1.0"
-            );
-            for (target_slot, &rho_val) in arrival_density.iter().enumerate() {
-                if rho_val == 0.0 {
-                    continue;
-                }
-                let row = geom.water_balance_row(HydroSys::new(h_idx), BlockIdx::new(target_slot));
-                col_entries[col_first_slot_in].push((row, -rho_val));
-            }
-        }
-
+        push_maturing_bucket_coupling(ctx, stage, stage_idx, layout, h_idx, h_idx, col_entries);
         push_z_inflow_coupling(stage, layout, h_idx, h_idx, col_entries);
 
         for k in 1..=n_blks {
@@ -698,6 +677,56 @@ fn push_z_inflow_coupling(
     }
 }
 
+/// Couple hydro `h_idx`'s maturing bucket `b_1^in` onto `target_idx`'s water row(s):
+/// the hydro's own route (`target_idx == h_idx`) or the [`fill_prefilling_shortcircuit`]
+/// route (`target_idx == d_idx`). A no-op when `h_idx` declares no incoming arc.
+///
+/// Parallel pushes a single `−1.0` and never reads the density: the confluence sum over
+/// every upstream arc lives in the state variable itself. Chronological spreads it over
+/// the target's block rows by `h_idx`'s fixed `arrival_density` (fixed-delivery-density
+/// contract).
+fn push_maturing_bucket_coupling(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    h_idx: usize,
+    target_idx: usize,
+    col_entries: &mut [Vec<(usize, f64)>],
+) {
+    let Some(col) = maturing_bucket_in_col(layout.state, HydroSys::new(h_idx)) else {
+        return;
+    };
+    let target = HydroSys::new(target_idx);
+    match stage.block_mode {
+        BlockMode::Parallel => {
+            let row = layout.geometry.water_balance_row(target, BlockIdx::new(0));
+            col_entries[col].push((row, -1.0));
+        }
+        BlockMode::Chronological => {
+            let n_blks = layout.clock.n_blks();
+            let arrival_density = resolve_bucket_arrival_density(
+                ctx,
+                layout.clock,
+                stage_idx,
+                ctx.hydros[h_idx].id,
+                n_blks,
+            );
+            debug_assert!(
+                (arrival_density.iter().sum::<f64>() - 1.0).abs() < 1e-9,
+                "hydro {h_idx} stage {stage_idx}: arrival_density must sum to 1.0"
+            );
+            for (k, &rho_k) in arrival_density.iter().enumerate() {
+                if rho_k == 0.0 {
+                    continue;
+                }
+                let row = layout.geometry.water_balance_row(target, BlockIdx::new(k));
+                col_entries[col].push((row, -rho_k));
+            }
+        }
+    }
+}
+
 /// Re-route an absent `PreFilling` hydro `h`'s water interactions onto the FIRST
 /// non-`PreFilling` downstream hydro `d` ([`resolve_shortcircuit_target`]): in `Parallel`
 /// onto `d`'s single row, in `Chronological` onto `d`'s block rows with the stage-total
@@ -716,11 +745,12 @@ fn push_z_inflow_coupling(
 /// releases, so a chain re-routes each link's inflow to `d` exactly once. Sink case (no
 /// non-`PreFilling` downstream): nothing routed, no panic.
 ///
-/// The `z_h` coupling itself is [`push_z_inflow_coupling`], shared with both
-/// water writers' own-row route.
+/// The `z_h` and maturing-bucket couplings are [`push_z_inflow_coupling`] and
+/// [`push_maturing_bucket_coupling`], shared with both water writers' own-row route.
 fn fill_prefilling_shortcircuit(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,
+    stage_idx: usize,
     h_idx: usize,
     layout: &StageLayout,
     col_entries: &mut [Vec<(usize, f64)>],
@@ -735,6 +765,7 @@ fn fill_prefilling_shortcircuit(
     let target = HydroSys::new(d_idx);
 
     push_z_inflow_coupling(stage, layout, h_idx, d_idx, col_entries);
+    push_maturing_bucket_coupling(ctx, stage, stage_idx, layout, h_idx, d_idx, col_entries);
 
     for blk in 0..n_blks {
         let tau_k = layout.clock.tau(BlockIdx::new(blk));
@@ -9426,6 +9457,124 @@ mod pumping_water_tests {
             ru_p, ru_c,
             "K=1 PreFilling row_upper must be byte-identical"
         );
+    }
+
+    // ── A PreFilling plant's maturing transit bucket ─────────────────────────────
+
+    const EXITED_UP_ID: i32 = 1;
+    const EXITED_MID_ID: i32 = 2;
+    const EXITED_DOWN_ID: i32 = 3;
+
+    /// `up -> mid -> down` (`mid -> down` omitted when `!with_downstream`) with one
+    /// depth-1 travel-time arc `up -> mid`. `mid.exit_stage_id = Some(1)` makes it
+    /// `PreFilling` at `stage.id = 1` while its incoming bucket still matures.
+    fn exited_mid_fixtures(
+        with_downstream: bool,
+        arrival_density: Option<Vec<f64>>,
+    ) -> PumpFixtures {
+        let mut mid = fixture_hydro_ds(EXITED_MID_ID, with_downstream.then_some(EXITED_DOWN_ID));
+        mid.exit_stage_id = Some(1);
+        let mut hydros = vec![fixture_hydro_ds(EXITED_UP_ID, Some(EXITED_MID_ID)), mid];
+        if with_downstream {
+            hydros.push(fixture_hydro_ds(EXITED_DOWN_ID, None));
+        }
+        let mut fixtures = PumpFixtures::new(hydros, Vec::new());
+        let up_idx = fixtures.hydro_pos[&EntityId(EXITED_UP_ID)];
+        let mid_idx = fixtures.hydro_pos[&EntityId(EXITED_MID_ID)];
+        fixtures.base.topology.column_order = vec![(HydroSys::new(mid_idx), 1)];
+        fixtures.base.topology.arc_stage_weights = HashMap::from([(up_idx, vec![vec![0.5, 0.5]])]);
+        fixtures.base.topology.per_stage_mask = vec![vec![1]];
+        if let Some(density) = arrival_density {
+            fixtures.base.topology.arc_arrival_density =
+                HashMap::from([(up_idx, vec![Some(density)])]);
+        }
+        fixtures
+    }
+
+    #[test]
+    fn prefilling_plants_maturing_bucket_lands_on_the_short_circuit_target_row() {
+        // Non-uniform on purpose: a parallel fill that read the density would not write -1.0.
+        let mut fixtures = exited_mid_fixtures(true, Some(vec![0.9, 0.1]));
+        let mid_idx = fixtures.hydro_pos[&EntityId(EXITED_MID_ID)];
+        let down_idx = fixtures.hydro_pos[&EntityId(EXITED_DOWN_ID)];
+        let ctx = fixtures.make_ctx();
+        let mut stage = two_block_stage(0, [300.0, 444.0]);
+        stage.id = 1;
+        let layout = StageLayout::new(&ctx, &stage, 0);
+        let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
+
+        let bucket_col = ctx.state.transit_buckets_in.start;
+        let down_row = layout
+            .geometry
+            .water_balance_row(HydroSys::new(down_idx), BlockIdx::new(0));
+        let mid_row = layout
+            .geometry
+            .water_balance_row(HydroSys::new(mid_idx), BlockIdx::new(0));
+        assert_eq!(
+            csc_at(&csc, bucket_col, down_row),
+            -1.0,
+            "mid's maturing bucket must land at -1.0 on the short-circuit target's row"
+        );
+        assert_eq!(
+            csc_at(&csc, bucket_col, mid_row),
+            0.0,
+            "mid's frozen-identity row must carry nothing of its maturing bucket"
+        );
+    }
+
+    #[test]
+    fn prefilling_plants_maturing_bucket_spreads_by_arrival_density_on_the_target_block_rows() {
+        let density = [0.25, 0.75];
+        let mut fixtures = exited_mid_fixtures(true, Some(density.to_vec()));
+        let mid_idx = fixtures.hydro_pos[&EntityId(EXITED_MID_ID)];
+        let down_idx = fixtures.hydro_pos[&EntityId(EXITED_DOWN_ID)];
+        let ctx = fixtures.make_ctx();
+        let mut stage = chronological_stage(0, &[300.0, 444.0]);
+        stage.id = 1;
+        let layout = StageLayout::new(&ctx, &stage, 0);
+        let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
+
+        let bucket_col = ctx.state.transit_buckets_in.start;
+        for (k, &rho_k) in density.iter().enumerate() {
+            let down_row = layout
+                .geometry
+                .water_balance_row(HydroSys::new(down_idx), BlockIdx::new(k));
+            let mid_row = layout
+                .geometry
+                .water_balance_row(HydroSys::new(mid_idx), BlockIdx::new(k));
+            assert_eq!(
+                csc_at(&csc, bucket_col, down_row),
+                -rho_k,
+                "block {k}: mid's maturing bucket must land at -arrival_density[{k}] on the \
+                 short-circuit target's block row"
+            );
+            assert_eq!(
+                csc_at(&csc, bucket_col, mid_row),
+                0.0,
+                "block {k}: mid's frozen block row must carry nothing of its maturing bucket"
+            );
+        }
+    }
+
+    #[test]
+    fn prefilling_plants_maturing_bucket_at_a_sink_lands_on_no_row() {
+        for block_mode in [BlockMode::Parallel, BlockMode::Chronological] {
+            let mut fixtures = exited_mid_fixtures(false, None);
+            let ctx = fixtures.make_ctx();
+            let mut stage = two_block_stage(0, [300.0, 444.0]);
+            stage.id = 1;
+            stage.block_mode = block_mode;
+            let layout = StageLayout::new(&ctx, &stage, 0);
+            let csc = build_sorted_csc(&ctx, &stage, 0, &layout);
+
+            let bucket_col = ctx.state.transit_buckets_in.start;
+            assert_eq!(
+                csc.0[bucket_col],
+                csc.0[bucket_col + 1],
+                "{block_mode:?}: with no non-PreFilling downstream, mid's maturing bucket must \
+                 land on no row (the water leaves at the system outlet)"
+            );
+        }
     }
 
     // ── Per-block FPHA & evaporation (block-local average storage) ───────────────

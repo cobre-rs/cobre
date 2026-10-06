@@ -2854,3 +2854,196 @@ mod backwater_reference_volume {
         }
     }
 }
+
+mod exited_plant_transit {
+    //! Water in transit toward a hydro plant that retires before it arrives must
+    //! reach the next operating plant downstream.
+    //!
+    //! ## Fixture (`crates/cobre-sddp/tests/fixtures/exited_plant_transit`)
+    //!
+    //! Cascade `U (id 0) -> J (id 1) -> D (id 2)`, two single-block 720 h stages, no
+    //! storage anywhere, productivity 0.0036 MW/(m³/s) on every plant (1 MWh per
+    //! hm³). `U` declares `travel_time_hours = 360` on its arc to `J` (`k_0 = k_1 =
+    //! 1/2`), and `J` has `exit_stage_id = 1`: `J` is `PreFilling` at stage 1, the
+    //! stage its incoming bucket matures. `U`'s stage-0 inflow of 25 m³/s (64.8 hm³)
+    //! is the only water. One thermal at 10 $/MWh serves 200 MWh per stage.
+    //!
+    //! ## Hand-derived optimum
+    //!
+    //! Stage 0: `U` passes its 64.8 hm³; `J` receives the same-stage half (32.4 hm³)
+    //! and passes it to `D`; hydro 129.6 MWh, thermal 70.4 MWh, 704 $. Stage 1: the
+    //! 32.4 hm³ bucket reaches `D`; thermal 167.6 MWh, 1676 $. Lower bound 2380 $;
+    //! dropping the bucket gives 704 + 2000 = 2704 $. The stage-1 thermal is
+    //! marginal, so `D`'s water and the bucket are both worth -10 $/hm³.
+
+    use std::path::PathBuf;
+
+    use cobre_core::EntityId;
+    use cobre_sddp::{SimulationHydroResult, SimulationScenarioResult};
+    use cobre_solver::ActiveSolver;
+
+    use super::common::{StubComm, fresh_system_and_setup_with, run_simulation};
+
+    /// Undoes the builder's objective scaling on a stored cut coefficient (mirrors
+    /// `extraction.rs`'s `water_value = dual * COST_SCALE_FACTOR`).
+    const COST_SCALE_FACTOR: f64 = 1_000_000.0;
+    /// hm³ per m³/s over one 720 h stage.
+    const ZETA: f64 = 720.0 * 3_600.0 / 1_000_000.0;
+    const TOL: f64 = 1e-6;
+
+    const U_ID: i32 = 0;
+    const J_ID: i32 = 1;
+    const D_ID: i32 = 2;
+    /// `J`'s `exit_stage_id`, the stage its bucket matures while it is `PreFilling`.
+    const J_EXIT_STAGE: usize = 1;
+    const EXPECTED_LOWER_BOUND: f64 = 2380.0;
+    const TRANSIT_AT_EXIT_HM3: f64 = 32.4;
+    const D_WATER_VALUE_PER_HM3: f64 = -10.0;
+
+    fn case_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exited_plant_transit")
+    }
+
+    fn hydro_row(
+        scenario: &SimulationScenarioResult,
+        stage: usize,
+        hydro_id: i32,
+    ) -> &SimulationHydroResult {
+        let mut rows = scenario.stages[stage]
+            .hydros
+            .iter()
+            .filter(|r| r.hydro_id == hydro_id);
+        let row = rows
+            .next()
+            .unwrap_or_else(|| panic!("hydro {hydro_id} must have a row at stage {stage}"));
+        assert!(
+            rows.next().is_none(),
+            "hydro {hydro_id} stage {stage}: every fixture stage is a single block"
+        );
+        row
+    }
+
+    /// `ζ·(turbined + spillage − incremental inflow) + Δstorage`: the water a plant's
+    /// balance row received from outside the plant over one stage.
+    fn received_from_upstream(row: &SimulationHydroResult) -> f64 {
+        ZETA * (row.turbined_m3s + row.spillage_m3s - row.incremental_inflow_m3s)
+            + (row.storage_final_hm3 - row.storage_initial_hm3)
+    }
+
+    fn release(row: &SimulationHydroResult) -> f64 {
+        ZETA * (row.turbined_m3s + row.spillage_m3s)
+    }
+
+    #[test]
+    fn exited_plant_transit_reaches_the_next_operating_plant_at_the_hand_derived_cost() {
+        let (system, mut setup) = fresh_system_and_setup_with(&case_dir(), |_| {});
+        let comm = StubComm;
+        let mut solver = ActiveSolver::new().expect("ActiveSolver::new");
+        let outcome = setup
+            .train(&mut solver, &comm, 1, ActiveSolver::new, None, None)
+            .expect("train must not return Err");
+        assert!(outcome.error.is_none(), "training must be feasible");
+
+        let final_lb = outcome.result.final_lb;
+        assert!(
+            (final_lb - EXPECTED_LOWER_BOUND).abs() < TOL,
+            "lower bound must be the hand-derived {EXPECTED_LOWER_BOUND} $ (2704 $ means the \
+             water in transit at J's exit was dropped); got {final_lb}"
+        );
+
+        let state = setup.stage_state();
+        assert_eq!(
+            state.n_buckets, 1,
+            "power guard: one depth-1 arc gives one bucket dimension"
+        );
+        let bucket_idx = state.transit_buckets_out.start;
+        let d_pos = system
+            .hydros()
+            .iter()
+            .position(|h| h.id == EntityId(D_ID))
+            .expect("D (hydro id 2) must be in the canonical hydro order");
+        let storage_d_idx = state.storage.start + d_pos;
+
+        let pool0 = &setup.fcf.pools[0];
+        assert!(
+            pool0.active_count() > 0,
+            "pool 0 must hold at least one trained cut to inspect"
+        );
+        for (slot, _intercept, coefficients) in pool0.active_cuts() {
+            let bucket_value = coefficients[bucket_idx] * COST_SCALE_FACTOR;
+            assert!(
+                (bucket_value - D_WATER_VALUE_PER_HM3).abs() < TOL,
+                "pool-0 slot {slot}: J's maturing bucket must be worth D's water value \
+                 {D_WATER_VALUE_PER_HM3} $/hm³ (0 means the bucket sits on no row); got \
+                 {bucket_value}"
+            );
+            let storage_d_value = coefficients[storage_d_idx] * COST_SCALE_FACTOR;
+            assert!(
+                (storage_d_value - D_WATER_VALUE_PER_HM3).abs() < TOL,
+                "pool-0 slot {slot}: D's storage must be worth {D_WATER_VALUE_PER_HM3} $/hm³; \
+                 got {storage_d_value}"
+            );
+        }
+    }
+
+    #[test]
+    fn exited_plant_transit_conserves_every_released_hm3() {
+        let (system, mut setup) = fresh_system_and_setup_with(&case_dir(), |_| {});
+        let scenarios = run_simulation(&mut setup, 1);
+        assert_eq!(scenarios.len(), 1, "one deterministic scenario");
+        let scenario = &scenarios[0];
+        let last_stage = scenario.stages.len() - 1;
+
+        let released_u: f64 = (0..=last_stage)
+            .map(|t| release(hydro_row(scenario, t, U_ID)))
+            .sum();
+        let delivered_j: f64 = (0..J_EXIT_STAGE)
+            .map(|t| received_from_upstream(hydro_row(scenario, t, J_ID)))
+            .sum();
+        let routed_to_d: f64 = (J_EXIT_STAGE..=last_stage)
+            .map(|t| {
+                received_from_upstream(hydro_row(scenario, t, D_ID))
+                    - ZETA * hydro_row(scenario, t, J_ID).incremental_inflow_m3s
+                    - release(hydro_row(scenario, t, U_ID))
+            })
+            .sum();
+
+        let j = system
+            .hydros()
+            .iter()
+            .find(|h| h.id == EntityId(J_ID))
+            .expect("J (hydro id 1) must exist");
+        assert_eq!(
+            j.exit_stage_id,
+            Some(i32::try_from(J_EXIT_STAGE).unwrap()),
+            "J must retire at stage {J_EXIT_STAGE}"
+        );
+        assert_eq!(
+            last_stage, J_EXIT_STAGE,
+            "J must be PreFilling at the last stage, so no deposit into its bucket is written \
+             there and nothing is dropped past the horizon"
+        );
+        let terminal_drop = 0.0;
+
+        let residual = released_u - (delivered_j + routed_to_d + terminal_drop);
+        assert!(
+            residual.abs() <= TOL,
+            "every hm³ U releases toward J must be accounted for: released {released_u}, \
+             delivered to J {delivered_j}, routed to D {routed_to_d}, residual {residual}"
+        );
+        assert!(
+            (routed_to_d - TRANSIT_AT_EXIT_HM3).abs() <= TOL,
+            "the {TRANSIT_AT_EXIT_HM3} hm³ in transit at J's exit must reach D; got {routed_to_d}"
+        );
+        let matured = scenario.stages[J_EXIT_STAGE]
+            .transit_buckets
+            .iter()
+            .find(|b| b.hydro_id == J_ID && b.lag == 1)
+            .expect("J's lag-1 bucket must be reported at its exit stage")
+            .delayed_arrival_hm3;
+        assert!(
+            (routed_to_d - matured).abs() <= TOL,
+            "D must receive exactly J's matured bucket ({matured} hm³); got {routed_to_d}"
+        );
+    }
+}

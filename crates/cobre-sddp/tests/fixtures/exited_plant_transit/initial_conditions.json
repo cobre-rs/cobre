@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/schemas/initial_conditions.schema.json",
+  "storage": [
+    {
+      "hydro_id": 0,
+      "value_hm3": 0.0
+    },
+    {
+      "hydro_id": 1,
+      "value_hm3": 0.0
+    },
+    {
+      "hydro_id": 2,
+      "value_hm3": 0.0
+    }
+  ],
+  "filling_storage": [],
+  "past_defluences": [
+    {
+      "hydro_id": 0,
+      "start_date": "2023-12-17",
+      "end_date": "2024-01-01",
+      "value_m3s": 0.0
+    }
+  ]
+}

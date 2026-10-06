@@ -4,7 +4,8 @@
 //! without travel time (every share is `1.0`), with travel time on a
 //! parallel stage, and with travel time on a chronological stage. It also
 //! covers the water an upstream plant that is not yet built passes straight
-//! through, a travel time longer than one stage, and a plant with several
+//! through, the transit water still maturing toward an upstream plant that has
+//! retired, a travel time longer than one stage, and a plant with several
 //! cells.
 
 #![allow(
@@ -71,6 +72,9 @@ const DIVERSION_SOURCE_MAX_FLOW_M3S: f64 = 50.0;
 const DIVERSION_SOURCE_POS_NO_CHAIN: usize = 3;
 const DIVERSION_SOURCE_POS_CHAIN: usize = 4;
 const PREFILLING_ENTRY_STAGE_ID: i32 = 2;
+const EXITED_PLANT_ID: i32 = 3;
+const EXITED_PLANT_POS: usize = 2;
+const EXITED_PLANT_EXIT_STAGE_ID: i32 = 1;
 
 fn stages(block_mode: BlockMode) -> Vec<Stage> {
     let base = NaiveDate::from_ymd_opt(2024, 1, 1).expect("2024-01-01 is a valid date");
@@ -604,6 +608,91 @@ fn build_prefilling_system(
     system
 }
 
+/// `upstream (hydro 1) -> exited plant (hydro 3) -> downstream (hydro 2)` on
+/// parallel stages, with `TRAVEL_TIME_HOURS` on the arc into the exited plant.
+/// Its `exit_stage_id` makes it `PreFilling` at stage 1, the stage the bucket
+/// filled by the upstream's stage-0 release matures.
+fn build_exited_plant_system() -> System {
+    let bus = standard_bus();
+
+    let upstream = make_hydro(
+        EntityId(UPSTREAM_ID),
+        HydroSpec {
+            downstream_id: Some(EntityId(EXITED_PLANT_ID)),
+            travel_time_hours: Some(TRAVEL_TIME_HOURS),
+            ..prefilling_hydro_defaults()
+        },
+    );
+    let downstream = make_hydro(EntityId(DOWNSTREAM_ID), prefilling_hydro_defaults());
+    let exited = make_hydro(
+        EntityId(EXITED_PLANT_ID),
+        HydroSpec {
+            downstream_id: Some(EntityId(DOWNSTREAM_ID)),
+            exit_stage_id: Some(EXITED_PLANT_EXIT_STAGE_ID),
+            ..prefilling_hydro_defaults()
+        },
+    );
+    let hydros = vec![upstream, downstream, exited];
+    let n_hydros = hydros.len();
+
+    let stages = stages(BlockMode::Parallel);
+    let n_stages = stages.len();
+
+    let inflow_models: Vec<InflowModel> = (0..n_stages)
+        .map(|i| InflowModel {
+            hydro_id: EntityId(UPSTREAM_ID),
+            stage_id: i32::try_from(i).unwrap_or(0),
+            mean_m3s: FORCED_RELEASE_M3S,
+            std_m3s: 0.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+            annual: None,
+        })
+        .collect();
+
+    let (generic_constraint, resolved_generic_bounds) = downstream_inflow_constraint();
+    let storage = hydros
+        .iter()
+        .map(|h| HydroStorage {
+            hydro_id: h.id,
+            value_hm3: 0.0,
+        })
+        .collect();
+
+    let system = SystemBuilder::new()
+        .buses(vec![bus])
+        .hydros(hydros)
+        .stages(stages)
+        .inflow_models(inflow_models)
+        .bounds(resolved_bounds(n_stages, n_hydros))
+        .penalties(resolved_penalties(n_stages, n_hydros, 1))
+        .generic_constraints(vec![generic_constraint])
+        .resolved_generic_bounds(resolved_generic_bounds)
+        .initial_conditions(InitialConditions {
+            storage,
+            ..InitialConditions::default()
+        })
+        .build()
+        .expect("hydro_inflow_travel_time: valid exited-plant cascade");
+
+    assert_eq!(
+        system.hydros()[UPSTREAM_POS].id,
+        EntityId(UPSTREAM_ID),
+        "the upstream plant must occupy canonical position {UPSTREAM_POS}"
+    );
+    assert_eq!(
+        system.hydros()[DOWNSTREAM_POS].id,
+        EntityId(DOWNSTREAM_ID),
+        "the downstream plant must occupy canonical position {DOWNSTREAM_POS}"
+    );
+    assert_eq!(
+        system.hydros()[EXITED_PLANT_POS].id,
+        EntityId(EXITED_PLANT_ID),
+        "the exited plant must occupy canonical position {EXITED_PLANT_POS}"
+    );
+    system
+}
+
 fn config() -> Config {
     Config {
         schema: None,
@@ -1046,6 +1135,37 @@ fn hydro_inflow_rows_count_a_two_plant_prefilling_chain_on_a_parallel_stage() {
             UPSTREAM_POS,
         ],
         &[DIVERSION_SOURCE_POS_CHAIN],
+    );
+    assert_hydro_inflow_matches_water_balance(&setup, 1, DOWNSTREAM_POS, &columns);
+}
+
+#[test]
+fn hydro_inflow_rows_count_an_exited_plants_maturing_transit_water_on_a_parallel_stage() {
+    let setup = build_setup_in_code(build_exited_plant_system(), &config());
+    let templates = &setup.inputs.stage_data.stage_templates;
+    let tpl = &templates.templates[1];
+    let geom = &templates.geometry_per_stage[1];
+    let state = setup.stage_state();
+    let w_row = geom.water_balance_row(HydroSys::new(DOWNSTREAM_POS), BlockIdx::new(0));
+
+    assert_eq!(
+        state.transit_buckets_in.len(),
+        1,
+        "power guard: one depth-1 arc into the exited plant gives one bucket column"
+    );
+    assert!(
+        (matrix_entry(tpl, w_row, state.transit_buckets_in.start) + 1.0).abs() < 1e-9,
+        "power guard: the exited plant's maturing bucket must reach hydro 2's water row at \
+         -1.0"
+    );
+
+    let columns = inflow_columns(
+        geom,
+        state,
+        &[DOWNSTREAM_POS, EXITED_PLANT_POS],
+        &[EXITED_PLANT_POS, UPSTREAM_POS],
+        &[EXITED_PLANT_POS, UPSTREAM_POS],
+        &[],
     );
     assert_hydro_inflow_matches_water_balance(&setup, 1, DOWNSTREAM_POS, &columns);
 }

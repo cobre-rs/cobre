@@ -257,7 +257,7 @@ fn resolve_hydro_storage_boundary(
 /// ([`resolve_shortcircuit_target`]) also adds its own local inflow, diverted
 /// inflow, and upstream releases, each at `1.0` in `blk` — the same whole,
 /// no-lag routing `fill_prefilling_shortcircuit` gives them on the
-/// water-balance row.
+/// water-balance row — and its maturing bucket as a rate.
 ///
 /// This is an instantaneous **rate** identity (m³/s), **not** the `−τ`-weighted (hm³)
 /// storage-balance row — the `−τ` sign and `τ` weighting belong to storage balance
@@ -303,18 +303,7 @@ fn resolve_hydro_inflow(
         }
     }
 
-    if let Some(col) = maturing_bucket_in_col(layout.state, HydroSys::new(pos_h)) {
-        let rho = resolve_bucket_arrival_density(
-            ctx,
-            layout.clock,
-            stage_idx,
-            hydro_id,
-            layout.clock.n_blks(),
-        )[blk.get()];
-        if rho != 0.0 {
-            result.push((col, rho / layout.clock.tau(blk)));
-        }
-    }
+    push_maturing_bucket_rate(pos_h, blk, stage_idx, ctx, layout, &mut result);
 
     let stage_id = ctx.time_value.delivery_stage_ids()[stage_idx];
     for u_idx in 0..ctx.hydros.len() {
@@ -324,6 +313,7 @@ fn resolve_hydro_inflow(
             continue;
         }
         push_local_inflow_rate(u_idx, blk, ctx, layout, &mut result);
+        push_maturing_bucket_rate(u_idx, blk, stage_idx, ctx, layout, &mut result);
         if has_release_columns {
             for &w_id in ctx.cascade.upstream(ctx.hydros[u_idx].id) {
                 if let Some(pos_w) = ctx.positions.hydro(w_id) {
@@ -363,6 +353,32 @@ fn push_local_inflow_rate(
                 1.0,
             ));
         }
+    }
+}
+
+/// Push plant `plant_idx`'s maturing bucket onto `out` as the rate
+/// `arrival_density[blk] / τ(blk)` (mirrors `push_maturing_bucket_coupling`,
+/// `lp/builder/entries.rs`). A no-op when the plant declares no incoming arc.
+fn push_maturing_bucket_rate(
+    plant_idx: usize,
+    blk: BlockIdx,
+    stage_idx: usize,
+    ctx: &TemplateBuildCtx<'_>,
+    layout: &StageLayout<'_>,
+    out: &mut Vec<(usize, f64)>,
+) {
+    let Some(col) = maturing_bucket_in_col(layout.state, HydroSys::new(plant_idx)) else {
+        return;
+    };
+    let rho = resolve_bucket_arrival_density(
+        ctx,
+        layout.clock,
+        stage_idx,
+        ctx.hydros[plant_idx].id,
+        layout.clock.n_blks(),
+    )[blk.get()];
+    if rho != 0.0 {
+        out.push((col, rho / layout.clock.tau(blk)));
     }
 }
 

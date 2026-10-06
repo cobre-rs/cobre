@@ -1842,6 +1842,35 @@ the fixed-delivery-density clause itself; the parallel-fill regression (the
 maturing bucket keeps a single `-1.0` regardless of the table's contents)
 pins that `fill_parallel_water_entries` never reads it.
 
+### Maturing transit into a `PreFilling` plant follows the short-circuit target
+
+A plant `h` that is `PreFilling` at the stage its lag-1 bucket `b_1^in(h)`
+matures (in a validated study, a stage at or after its `exit_stage_id`) puts
+that bucket's REAL incoming column onto the rows of
+`resolve_shortcircuit_target(h)`: `-1.0` on the target's row in `Parallel`,
+`-arrival_density[k]` (`resolve_bucket_arrival_density` for `h`) on the
+target's block rows in `Chronological`. `h`'s frozen identity row gets nothing.
+With no non-`PreFilling` downstream (sink) nothing is routed and the water
+leaves at the system outlet. Wrong-but-compiling alternatives: leaving the
+column on no row loses the water and makes `b_1(h)`'s cut coefficient
+structurally zero; routing onto the immediate `downstream(h)` corrupts that
+plant's frozen row when it is itself `PreFilling`; a synthesized coefficient
+instead of the real column breaks the `rc / col_scale` subgradient. The
+`hydro_inflow` generic-constraint term mirrors the same route, counting the
+routed bucket at `arrival_density[blk] / τ(blk)`.
+Read: `lp/builder/entries.rs` (`push_maturing_bucket_coupling`,
+`fill_prefilling_shortcircuit`), `lp/builder/hydro_state.rs`
+(`resolve_shortcircuit_target`), `lp/builder/generic_constraints.rs`
+(`resolve_hydro_inflow`, `push_maturing_bucket_rate`). Pinned by
+`prefilling_plants_maturing_bucket_lands_on_the_short_circuit_target_row`,
+`prefilling_plants_maturing_bucket_spreads_by_arrival_density_on_the_target_block_rows`
+and `prefilling_plants_maturing_bucket_at_a_sink_lands_on_no_row` (entries.rs),
+`exited_plant_transit_reaches_the_next_operating_plant_at_the_hand_derived_cost`
+(hand-derived lower bound 2380 $ and a -10 $/hm³ bucket cut coefficient) and
+`exited_plant_transit_conserves_every_released_hm3` (`filling_commissioning.rs`),
+and `hydro_inflow_rows_count_an_exited_plants_maturing_transit_water_on_a_parallel_stage`
+(`hydro_inflow_travel_time.rs`).
+
 ## Anticipated thermal commitments
 
 ### Pre-study anticipated commitments: calendar-derived coverage

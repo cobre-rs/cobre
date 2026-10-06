@@ -1512,3 +1512,66 @@ fn unreadable_policy_checkpoint_is_reported_as_a_read_failure() {
             "failed to read policy checkpoint: ",
         ));
 }
+
+// ── Error classification of refusals and in-loop failures ────────────────────
+
+fn rewrite_json(path: &Path, edit: impl FnOnce(&mut serde_json::Value)) {
+    let mut value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    edit(&mut value);
+    fs::write(path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+}
+
+#[test]
+fn stochastic_data_refusal_exits_1_without_a_bug_report_request() {
+    let dir = TempDir::new().unwrap();
+    copy_dir_recursive(&case_dir("1dtoy"), dir.path());
+    rewrite_json(&dir.path().join("config.json"), |config| {
+        config["training"]["scenario_source"]["inflow"] =
+            serde_json::json!({ "scheme": "historical" });
+    });
+
+    cobre()
+        .args(["run", dir.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "stochastic error: insufficient data: no valid historical windows found",
+        ))
+        .stderr(predicate::str::contains(
+            "run `cobre validate <CASE_DIR>` for a full diagnostic report",
+        ))
+        .stderr(predicate::str::contains("report this at").not());
+}
+
+#[test]
+fn infeasible_training_lp_exits_3_naming_stage_iteration_and_scenario() {
+    let dir = TempDir::new().unwrap();
+    copy_dir_recursive(
+        &case_dir("deterministic/d13-generic-constraint"),
+        dir.path(),
+    );
+    rewrite_json(
+        &dir.path().join("constraints/generic_constraints.json"),
+        |constraints| {
+            constraints["constraints"][0]["slack"] = serde_json::json!({ "enabled": false });
+        },
+    );
+    rewrite_json(&dir.path().join("system/thermals.json"), |thermals| {
+        thermals["thermals"][0]["generation"]["min_mw"] = serde_json::json!(20.0);
+    });
+
+    cobre()
+        .args(["run", dir.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "LP infeasible at stage 0, iteration 1, scenario 0",
+        ))
+        .stderr(predicate::str::contains(
+            "Training failed after 0 iterations",
+        ))
+        .stderr(predicate::str::contains("report this at").not());
+}

@@ -16,6 +16,7 @@ use console::Term;
 use cobre_comm::BackendError;
 use cobre_io::LoadError;
 use cobre_io::OutputError;
+use cobre_sddp::ErrorClass;
 use cobre_sddp::SddpError;
 use cobre_sddp::SddpError::BasisShapeMismatch;
 use cobre_sddp::SddpError::Communication;
@@ -218,46 +219,35 @@ impl From<cobre_comm::BackendError> for CliError {
 
 impl From<cobre_sddp::SddpError> for CliError {
     fn from(err: SddpError) -> Self {
-        match err {
+        let class = err.class();
+        let message = match err {
+            Io(load_err) => return Self::from(load_err),
             Infeasible {
                 stage,
                 iteration,
                 scenario,
-            } => Self::Solver {
-                message: format!(
-                    "LP infeasible at stage {stage}, iteration {iteration}, scenario {scenario}"
-                ),
-            },
-            Solver(solver_err) => Self::Solver {
-                message: solver_err.to_string(),
-            },
-            Io(load_err) => Self::from(load_err),
-            Validation(msg) => Self::Validation {
-                report: msg,
+            } => format!(
+                "LP infeasible at stage {stage}, iteration {iteration}, scenario {scenario}"
+            ),
+            Solver(solver_err) => solver_err.to_string(),
+            Communication(comm_err) => comm_err.to_string(),
+            Validation(msg) | Simulation(msg) => msg,
+            WireVersionMismatch { encoded, expected } => format!(
+                "wire format version mismatch: encoded={encoded}, expected={expected}; \
+                 restart all ranks with the same binary"
+            ),
+            other @ (Stochastic(_)
+            | BasisShapeMismatch { .. }
+            | PolicySoftwareMismatch { .. }
+            | StoredBasisDimensionMismatch { .. }) => other.to_string(),
+        };
+        match class {
+            ErrorClass::InvalidInput | ErrorClass::IncompatiblePolicy => Self::Validation {
+                report: message,
                 already_rendered: false,
             },
-            Communication(comm_err) => Self::Internal {
-                message: comm_err.to_string(),
-            },
-            Simulation(msg) => Self::Internal { message: msg },
-            Stochastic(stoch_err) => Self::Internal {
-                message: stoch_err.to_string(),
-            },
-            WireVersionMismatch { encoded, expected } => Self::Internal {
-                message: format!(
-                    "wire format version mismatch: encoded={encoded}, expected={expected}; \
-                     restart all ranks with the same binary"
-                ),
-            },
-            ref shape_mismatch @ BasisShapeMismatch { .. } => Self::Internal {
-                message: shape_mismatch.to_string(),
-            },
-            ref refused @ (PolicySoftwareMismatch { .. } | StoredBasisDimensionMismatch { .. }) => {
-                Self::Validation {
-                    report: refused.to_string(),
-                    already_rendered: false,
-                }
-            }
+            ErrorClass::Solver => Self::Solver { message },
+            ErrorClass::Io | ErrorClass::Internal => Self::Internal { message },
         }
     }
 }
@@ -575,17 +565,94 @@ mod tests {
     }
 
     #[test]
-    fn from_sddp_error_stochastic_maps_to_internal() {
+    fn from_sddp_error_stochastic_maps_to_validation() {
         let stoch_err = StochasticError::InsufficientData {
             context: "hydro 7 has only 2 observations".to_string(),
         };
         let sddp_err = Stochastic(stoch_err);
         let cli_err = CliError::from(sddp_err);
         assert!(
-            matches!(cli_err, CliError::Internal { .. }),
-            "SddpError::Stochastic must map to CliError::Internal, got: {cli_err:?}"
+            matches!(cli_err, CliError::Validation { .. }),
+            "SddpError::Stochastic must map to CliError::Validation, got: {cli_err:?}"
         );
-        assert_eq!(cli_err.exit_code(), 4);
+        assert_eq!(cli_err.exit_code(), 1);
+        let CliError::Validation { report, .. } = cli_err else {
+            unreachable!("checked above")
+        };
+        assert!(
+            report.contains("stochastic error: insufficient data: hydro 7 has only 2 observations"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn cli_exit_code_follows_the_error_class() {
+        use std::path::PathBuf;
+
+        let errors = vec![
+            Stochastic(StochasticError::InsufficientData {
+                context: "no data".to_string(),
+            }),
+            Validation("bad config".to_string()),
+            Io(LoadError::parse("config.json", "unexpected end of input")),
+            Io(LoadError::SchemaError {
+                path: PathBuf::from("system/buses.json"),
+                field: "voltage".to_string(),
+                message: "must be positive".to_string(),
+            }),
+            Io(LoadError::ConstraintError {
+                description: "cycle".to_string(),
+            }),
+            Io(LoadError::PolicyIncompatible {
+                check: "hydro count".to_string(),
+                policy_value: "3".to_string(),
+                system_value: "4".to_string(),
+            }),
+            PolicySoftwareMismatch {
+                policy_software: None,
+                policy_version: "0.0.1".to_string(),
+            },
+            StoredBasisDimensionMismatch {
+                node_id: 0,
+                expected_cols: 100,
+                found_cols: 90,
+                expected_template_rows: 50,
+                found_rows: 45,
+                found_cut_rows: 10,
+            },
+            Io(LoadError::IoError {
+                path: PathBuf::from("system/hydros.json"),
+                source: std::io::Error::other("permission denied"),
+            }),
+            Infeasible {
+                stage: 0,
+                iteration: 1,
+                scenario: 0,
+            },
+            Solver(cobre_solver::SolverError::Infeasible),
+            Communication(CommError::InvalidCommunicator),
+            Simulation("output channel closed".to_string()),
+            WireVersionMismatch {
+                encoded: 0,
+                expected: 1,
+            },
+            BasisShapeMismatch {
+                num_row: 10,
+                total_basic: 9,
+                col_basic: 4,
+                row_basic: 5,
+            },
+        ];
+        for err in errors {
+            let expected = match err.class() {
+                ErrorClass::InvalidInput | ErrorClass::IncompatiblePolicy => 1,
+                ErrorClass::Io => 2,
+                ErrorClass::Solver => 3,
+                ErrorClass::Internal => 4,
+            };
+            let description = err.to_string();
+            assert_eq!(CliError::from(err).exit_code(), expected, "{description}");
+        }
     }
 
     #[test]

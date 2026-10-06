@@ -186,7 +186,7 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
                 })?;
             }
 
-            if let Some(ref training_error) = training.error {
+            if let Some(training_error) = training.error {
                 if ctx.is_root {
                     tracing::error!(
                         "training failed after {} iterations: {training_error}",
@@ -200,9 +200,7 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
                         ));
                     }
                 }
-                return Err(CliError::Internal {
-                    message: format!("training error: {training_error}"),
-                });
+                return Err(CliError::from(training_error));
             }
 
             if setup.simulation_config.n_scenarios > 0 {

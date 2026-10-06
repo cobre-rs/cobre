@@ -143,6 +143,57 @@ fn describe_writer(software: Option<&str>, version: &str) -> String {
     }
 }
 
+/// What a failure means to the person running the study.
+///
+/// Front ends derive their exit codes and exception classes from
+/// [`SddpError::class`], so they cannot keep separate lists of which failures
+/// refuse the user's data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorClass {
+    /// The case data or configuration is refused.
+    InvalidInput,
+    /// A stored policy cannot be used by this build or with this case.
+    IncompatiblePolicy,
+    /// The operating system refused a read or write.
+    Io,
+    /// An LP solve failed.
+    Solver,
+    /// A software or environment fault.
+    Internal,
+}
+
+impl SddpError {
+    /// The [`ErrorClass`] of this error.
+    #[must_use]
+    pub fn class(&self) -> ErrorClass {
+        match self {
+            Self::Stochastic(
+                StochasticError::InvalidParParameters { .. }
+                | StochasticError::InvalidCorrelation { .. }
+                | StochasticError::InsufficientData { .. }
+                | StochasticError::UnsupportedNoiseMethod { .. }
+                | StochasticError::DimensionExceedsCapacity { .. }
+                | StochasticError::MissingScenarioSource { .. },
+            )
+            | Self::Validation(_)
+            | Self::Io(
+                LoadError::ParseError { .. }
+                | LoadError::SchemaError { .. }
+                | LoadError::ConstraintError { .. },
+            ) => ErrorClass::InvalidInput,
+            Self::Io(LoadError::PolicyIncompatible { .. })
+            | Self::PolicySoftwareMismatch { .. }
+            | Self::StoredBasisDimensionMismatch { .. } => ErrorClass::IncompatiblePolicy,
+            Self::Io(LoadError::IoError { .. }) => ErrorClass::Io,
+            Self::Infeasible { .. } | Self::Solver(_) => ErrorClass::Solver,
+            Self::Communication(_)
+            | Self::Simulation(_)
+            | Self::WireVersionMismatch { .. }
+            | Self::BasisShapeMismatch { .. } => ErrorClass::Internal,
+        }
+    }
+}
+
 impl From<EstimationError> for SddpError {
     fn from(err: EstimationError) -> Self {
         match err {
@@ -163,7 +214,7 @@ impl From<FphaFittingError> for SddpError {
 
 #[cfg(test)]
 mod tests {
-    use super::SddpError;
+    use super::{ErrorClass, SddpError};
     use cobre_comm::CommError;
     use cobre_io::{LoadError, SOFTWARE_NAME, SOFTWARE_VERSION};
     use cobre_solver::SolverError;
@@ -423,6 +474,151 @@ mod tests {
         ];
         for err in &variants {
             assert!(!format!("{err:?}").is_empty());
+        }
+    }
+
+    #[test]
+    fn stochastic_refusals_classify_as_invalid_input() {
+        let refusals = [
+            StochasticError::InvalidParParameters {
+                hydro_id: 1,
+                stage_id: 2,
+                reason: "bad order".to_string(),
+            },
+            StochasticError::InvalidCorrelation {
+                profile_name: "test".to_string(),
+                reason: "bad value".to_string(),
+            },
+            StochasticError::InsufficientData {
+                context: "no data".to_string(),
+            },
+            StochasticError::UnsupportedNoiseMethod {
+                method: "sobol".to_string(),
+                stage_id: 0,
+                reason: "unsupported".to_string(),
+            },
+            StochasticError::DimensionExceedsCapacity {
+                dim: 10,
+                max_dim: 4,
+                method: "sobol".to_string(),
+            },
+            StochasticError::MissingScenarioSource {
+                scheme: "historical".to_string(),
+                reason: "no history".to_string(),
+            },
+        ];
+        for refusal in refusals {
+            let err = SddpError::Stochastic(refusal);
+            assert_eq!(err.class(), ErrorClass::InvalidInput, "{err}");
+        }
+    }
+
+    #[test]
+    fn every_error_variant_has_its_class() {
+        let table = [
+            (
+                SddpError::Stochastic(StochasticError::InsufficientData {
+                    context: "no data".to_string(),
+                }),
+                ErrorClass::InvalidInput,
+            ),
+            (
+                SddpError::Validation("bad config".to_string()),
+                ErrorClass::InvalidInput,
+            ),
+            (
+                SddpError::Io(LoadError::ParseError {
+                    path: PathBuf::from("config.json"),
+                    message: "unexpected end of input".to_string(),
+                }),
+                ErrorClass::InvalidInput,
+            ),
+            (
+                SddpError::Io(LoadError::SchemaError {
+                    path: PathBuf::from("system/buses.json"),
+                    field: "voltage".to_string(),
+                    message: "must be positive".to_string(),
+                }),
+                ErrorClass::InvalidInput,
+            ),
+            (
+                SddpError::Io(LoadError::ConstraintError {
+                    description: "cycle".to_string(),
+                }),
+                ErrorClass::InvalidInput,
+            ),
+            (
+                SddpError::Io(LoadError::PolicyIncompatible {
+                    check: "hydro count".to_string(),
+                    policy_value: "3".to_string(),
+                    system_value: "4".to_string(),
+                }),
+                ErrorClass::IncompatiblePolicy,
+            ),
+            (
+                SddpError::PolicySoftwareMismatch {
+                    policy_software: None,
+                    policy_version: "0.0.1".to_string(),
+                },
+                ErrorClass::IncompatiblePolicy,
+            ),
+            (
+                SddpError::StoredBasisDimensionMismatch {
+                    node_id: 0,
+                    expected_cols: 100,
+                    found_cols: 90,
+                    expected_template_rows: 50,
+                    found_rows: 45,
+                    found_cut_rows: 10,
+                },
+                ErrorClass::IncompatiblePolicy,
+            ),
+            (
+                SddpError::Io(LoadError::IoError {
+                    path: PathBuf::from("system/hydros.json"),
+                    source: std::io::Error::other("permission denied"),
+                }),
+                ErrorClass::Io,
+            ),
+            (
+                SddpError::Infeasible {
+                    stage: 0,
+                    iteration: 1,
+                    scenario: 0,
+                },
+                ErrorClass::Solver,
+            ),
+            (
+                SddpError::Solver(SolverError::Infeasible),
+                ErrorClass::Solver,
+            ),
+            (
+                SddpError::Communication(CommError::InvalidCommunicator),
+                ErrorClass::Internal,
+            ),
+            (
+                SddpError::Simulation("output channel closed".to_string()),
+                ErrorClass::Internal,
+            ),
+            (
+                SddpError::WireVersionMismatch {
+                    encoded: 0,
+                    expected: 1,
+                },
+                ErrorClass::Internal,
+            ),
+            (
+                SddpError::BasisShapeMismatch {
+                    num_row: 10,
+                    total_basic: 9,
+                    col_basic: 4,
+                    row_basic: 5,
+                },
+                ErrorClass::Internal,
+            ),
+        ];
+        for (err, class) in table {
+            assert_eq!(err.class(), class, "{err}");
         }
     }
 }

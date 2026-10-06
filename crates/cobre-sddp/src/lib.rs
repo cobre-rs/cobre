@@ -89,7 +89,7 @@ pub use cut::cut_sync::CutSyncBuffers;
 pub use cut::row::build_cut_row_batch_into;
 pub use cut::wire::{CutWireHeader, cut_wire_size, deserialize_cut, serialize_cut};
 pub use cut::{CutPool, FutureCostFunction};
-pub use error::SddpError;
+pub use error::{ErrorClass, SddpError};
 pub use fixed_delivery_echo::build_fixed_delivery_rows;
 pub use generic_constraint_echo::build_generic_constraint_echo_rows;
 pub use lp::builder::StageTemplates;

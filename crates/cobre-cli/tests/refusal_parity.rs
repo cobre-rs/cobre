@@ -74,6 +74,15 @@ const ROWS: &[ParityRow] = &[
         },
         fragment: "has not reached Operating status there",
     },
+    ParityRow {
+        name: "pumping_station_active_after_endpoint_exit",
+        base_case: "deterministic/d35-pumping-commissioning",
+        mutate: pumping_endpoint_exits_while_station_active,
+        outcome: Outcome::BracketedRefusal {
+            kind: "BusinessRuleViolation",
+        },
+        fragment: "is not Operating there",
+    },
 ];
 
 fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) {
@@ -91,6 +100,12 @@ fn negative_travel_time(case: &Path) {
 fn release_before_downstream_entry(case: &Path) {
     edit_json(&case.join("system/hydros.json"), |hydros| {
         hydros["hydros"][1]["entry_stage_id"] = json!(1);
+    });
+}
+
+fn pumping_endpoint_exits_while_station_active(case: &Path) {
+    edit_json(&case.join("system/hydros.json"), |hydros| {
+        hydros["hydros"][1]["exit_stage_id"] = json!(1);
     });
 }
 

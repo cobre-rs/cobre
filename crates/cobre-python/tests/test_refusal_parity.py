@@ -57,6 +57,13 @@ def _release_before_downstream_entry(case: pathlib.Path) -> None:
     _edit_json(case / "system" / "hydros.json", edit)
 
 
+def _pumping_endpoint_exits_while_station_active(case: pathlib.Path) -> None:
+    def edit(hydros: Any) -> None:
+        hydros["hydros"][1]["exit_stage_id"] = 1
+
+    _edit_json(case / "system" / "hydros.json", edit)
+
+
 ROWS = [
     _row(
         name="travel_time_negative",
@@ -74,6 +81,15 @@ ROWS = [
         outcome="BracketedRefusal",
         kind="BusinessRuleViolation",
         fragment="has not reached Operating status there",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="pumping_station_active_after_endpoint_exit",
+        base_case="deterministic/d35-pumping-commissioning",
+        mutate=_pumping_endpoint_exits_while_station_active,
+        outcome="BracketedRefusal",
+        kind="BusinessRuleViolation",
+        fragment="is not Operating there",
         error_class_name="ValidationError",
     ),
 ]

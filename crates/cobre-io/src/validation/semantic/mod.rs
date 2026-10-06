@@ -71,6 +71,7 @@
 //! |49 | Bound-override row `stage_id` a member of the declared study stage id set (never a `[0, n)` position test), across all six bound families (thermal, hydro, line, pumping, contract, hydro unit group); NCS keeps its Layer-3 referential stage check | `constraints/*_bounds.parquet` | `BusinessRuleViolation` |
 //! |50 | A hydro declaring `evaporation_coefficients_mm` has geometry rows in `hydro_geometry.parquet` (area-volume curve, required for evaporation linearization) | `system/hydros.json` | `BusinessRuleViolation` |
 //! |51 | A generic constraint pairs `max_stored_energy(h)` with the mismatched `accumulated_productivity(h)` coefficient for the same hydro `h` (the matching coefficient is `integrated_accumulated_productivity`) | `constraints/generic_constraints.json` | `SemanticAmbiguity` (warning) |
+//! |52 | Pumping station active at a study stage where its source or destination hydro is not Operating (`PreFilling`/`Filling`) | `system/pumping_stations.json` | `BusinessRuleViolation` |
 //!
 //! A hydro unit group bounds row's `block_id` range and duplicate-row keying
 //! are covered by rules 35 and 36 above; a row referencing a non-existent
@@ -187,6 +188,7 @@ pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut Valid
     block_bounds::check_bound_raises_declared_capacity(data, ctx);
     block_bounds::check_group_bound_raises_declared_capacity(data, ctx);
     pumping::check_pumping_semantics(data, ctx);
+    pumping::check_pumping_operating_window(data, ctx);
     travel_time::validate_travel_time(data, ctx);
     inflow_seeding::validate_inflow_seeding(data, ctx);
 }

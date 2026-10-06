@@ -51,6 +51,7 @@ gethostname = "1.1.0"
 
 [dev-dependencies]
 cobre-core = { version = "0.17.0", path = "../cobre-core", features = ["test-support"] }
+cobre-stochastic = { version = "0.17.0", path = "../cobre-stochastic", features = ["test-support"] }
 cobre-io = { path = ".", features = ["test-support"] }
 parquet = { version = "60", default-features = false, features = ["arrow", "zstd"] }
 proptest = "1"

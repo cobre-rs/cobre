@@ -1458,11 +1458,7 @@ mod tests {
             fx.system.inflow_models(),
             &fx.stages,
             &[fx.hydro_id],
-            fx.system
-                .policy_graph()
-                .season_map
-                .as_ref()
-                .map(|sm| sm.seasons.len()),
+            fx.system.policy_graph().season_map.as_ref(),
         )
         .expect("oracle PrecomputedPar must build");
         assert_eq!(par.max_order(), 2);

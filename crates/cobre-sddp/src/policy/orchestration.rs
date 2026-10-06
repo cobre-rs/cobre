@@ -519,7 +519,7 @@ mod tests {
                 .map(|id| SeasonDefinition {
                     id,
                     label: format!("S{id}"),
-                    month_start: 1,
+                    month_start: u32::try_from(id + 1).expect("season id fits a month"),
                     day_start: None,
                     month_end: None,
                     day_end: None,
@@ -743,11 +743,16 @@ mod tests {
     #[test]
     fn season_descriptor_keeps_gap_season_orders_from_synthesized_prestudy_stages() {
         // Declared study stages: ids 0..3, seasons 8..11 (Sep-Dec).
+        let month_stage = |id: i32, season: usize, start: (i32, u32), end: (i32, u32)| Stage {
+            start_date: NaiveDate::from_ymd_opt(start.0, start.1, 1).expect("valid date"),
+            end_date: NaiveDate::from_ymd_opt(end.0, end.1, 1).expect("valid date"),
+            ..stage_with_season(id, Some(season))
+        };
         let stages = vec![
-            stage_with_season(0, Some(8)),
-            stage_with_season(1, Some(9)),
-            stage_with_season(2, Some(10)),
-            stage_with_season(3, Some(11)),
+            month_stage(0, 8, (2024, 9), (2024, 10)),
+            month_stage(1, 9, (2024, 10), (2024, 11)),
+            month_stage(2, 10, (2024, 11), (2024, 12)),
+            month_stage(3, 11, (2024, 12), (2025, 1)),
         ];
         let system = system_with(
             stages,

@@ -45,9 +45,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cobre_core::{EntityId, scenario::InflowModel, temporal::Stage};
+use cobre_core::{
+    EntityId,
+    scenario::InflowModel,
+    temporal::{SeasonMap, Stage},
+};
 
-use crate::StochasticError;
+use crate::{StochasticError, season_cast::StitchedSeasonMap};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -69,6 +73,10 @@ fn resolve_season_id(stage_id: i32, n_seasons: usize, season_offset: usize) -> u
     #[allow(clippy::cast_sign_loss)]
     let result = (((stage_id + offset) % n + n) % n) as usize;
     result
+}
+
+fn laid_out_stages(stages: &[Stage]) -> impl Iterator<Item = &Stage> {
+    stages.iter().filter(|s| s.id >= 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -160,15 +168,15 @@ impl PrecomputedPar {
     /// - `inflow_models`: raw PAR parameters sorted by `(hydro_id, stage_id)`
     ///   from the system. May include pre-study stage models (negative `stage_id`)
     ///   used for lag initialization.
-    /// - `stages`: study stages sorted by `index` from the system (non-negative IDs).
+    /// - `stages`: the system's stages. Those with `id >= 0` are laid out in the
+    ///   order given; those with `id < 0` (declared pre-study stages) are not laid
+    ///   out and only supply season statistics. A lag stage with no model of its
+    ///   own takes the statistics of the lowest-id stage in `stages` that carries
+    ///   its season.
     /// - `hydro_ids`: canonical sorted entity IDs (determines series element array index order).
-    /// - `cycle_len`: the **true** seasonal cycle length (e.g. 12 for a monthly
-    ///   model), used as the modulus for the season-based lag fallback. `None`
-    ///   infers the modulus from the distinct study `season_id`s as before; this
-    ///   is correct only for full-year studies, where the inferred count already
-    ///   equals the cycle length. Pass `Some(season_map.seasons.len())` for
-    ///   partial-year studies so out-of-window lag stages resolve to the right
-    ///   season.
+    /// - `season_map`: resolves a lag stage's season through [`StitchedSeasonMap`].
+    ///   `None` falls back to modular arithmetic on the distinct study `season_id`
+    ///   count, correct only for complete, consecutively numbered cycles.
     ///
     /// # Errors
     ///
@@ -178,9 +186,9 @@ impl PrecomputedPar {
         inflow_models: &[InflowModel],
         stages: &[Stage],
         hydro_ids: &[EntityId],
-        cycle_len: Option<usize>,
+        season_map: Option<&SeasonMap>,
     ) -> Result<Self, StochasticError> {
-        let n_stages = stages.len();
+        let n_stages = laid_out_stages(stages).count();
         let n_hydros = hydro_ids.len();
 
         let hydro_index: HashMap<EntityId, usize> = hydro_ids
@@ -246,7 +254,7 @@ impl PrecomputedPar {
             &hydro_index,
             &model_map,
             inflow_models,
-            cycle_len,
+            season_map,
             &mut bufs,
         )?;
 
@@ -428,11 +436,10 @@ struct StageArrayBuffers<'a> {
     max_order: usize,
 }
 
-/// Fill `bufs` for every (stage, hydro) pair.
+/// Fill `bufs` for every laid-out (stage, hydro) pair.
 ///
-/// Pre-study lag stages (negative `stage_id`) may have no explicit
-/// `inflow_models` entry; when an exact lag-stage lookup misses, the lag stage is
-/// resolved to a season via modular arithmetic and its per-season stats are used.
+/// A lag stage whose exact `inflow_models` lookup misses takes its season's
+/// statistics under the rule [`PrecomputedPar::build`] documents.
 ///
 /// # Errors
 ///
@@ -444,7 +451,7 @@ fn fill_stage_arrays(
     hydro_index: &HashMap<EntityId, usize>,
     model_map: &HashMap<(i32, i32), &InflowModel>,
     inflow_models: &[InflowModel],
-    cycle_len: Option<usize>,
+    season_map: Option<&SeasonMap>,
     bufs: &mut StageArrayBuffers<'_>,
 ) -> Result<(), StochasticError> {
     let n_hydros = bufs.n_hydros;
@@ -459,37 +466,56 @@ fn fill_stage_arrays(
         })
         .collect();
 
-    // Prefer the caller's true cycle length; fall back to the count of distinct
-    // study season_ids. The two agree for full-year studies (determinism no-op);
-    // partial-year studies need the true length so out-of-window lag stages
-    // resolve to the correct season.
-    let n_seasons = cycle_len.unwrap_or_else(|| {
-        stages
-            .iter()
-            .filter_map(|s| s.season_id)
-            .collect::<HashSet<_>>()
-            .len()
-    });
+    let n_seasons = laid_out_stages(stages)
+        .filter_map(|s| s.season_id)
+        .collect::<HashSet<_>>()
+        .len();
 
     // season_id of stage 0 — the offset resolve_season_id needs for non-January
     // starts.
-    let season_offset = stages.iter().find_map(|s| s.season_id).unwrap_or(0);
+    let season_offset = laid_out_stages(stages)
+        .find_map(|s| s.season_id)
+        .unwrap_or(0);
+
+    let stitched = season_map.map(|sm| StitchedSeasonMap::build(stages, sm, max_order));
 
     let stage_to_season: HashMap<i32, usize> = stages
         .iter()
         .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
         .collect();
 
-    let season_stats: HashMap<(usize, usize), (f64, f64)> = model_stats
-        .iter()
-        .filter_map(|(&(h_idx, stage_id), &stats)| {
-            stage_to_season
-                .get(&stage_id)
-                .map(|&sid| ((h_idx, sid), stats))
-        })
-        .collect();
+    let mut season_stats: HashMap<(usize, usize), (i32, (f64, f64))> = HashMap::new();
+    for (&(h_idx, stage_id), &stats) in &model_stats {
+        let Some(&sid) = stage_to_season.get(&stage_id) else {
+            continue;
+        };
+        season_stats
+            .entry((h_idx, sid))
+            .and_modify(|kept| {
+                if stage_id < kept.0 {
+                    *kept = (stage_id, stats);
+                }
+            })
+            .or_insert((stage_id, stats));
+    }
 
-    for (s_idx, stage) in stages.iter().enumerate() {
+    let lag_stats = |h_idx: usize, lag_stage_id: i32| -> (f64, f64) {
+        if let Some(&stats) = model_stats.get(&(h_idx, lag_stage_id)) {
+            return stats;
+        }
+        let season = match &stitched {
+            Some(map) => map.season_of(lag_stage_id),
+            None if n_seasons > 0 => {
+                Some(resolve_season_id(lag_stage_id, n_seasons, season_offset))
+            }
+            None => None,
+        };
+        season
+            .and_then(|sid| season_stats.get(&(h_idx, sid)))
+            .map_or((0.0, 0.0), |&(_, stats)| stats)
+    };
+
+    for (s_idx, stage) in laid_out_stages(stages).enumerate() {
         let stage_id = stage.id;
 
         for (h_idx, &hydro_id) in hydro_ids.iter().enumerate() {
@@ -531,19 +557,7 @@ fn fill_stage_arrays(
                         // lag is 0-based: index 0 is lag ℓ=1.
                         let lag_stage_id = stage_id - i32::try_from(lag + 1).unwrap_or(i32::MAX);
 
-                        let (mu_lag, s_lag) =
-                            if let Some(&stats) = model_stats.get(&(h_idx, lag_stage_id)) {
-                                stats
-                            } else if n_seasons > 0 {
-                                let season_id =
-                                    resolve_season_id(lag_stage_id, n_seasons, season_offset);
-                                season_stats
-                                    .get(&(h_idx, season_id))
-                                    .copied()
-                                    .unwrap_or((0.0, 0.0))
-                            } else {
-                                (0.0, 0.0)
-                            };
+                        let (mu_lag, s_lag) = lag_stats(h_idx, lag_stage_id);
 
                         // φ̂ = 0 beyond the AR order; s_lag == 0 also yields 0 (the
                         // caller must validate that AR-order-bearing lag stages have
@@ -588,15 +602,18 @@ fn fill_stage_arrays(
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Months, NaiveDate};
     use cobre_core::{
         EntityId,
         scenario::InflowModel,
         temporal::{NoiseMethod, ScenarioSourceConfig, Stage},
-        test_support::{StageSpec, single_block},
+        test_support::{StageSpec, date, f64_bits_eq, single_block},
     };
 
     use super::{PrecomputedPar, resolve_season_id};
-    use crate::test_support::InflowModelSpec;
+    use crate::test_support::{
+        InflowModelSpec, MonthlyLabels, monthly_season_map, sparse_ring_season_map,
+    };
 
     fn make_stage(index: usize, id: i32, season_id: Option<usize>) -> Stage {
         cobre_core::test_support::make_stage(StageSpec {
@@ -1895,5 +1912,75 @@ mod tests {
             "base: expected {expected_base}, got {}",
             lp.deterministic_base(0, 0)
         );
+    }
+
+    fn dated_stage(id: i32, start_date: NaiveDate, end_date: NaiveDate, season: usize) -> Stage {
+        cobre_core::test_support::make_stage(StageSpec {
+            id,
+            start_date,
+            end_date,
+            season_id: Some(season),
+            ..Default::default()
+        })
+    }
+
+    fn sparse_ring_study_stages() -> Vec<Stage> {
+        vec![
+            dated_stage(0, date(2026, 1, 1), date(2026, 2, 1), 0),
+            dated_stage(1, date(2026, 2, 1), date(2026, 3, 1), 1),
+            dated_stage(2, date(2026, 3, 1), date(2026, 4, 1), 2),
+            dated_stage(3, date(2026, 4, 1), date(2026, 7, 1), 12),
+            dated_stage(4, date(2026, 7, 1), date(2026, 10, 1), 13),
+        ]
+    }
+
+    #[test]
+    fn pre_study_lag_statistics_come_from_the_lowest_stage_id_of_the_season() {
+        let monthly = monthly_season_map(MonthlyLabels::ZeroBased);
+        let stages: Vec<Stage> = (0..96_i32)
+            .map(|id| {
+                let start = date(2026 + id / 12, u32::try_from(id % 12 + 1).unwrap(), 1);
+                let end = start.checked_add_months(Months::new(1)).unwrap();
+                dated_stage(id, start, end, usize::try_from(id % 12).unwrap())
+            })
+            .collect();
+        let mut models = vec![make_model(1, 0, 100.0, 10.0, vec![0.5], 1.0)];
+        for (year, std) in (0..8).zip([40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0]) {
+            models.push(make_model(1, 11 + 12 * year, 100.0, std, vec![], 1.0));
+        }
+
+        for build in 0..16 {
+            let lp =
+                PrecomputedPar::build(&models, &stages, &[EntityId(1)], Some(&monthly)).unwrap();
+            let psi = lp.psi_slice(0, 0)[0];
+            assert!(
+                f64_bits_eq(psi, 0.125),
+                "build {build}: lag 1 of stage 0 must use the std of stage 11, got psi = {psi}"
+            );
+        }
+    }
+
+    #[test]
+    fn declared_pre_study_stage_supplies_lag_statistics_for_its_season() {
+        let ring = sparse_ring_season_map();
+        let mut stages = vec![dated_stage(-1, date(2025, 7, 1), date(2025, 10, 1), 13)];
+        stages.extend(sparse_ring_study_stages());
+        let models = vec![
+            make_model(1, -1, 100.0, 10.0, vec![], 1.0),
+            make_model(1, 0, 100.0, 20.0, vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.5], 1.0),
+            make_model(1, 1, 100.0, 30.0, vec![], 1.0),
+            make_model(1, 2, 100.0, 30.0, vec![], 1.0),
+            make_model(1, 3, 100.0, 30.0, vec![], 1.0),
+            make_model(1, 4, 100.0, 40.0, vec![], 1.0),
+        ];
+
+        let lp = PrecomputedPar::build(&models, &stages, &[EntityId(1)], Some(&ring)).unwrap();
+
+        let psi = lp.psi_slice(0, 0)[5];
+        assert!(
+            f64_bits_eq(psi, 1.0),
+            "lag 6 of stage 0 (season 13) must use the std of declared stage -1, got psi = {psi}"
+        );
+        assert_eq!(lp.n_stages(), 5);
     }
 }

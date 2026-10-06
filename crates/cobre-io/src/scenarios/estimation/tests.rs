@@ -2391,13 +2391,8 @@ fn partial_year_par2_synthesizes_prestudy_lag_models() {
         neg_models.iter().map(|m| m.stage_id).collect::<Vec<_>>()
     );
 
-    let par = PrecomputedPar::build(
-        &inflow_models,
-        &study_stages,
-        &[h1],
-        Some(season_map.seasons.len()),
-    )
-    .expect("PrecomputedPar build must succeed");
+    let par = PrecomputedPar::build(&inflow_models, &study_stages, &[h1], Some(&season_map))
+        .expect("PrecomputedPar build must succeed");
 
     // A non-zero psi for the first study stage's pre-study lags proves the lag
     // stats came from history, not the (0,0) season fallback. PACF may select any
@@ -2456,6 +2451,132 @@ fn resolve_model_stage_seasons_recovers_synthesized_prestudy_gap_seasons() {
         None,
         "an id not below the first study stage id is underivable and stays unmapped"
     );
+}
+
+fn dated_stage(id: i32, start_date: NaiveDate, end_date: NaiveDate, season: usize) -> Stage {
+    cobre_core::test_support::make_stage(cobre_core::test_support::StageSpec {
+        id,
+        start_date,
+        end_date,
+        season_id: Some(season),
+        ..Default::default()
+    })
+}
+
+#[test]
+fn lag_seasons_agree_across_the_calendar_walk_estimation_and_precompute_on_a_sparse_custom_map() {
+    use cobre_core::test_support::{date, f64_bits_eq};
+    use cobre_stochastic::season_cast::StitchedSeasonMap;
+    use cobre_stochastic::test_support::{
+        InflowModelSpec, make_inflow_model, sparse_ring_season_map,
+    };
+
+    let ring = sparse_ring_season_map();
+    let stages = vec![
+        dated_stage(0, date(2026, 1, 1), date(2026, 2, 1), 0),
+        dated_stage(1, date(2026, 2, 1), date(2026, 3, 1), 1),
+        dated_stage(2, date(2026, 3, 1), date(2026, 4, 1), 2),
+        dated_stage(3, date(2026, 4, 1), date(2026, 7, 1), 12),
+        dated_stage(4, date(2026, 7, 1), date(2026, 10, 1), 13),
+    ];
+    let lag_ids = [-1, -2, -3];
+
+    let stitched = StitchedSeasonMap::build(&stages, &ring, 3);
+    assert_eq!(
+        lag_ids.map(|id| stitched.season_of(id)),
+        [Some(13), Some(12), Some(2)]
+    );
+
+    let (resolved, _) = resolve_model_stage_seasons(&stages, lag_ids.into_iter(), &ring);
+    assert_eq!(
+        lag_ids.map(|id| resolved.get(&id).copied()),
+        [Some(4), Some(3), Some(2)],
+        "dense ordinals of raw seasons 13, 12, 2"
+    );
+
+    let models = vec![
+        make_inflow_model(InflowModelSpec {
+            hydro_id: 1,
+            stage_id: 0,
+            std_m3s: 20.0,
+            ar_coefficients: vec![0.5],
+            ..Default::default()
+        }),
+        make_inflow_model(InflowModelSpec {
+            hydro_id: 1,
+            stage_id: 4,
+            std_m3s: 40.0,
+            ..Default::default()
+        }),
+    ];
+    let par = PrecomputedPar::build(&models, &stages, &[EntityId(1)], Some(&ring))
+        .expect("PrecomputedPar build must succeed");
+    let psi = par.psi_slice(0, 0)[0];
+    assert!(
+        f64_bits_eq(psi, 0.25),
+        "stage-0 lag-1 psi must be phi * s0 / s13 = 0.25, got {psi}"
+    );
+}
+
+#[test]
+fn pre_study_lags_fold_iso_week_53_on_a_weekly_map() {
+    use cobre_core::test_support::date;
+    use cobre_stochastic::test_support::weekly_season_map;
+
+    let weekly = weekly_season_map();
+    let stages = vec![
+        dated_stage(0, date(2021, 1, 4), date(2021, 1, 11), 0),
+        dated_stage(1, date(2021, 1, 11), date(2021, 1, 18), 1),
+    ];
+    let lag_ids = [-1, -2, -3];
+
+    let (resolved, _) = resolve_model_stage_seasons(&stages, lag_ids.into_iter(), &weekly);
+    assert_eq!(
+        lag_ids.map(|id| resolved.get(&id).copied()),
+        [Some(51), Some(51), Some(50)]
+    );
+
+    let prestudy = synthesize_prestudy_stages(&stages, 3, Some(&weekly));
+    let synthesized: Vec<(i32, Option<usize>)> =
+        prestudy.iter().map(|s| (s.id, s.season_id)).collect();
+    assert_eq!(
+        synthesized,
+        vec![(-1, Some(51)), (-2, Some(51)), (-3, Some(50))]
+    );
+}
+
+#[test]
+fn every_synthesized_lag_stage_carries_statistics_when_two_lags_share_a_season() {
+    use cobre_core::test_support::date;
+
+    let prestudy = vec![
+        dated_stage(-1, date(2020, 12, 4), date(2021, 1, 4), 51),
+        dated_stage(-2, date(2020, 11, 4), date(2020, 12, 4), 51),
+    ];
+    let fitting_stats = vec![
+        SeasonalStats {
+            entity_id: EntityId(1),
+            stage_id: -2,
+            mean: 80.0,
+            std: 12.0,
+        },
+        SeasonalStats {
+            entity_id: EntityId(1),
+            stage_id: 0,
+            mean: 90.0,
+            std: 15.0,
+        },
+    ];
+
+    let rows = prestudy_seasonal_rows(&fitting_stats, &prestudy);
+
+    let row = |stage_id| InflowSeasonalStatsRow {
+        hydro_id: EntityId(1),
+        stage_id,
+        mean_m3s: 80.0,
+        std_m3s: 12.0,
+    };
+    assert_eq!(rows, vec![row(-2), row(-1)]);
 }
 
 fn full_month_row(hydro_id: EntityId, year: i32, month: u32, value: f64) -> InflowHistoryRow {

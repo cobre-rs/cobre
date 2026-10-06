@@ -68,7 +68,8 @@ use cobre_stochastic::{
         estimate_seasonal_stats_with_season_map,
     },
     season_cast::{
-        RealizedWindow, SeasonPeriodWindow, cast, next_season_period_window, season_period_window,
+        RealizedWindow, SeasonPeriodWindow, StitchedSeasonMap, cast, next_season_period_window,
+        season_period_window,
     },
 };
 
@@ -898,15 +899,13 @@ fn check_std_ratio_divergence(
     warnings
 }
 
-/// The first (lowest-`id`) non-negative study stage carrying a `season_id`,
-/// paired with that season — the anchor [`synthesize_prestudy_stages`] and
-/// [`resolve_model_stage_seasons`] both back-walk pre-study season ids from.
-fn first_study_stage_with_season(stages: &[Stage]) -> Option<(&Stage, usize)> {
+/// The first (lowest-`id`) non-negative study stage carrying a `season_id` —
+/// the anchor [`StitchedSeasonMap`] walks pre-study lag seasons back from.
+fn first_study_stage_with_season(stages: &[Stage]) -> Option<&Stage> {
     stages
         .iter()
         .filter(|s| s.id >= 0 && s.season_id.is_some())
         .min_by_key(|s| s.id)
-        .and_then(|s| s.season_id.map(|season| (s, season)))
 }
 
 /// Synthesize pre-study stages covering the PAR(p) lag window for a
@@ -920,9 +919,9 @@ fn first_study_stage_with_season(stages: &[Stage]) -> Option<(&Stage, usize)> {
 ///
 /// This helper emits one pre-study [`Stage`] per
 /// lag `k = 1..=min(max_order, cycle_len-1)`, at the descending negative id
-/// `first_study_stage.id - k` and the season [`prestudy_season_for_lag`]
-/// resolves, but **only** when that season is not already among the study
-/// stages' seasons. A full-year study therefore synthesizes nothing.
+/// `first_study_stage.id - k` and the season [`StitchedSeasonMap`] gives that
+/// id, but **only** when that season is not already among the study stages'
+/// seasons. A full-year study therefore synthesizes nothing.
 fn synthesize_prestudy_stages(
     stages: &[Stage],
     max_order: usize,
@@ -936,17 +935,23 @@ fn synthesize_prestudy_stages(
         return Vec::new();
     }
 
-    let Some((first, first_season)) = first_study_stage_with_season(stages) else {
+    let Some(first) = first_study_stage_with_season(stages) else {
         return Vec::new();
     };
 
     let study_seasons: HashSet<usize> = stages.iter().filter_map(|s| s.season_id).collect();
 
     let lag_window = max_order.min(cycle_len - 1);
+    let lag_seasons = StitchedSeasonMap::build(stages, sm, lag_window);
     let mut synthetic = Vec::with_capacity(lag_window);
 
     for k in 1..=lag_window {
-        let season_k = prestudy_season_for_lag(first_season, k, cycle_len);
+        let Some(id) = i32::try_from(k).ok().and_then(|k| first.id.checked_sub(k)) else {
+            continue;
+        };
+        let Some(season_k) = lag_seasons.season_of(id) else {
+            continue;
+        };
         if study_seasons.contains(&season_k) {
             // In-window wrap lags are served by the cycle-correct Tier-2 / user-stat path.
             continue;
@@ -964,9 +969,6 @@ fn synthesize_prestudy_stages(
             continue;
         };
 
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let id = first.id - k as i32;
-
         // Override only identity/dates/season; estimation keys off id + season_id.
         let mut stage = first.clone();
         stage.index = 0;
@@ -980,20 +982,13 @@ fn synthesize_prestudy_stages(
     synthetic
 }
 
-/// The season `lag` calendar positions before `first_season`, modular on
-/// `cycle_len` — the back-walk convention [`synthesize_prestudy_stages`] and
-/// [`resolve_model_stage_seasons`] both stitch pre-study stage ids to.
-#[must_use]
-fn prestudy_season_for_lag(first_season: usize, lag: usize, cycle_len: usize) -> usize {
-    (first_season + cycle_len - (lag % cycle_len)) % cycle_len
-}
-
 /// Extends [`resolve_stage_seasons`]'s map with an entry for every id in
 /// `model_stage_ids` not already covered by `stages`, reproducing the
 /// estimation-time stitched map [`synthesize_prestudy_stages`] builds without
-/// re-running synthesis. An id that is neither a declared stage nor derivable
-/// (no non-negative study stage carries a season, or the id is not below that
-/// stage's) is left unmapped.
+/// re-running synthesis: an id below the first study stage takes the season
+/// [`StitchedSeasonMap`] gives it. An id that is neither a declared stage nor
+/// derivable (no non-negative study stage carries a season, the id is not below
+/// that stage's, or the walk does not reach it) is left unmapped.
 #[must_use]
 pub fn resolve_model_stage_seasons(
     stages: &[Stage],
@@ -1001,27 +996,31 @@ pub fn resolve_model_stage_seasons(
     season_map: &SeasonMap,
 ) -> (HashMap<i32, usize>, usize) {
     let (mut stage_to_season, n_seasons) = resolve_stage_seasons(stages, Some(season_map));
-    let cycle_len = season_map.seasons.len();
-    if cycle_len == 0 {
-        return (stage_to_season, n_seasons);
-    }
 
-    let Some((first, first_season)) = first_study_stage_with_season(stages) else {
+    let Some(first) = first_study_stage_with_season(stages) else {
         return (stage_to_season, n_seasons);
     };
     let first_id = first.id;
 
+    let lag_stage_ids: Vec<(i32, usize)> = model_stage_ids
+        .filter(|id| !stage_to_season.contains_key(id))
+        .filter_map(|id| {
+            let lag = usize::try_from(first_id.checked_sub(id)?).ok()?;
+            (lag > 0).then_some((id, lag))
+        })
+        .collect();
+    let Some(max_lag) = lag_stage_ids.iter().map(|&(_, lag)| lag).max() else {
+        return (stage_to_season, n_seasons);
+    };
+
+    let lag_seasons = StitchedSeasonMap::build(stages, season_map, max_lag);
     let (dense_index, _) = season_dense_index(stages, Some(season_map));
 
-    for model_stage_id in model_stage_ids {
-        if stage_to_season.contains_key(&model_stage_id) || model_stage_id >= first_id {
-            continue;
-        }
-        let Ok(lag) = usize::try_from(first_id - model_stage_id) else {
-            continue;
-        };
-        let raw_season = prestudy_season_for_lag(first_season, lag, cycle_len);
-        if let Some(&ordinal) = dense_index.get(&raw_season) {
+    for (model_stage_id, _) in lag_stage_ids {
+        if let Some(&ordinal) = lag_seasons
+            .season_of(model_stage_id)
+            .and_then(|raw_season| dense_index.get(&raw_season))
+        {
             stage_to_season.insert(model_stage_id, ordinal);
         }
     }
@@ -1032,13 +1031,11 @@ pub fn resolve_model_stage_seasons(
 /// Emit history-derived seasonal rows for the synthetic pre-study stages of a
 /// partial-year study.
 ///
-/// Each out-of-window lag season is covered by exactly one synthetic pre-study
-/// stage (negative `id`). Because the season-aware fitting keys each season to
-/// its lowest-`start_date` stage, and the synthetic pre-study stages sort
-/// before every study stage, the corresponding [`SeasonalStats`] entry already
-/// carries that negative `stage_id`. This helper selects those entries and
-/// emits one [`InflowSeasonalStatsRow`] per (hydro, pre-study stage), giving
-/// `PrecomputedPar::build` a Tier-1 lag hit at the negative `stage_id`.
+/// The season-aware fitting keys each season to its lowest-`start_date` stage,
+/// so an out-of-window season's [`SeasonalStats`] entry carries a synthetic
+/// (negative) `stage_id`. Each such entry expands to every synthetic stage of
+/// its season — two lags can share one, as when a weekly lag window folds ISO
+/// week 53 — giving `PrecomputedPar::build` a Tier-1 lag hit at each of them.
 ///
 /// Returns an empty `Vec` when `prestudy` is empty (full-year studies).
 fn prestudy_seasonal_rows(
@@ -1048,17 +1045,24 @@ fn prestudy_seasonal_rows(
     if prestudy.is_empty() {
         return Vec::new();
     }
-    let prestudy_ids: HashSet<i32> = prestudy.iter().map(|s| s.id).collect();
-    let mut rows: Vec<InflowSeasonalStatsRow> = fitting_stats
+    let prestudy_season: HashMap<i32, usize> = prestudy
         .iter()
-        .filter(|s| prestudy_ids.contains(&s.stage_id))
-        .map(|s| InflowSeasonalStatsRow {
-            hydro_id: s.entity_id,
-            stage_id: s.stage_id,
-            mean_m3s: s.mean,
-            std_m3s: s.std,
-        })
+        .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
         .collect();
+    let season_to_prestudy = build_season_to_stages(prestudy);
+    let mut rows = Vec::new();
+    for s in fitting_stats {
+        if let Some(season) = prestudy_season.get(&s.stage_id)
+            && let Some(stage_ids) = season_to_prestudy.get(season)
+        {
+            rows.extend(stage_ids.iter().map(|&stage_id| InflowSeasonalStatsRow {
+                hydro_id: s.entity_id,
+                stage_id,
+                mean_m3s: s.mean,
+                std_m3s: s.std,
+            }));
+        }
+    }
     rows.sort_by_key(|r| (r.hydro_id.0, r.stage_id));
     rows
 }

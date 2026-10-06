@@ -601,18 +601,18 @@ pub fn build_inflow_par(
         .collect();
     let stage_index = stage_id_to_index(&study_stages);
     let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
-    let cycle_len = system
-        .policy_graph()
-        .season_map
-        .as_ref()
-        .map(|sm| sm.seasons.len());
+    let season_map = system.policy_graph().season_map.as_ref();
 
-    let par_lp =
-        PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids, cycle_len)?;
+    let par_lp = PrecomputedPar::build(
+        system.inflow_models(),
+        system.stages(),
+        &hydro_ids,
+        season_map,
+    )?;
     if inflow_scheme == Some(SamplingScheme::External) {
         let external_models =
             external_ar0_inflow_models(system, &hydro_ids, &study_stages, &stage_index, &par_lp);
-        PrecomputedPar::build(&external_models, &study_stages, &hydro_ids, cycle_len)
+        PrecomputedPar::build(&external_models, system.stages(), &hydro_ids, season_map)
     } else {
         Ok(par_lp)
     }

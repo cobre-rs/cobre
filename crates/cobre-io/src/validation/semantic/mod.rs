@@ -43,7 +43,7 @@
 //! |25 | Declared arc: `past_defluences` windows do not cover the arc's required pre-study depth | `initial_conditions.json` | `BusinessRuleViolation` |
 //! |25b| A `past_defluences` window ends after the study start (future-dated)       | `initial_conditions.json` | `InvalidValue` |
 //! |26 | 2+ declared arcs into one downstream plant with differing `travel_time_hours`, while any study stage is `Chronological` | `system/hydros.json` | `NotImplemented` |
-//! |26a| A declared arc's downstream `exit_stage_id` falls inside the arrival window of a release whose own stage is still Operating | `system/hydros.json` | `ModelQuality` (warning) |
+//! |26a| *(retired — number never reused)* | — | — |
 //! |26b| A declared arc releases at a stage where its downstream has not yet reached Operating status (`PreFilling`/`Filling`, or before `entry_stage_id`) | `system/hydros.json` | `BusinessRuleViolation` |
 //! |27 | *(retired — number never reused)* | — | — |
 //! |28 | `lead_stages` anticipated active window spans a stage-cadence transition (adjacent unequal stage durations); `lead_time` is the physically-anchored alternative | `system/thermals.json` | `ModelQuality` (warning) |

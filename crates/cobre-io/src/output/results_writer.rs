@@ -110,6 +110,8 @@ pub fn write_training_results(
     Ok(())
 }
 
+pub(crate) const SIMULATION_METADATA_FILE: &str = "simulation/metadata.json";
+
 /// Write simulation artifacts to the output directory.
 ///
 /// The `simulation/` directory must already exist (created by
@@ -143,7 +145,7 @@ pub fn write_simulation_results(
         solve_stats: simulation_output.solve_stats.clone(),
         distribution: ctx.distribution.clone(),
     };
-    write_simulation_metadata(&output_dir.join("simulation/metadata.json"), &metadata)?;
+    write_simulation_metadata(&output_dir.join(SIMULATION_METADATA_FILE), &metadata)?;
 
     Ok(())
 }
@@ -175,7 +177,9 @@ const SUCCESS_MARKER_FILE: &str = "_SUCCESS";
 ///
 /// The marker means every file of the phase was written, so each phase-writer
 /// calls this as its last write. `phase_dir` is not created: a marker in a
-/// directory the phase never wrote to would be false.
+/// directory the phase never wrote to would be false. A simulation scenario
+/// whose partition could not be written is counted in `scenarios.failed` in
+/// `simulation/metadata.json` and does not withhold the marker.
 ///
 /// # Errors
 ///

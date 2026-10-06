@@ -71,6 +71,7 @@ use cobre_io::output::write_evaporation_models;
 use cobre_io::output::write_fpha_deviation_points;
 use cobre_io::output::write_fpha_hyperplanes;
 use cobre_io::parse_config;
+use cobre_io::remove_simulation_outputs;
 use cobre_io::remove_success_marker;
 use cobre_io::validate_case_with_artifacts;
 use cobre_io::write_fixed_delivery;
@@ -629,6 +630,8 @@ pub(crate) fn run_simulation_phase_py(
 ) -> Result<SimSummary, PhaseError> {
     remove_success_marker(&output_dir.join("simulation"))
         .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: stale simulation marker: {e}"))?;
+    remove_simulation_outputs(output_dir)
+        .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: stale simulation outputs: {e}"))?;
     let sim_started_at = now_iso8601();
     let io_capacity = setup.simulation_config().io_channel_capacity;
     let mut sim_pool = setup
@@ -1170,6 +1173,9 @@ pub(crate) fn run_via_study(
             if should_simulate {
                 remove_success_marker(&output_dir.join("simulation")).map_err(|e| {
                     format!("{OUTPUT_WRITE_ERROR_PREFIX}: stale simulation marker: {e}")
+                })?;
+                remove_simulation_outputs(&output_dir).map_err(|e| {
+                    format!("{OUTPUT_WRITE_ERROR_PREFIX}: stale simulation outputs: {e}")
                 })?;
             }
             let policy = study.train_native(on_iteration)?;

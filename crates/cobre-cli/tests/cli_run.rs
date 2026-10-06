@@ -1693,7 +1693,7 @@ fn run_writes_no_training_marker_when_the_last_training_write_fails() {
 
 #[test]
 fn run_writes_no_simulation_marker_when_the_last_simulation_write_fails() {
-    let out = run_1dtoy_with_a_directory_at("simulation/scenario_summary.parquet");
+    let out = run_1dtoy_with_a_directory_at("simulation/scenario_summary.parquet.tmp");
 
     assert!(out.path().join("simulation/metadata.json").is_file());
     assert!(out.path().join("training/_SUCCESS").is_file());
@@ -1739,11 +1739,23 @@ fn run_keeps_the_marker_of_a_phase_it_does_not_run() {
     make_valid_case(dir.path(), None, None, None, None);
     let out = TempDir::new().unwrap();
     write_file(out.path(), "simulation/_SUCCESS", "");
+    write_file(out.path(), "simulation/paths.parquet", "");
+    write_file(
+        out.path(),
+        "simulation/costs/scenario_id=0000/data.parquet",
+        "",
+    );
 
     run_case(dir.path(), out.path());
 
     assert_empty_file(&out.path().join("simulation/_SUCCESS"));
     assert_empty_file(&out.path().join("training/_SUCCESS"));
+    assert!(out.path().join("simulation/paths.parquet").is_file());
+    assert!(
+        out.path()
+            .join("simulation/costs/scenario_id=0000/data.parquet")
+            .is_file()
+    );
 }
 
 #[test]
@@ -1760,4 +1772,79 @@ fn simulation_only_run_keeps_the_training_marker() {
 
     assert_empty_file(&out.path().join("training/_SUCCESS"));
     assert_empty_file(&out.path().join("simulation/_SUCCESS"));
+}
+
+const STALE_SIMULATION_OUTPUTS: [(&str, &str); 6] = [
+    ("simulation/costs/scenario_id=9999/data.parquet", ""),
+    (
+        "simulation/pumping_stations/scenario_id=0000/data.parquet",
+        "",
+    ),
+    ("simulation/solver/iterations.parquet", "stale"),
+    ("simulation/paths.parquet", ""),
+    ("simulation/scenario_summary.parquet", ""),
+    ("simulation/metadata.json", "{}"),
+];
+
+const FOREIGN_SIMULATION_FILES: [&str; 2] = ["simulation/solver/stale.txt", "simulation/notes.txt"];
+
+fn seed_stale_simulation_outputs(out: &Path) {
+    for (relative, content) in STALE_SIMULATION_OUTPUTS {
+        write_file(out, relative, content);
+    }
+    for relative in FOREIGN_SIMULATION_FILES {
+        write_file(out, relative, "");
+    }
+}
+
+#[test]
+fn run_clears_stale_simulation_outputs_before_training() {
+    let out = TempDir::new().unwrap();
+    seed_stale_simulation_outputs(out.path());
+    write_file(out.path(), "training/solver", "");
+
+    cobre()
+        .args([
+            "run",
+            case_dir("1dtoy").to_str().unwrap(),
+            "--output",
+            out.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .failure();
+
+    for (relative, _) in STALE_SIMULATION_OUTPUTS {
+        assert!(
+            !out.path().join(relative).exists(),
+            "the stale {relative} must be removed before training when simulation is planned"
+        );
+    }
+    for relative in FOREIGN_SIMULATION_FILES {
+        assert!(
+            out.path().join(relative).is_file(),
+            "{relative} is not a cobre output and must be kept"
+        );
+    }
+}
+
+#[test]
+fn run_replaces_stale_simulation_outputs() {
+    let out = TempDir::new().unwrap();
+    seed_stale_simulation_outputs(out.path());
+
+    run_case(&case_dir("1dtoy"), out.path());
+
+    let sim = out.path().join("simulation");
+    assert!(!sim.join("costs/scenario_id=9999").exists());
+    assert!(!sim.join("pumping_stations").exists());
+    for kept in [
+        "costs/scenario_id=0000/data.parquet",
+        "solver/iterations.parquet",
+        "solver/stale.txt",
+        "notes.txt",
+        "_SUCCESS",
+    ] {
+        assert!(sim.join(kept).is_file(), "simulation/{kept} must exist");
+    }
 }

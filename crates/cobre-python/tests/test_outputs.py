@@ -377,3 +377,66 @@ def test_load_policy_then_simulate_elsewhere_keeps_the_trained_markers(
     assert _marker_states(trained) == (True, True)
     assert (elsewhere / "simulation" / "_SUCCESS").is_file()
     cobre.results.load_results(str(trained))
+
+
+def _seed_file(path: pathlib.Path, content: str = "") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+
+
+def test_run_clears_stale_simulation_outputs_before_training(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A run into a reused directory shows no earlier simulation output while it trains."""
+    import cobre.run
+
+    sim = tmp_path / "simulation"
+    stale = {
+        sim / "costs" / "scenario_id=9999" / "data.parquet": "",
+        sim / "solver" / "iterations.parquet": "stale",
+        sim / "paths.parquet": "stale",
+        sim / "metadata.json": "{}",
+    }
+    for path, content in stale.items():
+        _seed_file(path, content)
+    _seed_file(sim / "solver" / "stale.txt")
+    observed: list[tuple[bool, ...]] = []
+
+    def on_iteration(_event: dict[str, Any]) -> None:
+        observed.append(tuple(path.exists() for path in stale))
+
+    cobre.run.run(VALID_CASE, output_dir=str(tmp_path), on_iteration=on_iteration)
+
+    assert observed, "on_iteration was never called"
+    assert set(observed) == {(False, False, False, False)}
+    assert (sim / "costs" / "scenario_id=0000" / "data.parquet").is_file()
+    assert (sim / "solver" / "stale.txt").is_file()
+    assert (sim / "_SUCCESS").is_file()
+    pq.read_table(sim / "paths.parquet")
+    pq.read_table(sim / "solver" / "iterations.parquet")
+
+
+def test_simulate_clears_stale_outputs_before_writing(tmp_path: pathlib.Path) -> None:
+    """simulate() into a reused directory drops earlier partitions and keeps foreign files."""
+    import cobre
+
+    study = cobre.Study(VALID_CASE, output_dir=str(tmp_path / "trained"))
+    policy = study.train()
+    target = tmp_path / "target"
+    sim = target / "simulation"
+    _seed_file(sim / "costs" / "scenario_id=9999" / "data.parquet")
+    _seed_file(sim / "pumping_stations" / "scenario_id=0000" / "data.parquet")
+    _seed_file(sim / "solver" / "stale.txt")
+    _seed_file(sim / "notes.txt")
+
+    study.simulate(policy, output_dir=str(target))
+
+    assert not (sim / "costs" / "scenario_id=9999").exists()
+    assert not (sim / "pumping_stations").exists()
+    for kept in (
+        "costs/scenario_id=0000/data.parquet",
+        "solver/stale.txt",
+        "notes.txt",
+        "_SUCCESS",
+    ):
+        assert (sim / kept).is_file(), f"simulation/{kept} must exist"

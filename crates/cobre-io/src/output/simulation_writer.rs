@@ -40,6 +40,7 @@
 //! `cobre-io`); conversion is the caller's responsibility.
 
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -56,11 +57,15 @@ use crate::MetadataSimulationSolveStats;
 use crate::output::SimulationOutput;
 use crate::output::atomic::write_parquet_atomic;
 use crate::output::error::OutputError;
+use crate::output::results_writer::SIMULATION_METADATA_FILE;
 use crate::output::schemas::{
     anticipated_lanes_schema, buses_schema, contracts_schema, costs_schema, exchanges_schema,
     generic_violations_schema, hydro_bus_generation_schema, hydros_schema, in_transit_schema,
     inflow_lags_schema, non_controllables_schema, paths_schema, pumping_stations_schema,
     scenario_summary_schema, thermals_schema, transit_seed_schema,
+};
+use crate::output::solver_stats_writer::{
+    SIMULATION_SOLVER_DIR, SOLVER_ITERATIONS_FILE, SOLVER_RETRY_HISTOGRAM_FILE,
 };
 
 // Payload types (mirrors solver simulation result types)
@@ -1141,6 +1146,9 @@ pub fn simulation_family_subpaths() -> impl Iterator<Item = &'static str> {
     SIMULATION_FAMILIES.iter().map(|family| family.subpath)
 }
 
+const PATHS_FILE: &str = "paths.parquet";
+const SCENARIO_SUMMARY_FILE: &str = "scenario_summary.parquet";
+
 /// Write the run-level, unpartitioned `simulation/paths.parquet` from the
 /// per-`(scenario, stage)` node-path rows.
 ///
@@ -1183,7 +1191,7 @@ pub fn write_paths(
 
     let sim_dir = output_dir.join("simulation");
     std::fs::create_dir_all(&sim_dir).map_err(|e| OutputError::io(&sim_dir, e))?;
-    write_parquet_atomic(&sim_dir.join("paths.parquet"), &batch)
+    write_parquet_atomic(&sim_dir.join(PATHS_FILE), &batch)
 }
 
 /// Write the run-level, unpartitioned `simulation/scenario_summary.parquet` from
@@ -1228,7 +1236,69 @@ pub fn write_scenario_summary(
 
     let sim_dir = output_dir.join("simulation");
     std::fs::create_dir_all(&sim_dir).map_err(|e| OutputError::io(&sim_dir, e))?;
-    write_parquet_atomic(&sim_dir.join("scenario_summary.parquet"), &batch)
+    write_parquet_atomic(&sim_dir.join(SCENARIO_SUMMARY_FILE), &batch)
+}
+
+/// Remove an earlier run's simulation outputs under `output_dir`: every family's
+/// per-scenario partition tree, `solver/iterations.parquet`,
+/// `solver/retry_histogram.parquet`, `paths.parquet`, `scenario_summary.parquet`
+/// and `metadata.json`, plus `solver/` and a nested family's parents when that
+/// leaves them empty. Callers invoke it before the phase's first write, right
+/// after removing the stale `_SUCCESS` marker.
+///
+/// # Errors
+///
+/// Returns [`OutputError::IoError`] for the first entry that exists but cannot be
+/// removed, such as a regular file at a family path or a directory at a file
+/// path: the entry is not one this writer wrote.
+pub fn remove_simulation_outputs(output_dir: &Path) -> Result<(), OutputError> {
+    let sim_dir = output_dir.join("simulation");
+    for subpath in simulation_family_subpaths() {
+        let family_dir = sim_dir.join(subpath);
+        match std::fs::remove_dir_all(&family_dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(OutputError::io(&family_dir, e)),
+        }
+        for parent in family_dir
+            .ancestors()
+            .skip(1)
+            .take_while(|dir| *dir != sim_dir)
+        {
+            remove_dir_if_empty(parent)?;
+        }
+    }
+
+    let solver_dir = output_dir.join(SIMULATION_SOLVER_DIR);
+    for file in [SOLVER_ITERATIONS_FILE, SOLVER_RETRY_HISTOGRAM_FILE] {
+        remove_file_if_present(&solver_dir.join(file))?;
+    }
+    remove_dir_if_empty(&solver_dir)?;
+
+    for file in [
+        sim_dir.join(PATHS_FILE),
+        sim_dir.join(SCENARIO_SUMMARY_FILE),
+        output_dir.join(SIMULATION_METADATA_FILE),
+    ] {
+        remove_file_if_present(&file)?;
+    }
+    Ok(())
+}
+
+fn remove_file_if_present(path: &Path) -> Result<(), OutputError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(OutputError::io(path, e)),
+    }
+}
+
+fn remove_dir_if_empty(dir: &Path) -> Result<(), OutputError> {
+    match std::fs::remove_dir(dir) {
+        Ok(()) => Ok(()),
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::DirectoryNotEmpty) => Ok(()),
+        Err(e) => Err(OutputError::io(dir, e)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4078,6 +4148,112 @@ mod tests {
             assert!(
                 subpaths.contains(&expected),
                 "simulation_family_subpaths() must include '{expected}'"
+            );
+        }
+    }
+
+    fn seed_file(root: &Path, relative: &str) {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"stale").unwrap();
+    }
+
+    #[test]
+    fn simulation_output_remover_clears_partitions_and_run_level_files() {
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let sim = tmp.path().join("simulation");
+        let removed = [
+            "costs/scenario_id=0000/data.parquet",
+            "pumping_stations/scenario_id=0003/data.parquet",
+            "violations/generic/scenario_id=0001/data.parquet",
+            "solver/iterations.parquet",
+            "solver/retry_histogram.parquet",
+            "paths.parquet",
+            "scenario_summary.parquet",
+            "metadata.json",
+        ];
+        let kept = [
+            "_SUCCESS",
+            "metadata.json.tmp",
+            "scenario_summary.parquet.tmp",
+            "solver/stale.txt",
+            "notes.txt",
+        ];
+        for relative in removed.iter().chain(&kept) {
+            seed_file(&sim, relative);
+        }
+
+        remove_simulation_outputs(tmp.path()).expect("every seeded output is removable");
+
+        for relative in removed
+            .iter()
+            .chain(&["costs", "pumping_stations", "violations"])
+        {
+            assert!(
+                !sim.join(relative).exists(),
+                "simulation/{relative} must be removed"
+            );
+        }
+        for relative in kept {
+            assert!(
+                sim.join(relative).is_file(),
+                "simulation/{relative} must be kept"
+            );
+        }
+    }
+
+    #[test]
+    fn simulation_output_remover_clears_what_the_writers_wrote() {
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        write_paths(tmp.path(), Vec::new()).unwrap();
+        write_scenario_summary(tmp.path(), &[]).unwrap();
+        crate::output::write_simulation_solver_stats(tmp.path(), &[]).unwrap();
+
+        remove_simulation_outputs(tmp.path()).expect("the writers' outputs are removable");
+
+        let left: Vec<_> = std::fs::read_dir(tmp.path().join("simulation"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert!(
+            left.is_empty(),
+            "simulation/ must be left empty, found {left:?}"
+        );
+    }
+
+    #[test]
+    fn simulation_output_remover_accepts_a_missing_simulation_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+
+        remove_simulation_outputs(tmp.path()).expect("a missing simulation/ has nothing to remove");
+    }
+
+    #[test]
+    fn simulation_output_remover_reports_an_entry_it_cannot_remove() {
+        for (blocker, blocker_is_dir, reported) in [
+            ("costs", false, "costs"),
+            ("paths.parquet", true, "paths.parquet"),
+            ("solver", false, "solver/iterations.parquet"),
+        ] {
+            let tmp = tempfile::tempdir().expect("tempdir must succeed");
+            let sim = tmp.path().join("simulation");
+            if blocker_is_dir {
+                std::fs::create_dir_all(sim.join(blocker)).unwrap();
+            } else {
+                seed_file(&sim, blocker);
+            }
+
+            match remove_simulation_outputs(tmp.path()) {
+                Err(OutputError::IoError { path, .. }) => assert!(
+                    path.ends_with(reported),
+                    "a {blocker} blocker must be reported at {reported}, got {}",
+                    path.display()
+                ),
+                other => panic!("a {blocker} blocker must give an IoError, got {other:?}"),
+            }
+            assert!(
+                sim.join(blocker).exists(),
+                "the {blocker} blocker must be left in place"
             );
         }
     }

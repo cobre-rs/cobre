@@ -51,15 +51,17 @@
       "description": "The `hydro` section: the default penalty costs of every hydro plant.",
       "properties": {
         "diversion_cost": {
+          "description": "Diversion flow penalty ($/(m³/s·h)).",
           "format": "double",
           "type": "number"
         },
         "evaporation_violation_cost": {
+          "description": "Symmetric evaporation violation penalty, the default of both directional\nevaporation costs ($/(m³/s·h)).",
           "format": "double",
           "type": "number"
         },
         "evaporation_violation_neg_cost": {
-          "description": "Optional directional under-evaporation cost. Defaults to symmetric.",
+          "description": "Under-evaporation penalty ($/(m³/s·h)). Defaults to `evaporation_violation_cost`.",
           "format": "double",
           "type": [
             "number",
@@ -67,7 +69,7 @@
           ]
         },
         "evaporation_violation_pos_cost": {
-          "description": "Optional directional over-evaporation cost. Defaults to symmetric.",
+          "description": "Over-evaporation penalty ($/(m³/s·h)). Defaults to `evaporation_violation_cost`.",
           "format": "double",
           "type": [
             "number",
@@ -75,15 +77,17 @@
           ]
         },
         "filling_target_violation_cost": {
+          "description": "Filling-target violation penalty ($/hm³).",
           "format": "double",
           "type": "number"
         },
         "generation_violation_below_cost": {
+          "description": "Generation below-minimum violation penalty ($/`MWh`).",
           "format": "double",
           "type": "number"
         },
         "inflow_nonnegativity_cost": {
-          "description": "Optional inflow non-negativity cost. Defaults to 1000.0.",
+          "description": "Inflow non-negativity penalty ($/(m³/s·h)). Defaults to 1000.0.",
           "format": "double",
           "type": [
             "number",
@@ -91,35 +95,42 @@
           ]
         },
         "outflow_violation_above_cost": {
+          "description": "Outflow above-maximum violation penalty ($/(m³/s·h)).",
           "format": "double",
           "type": "number"
         },
         "outflow_violation_below_cost": {
+          "description": "Outflow below-minimum violation penalty ($/(m³/s·h)).",
           "format": "double",
           "type": "number"
         },
         "spillage_cost": {
+          "description": "Spillage penalty ($/(m³/s·h)).",
           "format": "double",
           "type": "number"
         },
         "storage_violation_below_cost": {
+          "description": "Storage below-minimum violation penalty ($/hm³).",
           "format": "double",
           "type": "number"
         },
         "turbined_cost": {
+          "description": "Turbined-flow regularization cost ($/(m³/s·h)).",
           "format": "double",
           "type": "number"
         },
         "turbined_violation_below_cost": {
+          "description": "Turbined-flow below-minimum violation penalty ($/(m³/s·h)).",
           "format": "double",
           "type": "number"
         },
         "water_withdrawal_violation_cost": {
+          "description": "Symmetric water withdrawal violation penalty, the default of both\ndirectional withdrawal costs ($/(m³/s·h)).",
           "format": "double",
           "type": "number"
         },
         "water_withdrawal_violation_neg_cost": {
-          "description": "Optional directional under-withdrawal cost. Defaults to symmetric.",
+          "description": "Under-withdrawal penalty ($/(m³/s·h)). Defaults to `water_withdrawal_violation_cost`.",
           "format": "double",
           "type": [
             "number",
@@ -127,7 +138,7 @@
           ]
         },
         "water_withdrawal_violation_pos_cost": {
-          "description": "Optional directional over-withdrawal cost. Defaults to symmetric.",
+          "description": "Over-withdrawal penalty ($/(m³/s·h)). Defaults to `water_withdrawal_violation_cost`.",
           "format": "double",
           "type": [
             "number",

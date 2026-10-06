@@ -76,26 +76,39 @@ pub(crate) struct RawLinePenalties {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct RawHydroPenalties {
+    /// Spillage penalty ($/(m³/s·h)).
     spillage_cost: f64,
+    /// Turbined-flow regularization cost ($/(m³/s·h)).
     turbined_cost: f64,
+    /// Diversion flow penalty ($/(m³/s·h)).
     diversion_cost: f64,
+    /// Storage below-minimum violation penalty ($/hm³).
     storage_violation_below_cost: f64,
+    /// Filling-target violation penalty ($/hm³).
     filling_target_violation_cost: f64,
+    /// Turbined-flow below-minimum violation penalty ($/(m³/s·h)).
     turbined_violation_below_cost: f64,
+    /// Outflow below-minimum violation penalty ($/(m³/s·h)).
     outflow_violation_below_cost: f64,
+    /// Outflow above-maximum violation penalty ($/(m³/s·h)).
     outflow_violation_above_cost: f64,
+    /// Generation below-minimum violation penalty ($/`MWh`).
     generation_violation_below_cost: f64,
+    /// Symmetric evaporation violation penalty, the default of both directional
+    /// evaporation costs ($/(m³/s·h)).
     evaporation_violation_cost: f64,
+    /// Symmetric water withdrawal violation penalty, the default of both
+    /// directional withdrawal costs ($/(m³/s·h)).
     water_withdrawal_violation_cost: f64,
-    /// Optional directional over-withdrawal cost. Defaults to symmetric.
+    /// Over-withdrawal penalty ($/(m³/s·h)). Defaults to `water_withdrawal_violation_cost`.
     water_withdrawal_violation_pos_cost: Option<f64>,
-    /// Optional directional under-withdrawal cost. Defaults to symmetric.
+    /// Under-withdrawal penalty ($/(m³/s·h)). Defaults to `water_withdrawal_violation_cost`.
     water_withdrawal_violation_neg_cost: Option<f64>,
-    /// Optional directional over-evaporation cost. Defaults to symmetric.
+    /// Over-evaporation penalty ($/(m³/s·h)). Defaults to `evaporation_violation_cost`.
     evaporation_violation_pos_cost: Option<f64>,
-    /// Optional directional under-evaporation cost. Defaults to symmetric.
+    /// Under-evaporation penalty ($/(m³/s·h)). Defaults to `evaporation_violation_cost`.
     evaporation_violation_neg_cost: Option<f64>,
-    /// Optional inflow non-negativity cost. Defaults to 1000.0.
+    /// Inflow non-negativity penalty ($/(m³/s·h)). Defaults to 1000.0.
     inflow_nonnegativity_cost: Option<f64>,
 }
 

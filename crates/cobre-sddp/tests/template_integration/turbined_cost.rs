@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn turbined_cost_applied_to_fpha_turbine_column() {
-    // turbined_cost = 0.5 $/MWh over a 720h block → turbine objective 0.5*720 = 360.0
+    // turbined_cost = 0.5 $/(m³/s·h) over a 720h block → turbine objective 0.5*720 = 360.0
     // (then scaled by 1/COST_SCALE_FACTOR).
     let (system, production) = fpha_system_with_turbined_cost(3, 0.5, &[720.0]);
     let result = build_stage_templates_resolving_layout(
@@ -29,7 +29,7 @@ fn turbined_cost_applied_to_fpha_turbine_column() {
 
 #[test]
 fn turbined_cost_multi_block_uses_per_block_hours() {
-    // turbined_cost = 1.0 $/MWh; each turbine column carries cost * its own
+    // turbined_cost = 1.0 $/(m³/s·h); each turbine column carries cost * its own
     // block_hours (block 0 = 300h, block 1 = 420h), not the stage total.
     let (system, production) = fpha_system_with_turbined_cost(3, 1.0, &[300.0, 420.0]);
     let result = build_stage_templates_resolving_layout(

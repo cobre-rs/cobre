@@ -743,7 +743,7 @@ fn truncation_with_penalty_training_completes() {
     );
 }
 
-/// Per-plant `inflow_nonnegativity_cost` (H1 = 100, H2 = 5000 R$/MWh) produces
+/// Per-plant `inflow_nonnegativity_cost` (H1 = 100, H2 = 5000 $/(m³/s·h)) produces
 /// distinct inflow-slack objective coefficients in the LP template: H1's equals
 /// `100 * block_hours`, H2's `5000 * block_hours` (justifies the magic asserts).
 #[test]

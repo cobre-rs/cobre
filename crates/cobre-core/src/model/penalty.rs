@@ -19,13 +19,13 @@ use crate::entities::{DeficitSegment, HydroPenalties};
 pub struct GlobalPenaltyDefaults {
     /// Piecewise-linear bus deficit cost segments.
     pub bus_deficit_segments: Vec<DeficitSegment>,
-    /// Bus excess cost \[$/`MWh`\].
+    /// Bus excess cost ($/`MWh`).
     pub bus_excess_cost: f64,
-    /// Line exchange cost \[$/`MWh`\].
+    /// Line exchange cost ($/`MWh`).
     pub line_exchange_cost: f64,
     /// Hydro penalty defaults for any field not overridden per entity.
     pub hydro: HydroPenalties,
-    /// Non-controllable source curtailment cost \[$/`MWh`\].
+    /// Non-controllable source curtailment cost ($/`MWh`).
     pub ncs_curtailment_cost: f64,
 }
 
@@ -41,37 +41,37 @@ pub struct GlobalPenaltyDefaults {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HydroPenaltyOverrides {
-    /// Spillage cost [$/m³/s].
+    /// Spillage cost ($/(m³/s·h)).
     pub spillage_cost: Option<f64>,
-    /// Diversion cost [$/m³/s].
+    /// Diversion cost ($/(m³/s·h)).
     pub diversion_cost: Option<f64>,
-    /// Turbined cost \[$/`MWh`\].
+    /// Turbined cost ($/(m³/s·h)).
     pub turbined_cost: Option<f64>,
-    /// Storage violation below cost [$/hm³].
+    /// Storage violation below cost ($/hm³).
     pub storage_violation_below_cost: Option<f64>,
-    /// Filling target violation cost [$/hm³].
+    /// Filling target violation cost ($/hm³).
     pub filling_target_violation_cost: Option<f64>,
-    /// Turbined violation below cost [$/m³/s].
+    /// Turbined violation below cost ($/(m³/s·h)).
     pub turbined_violation_below_cost: Option<f64>,
-    /// Outflow violation below cost [$/m³/s].
+    /// Outflow violation below cost ($/(m³/s·h)).
     pub outflow_violation_below_cost: Option<f64>,
-    /// Outflow violation above cost [$/m³/s].
+    /// Outflow violation above cost ($/(m³/s·h)).
     pub outflow_violation_above_cost: Option<f64>,
-    /// Generation violation below cost [$/MW].
+    /// Generation violation below cost ($/`MWh`).
     pub generation_violation_below_cost: Option<f64>,
-    /// Evaporation violation cost [$/mm].
+    /// Evaporation violation cost ($/(m³/s·h)).
     pub evaporation_violation_cost: Option<f64>,
-    /// Water withdrawal violation cost [$/m³/s].
+    /// Water withdrawal violation cost ($/(m³/s·h)).
     pub water_withdrawal_violation_cost: Option<f64>,
-    /// Over-withdrawal violation cost [$/m³/s].
+    /// Over-withdrawal violation cost ($/(m³/s·h)).
     pub water_withdrawal_violation_pos_cost: Option<f64>,
-    /// Under-withdrawal violation cost [$/m³/s].
+    /// Under-withdrawal violation cost ($/(m³/s·h)).
     pub water_withdrawal_violation_neg_cost: Option<f64>,
-    /// Over-evaporation violation cost [$/mm].
+    /// Over-evaporation violation cost ($/(m³/s·h)).
     pub evaporation_violation_pos_cost: Option<f64>,
-    /// Under-evaporation violation cost [$/mm].
+    /// Under-evaporation violation cost ($/(m³/s·h)).
     pub evaporation_violation_neg_cost: Option<f64>,
-    /// Inflow non-negativity cost [$/m³/s].
+    /// Inflow non-negativity cost ($/(m³/s·h)).
     pub inflow_nonnegativity_cost: Option<f64>,
 }
 

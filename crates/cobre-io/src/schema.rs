@@ -594,4 +594,76 @@ mod tests {
             assert!(artifacts.is_empty(), "{text:?} was flagged: {artifacts:?}");
         }
     }
+
+    #[test]
+    fn hydro_penalty_descriptions_state_the_priced_unit() {
+        const FLOW: &str = "($/(m³/s·h))";
+        const STORAGE: &str = "($/hm³)";
+        const ENERGY: &str = "($/`MWh`)";
+        let units: [(&str, &str); 16] = [
+            ("spillage_cost", FLOW),
+            ("turbined_cost", FLOW),
+            ("diversion_cost", FLOW),
+            ("storage_violation_below_cost", STORAGE),
+            ("filling_target_violation_cost", STORAGE),
+            ("turbined_violation_below_cost", FLOW),
+            ("outflow_violation_below_cost", FLOW),
+            ("outflow_violation_above_cost", FLOW),
+            ("generation_violation_below_cost", ENERGY),
+            ("evaporation_violation_cost", FLOW),
+            ("water_withdrawal_violation_cost", FLOW),
+            ("water_withdrawal_violation_pos_cost", FLOW),
+            ("water_withdrawal_violation_neg_cost", FLOW),
+            ("evaporation_violation_pos_cost", FLOW),
+            ("evaporation_violation_neg_cost", FLOW),
+            ("inflow_nonnegativity_cost", FLOW),
+        ];
+        let schemas = generate_schemas().unwrap();
+        let properties = |file: &str, def: &str| {
+            let (_, schema) = schemas
+                .iter()
+                .find(|(name, _)| name == file)
+                .unwrap_or_else(|| panic!("{file} not found in schemas"));
+            schema
+                .pointer(&format!("/$defs/{def}/properties"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{file} has no /$defs/{def}/properties"))
+                .clone()
+        };
+
+        let mut offences = Vec::new();
+        for (file, def) in [
+            ("penalties.schema.json", "RawHydroPenalties"),
+            ("hydros.schema.json", "RawHydroPenaltyOverrides"),
+        ] {
+            for (key, property) in properties(file, def) {
+                let description = property.get("description").and_then(Value::as_str);
+                match units.iter().find(|(unit_key, _)| *unit_key == key) {
+                    None => offences.push(format!("{file} {def}.{key}: has no unit in the table")),
+                    Some((_, unit)) if !description.is_some_and(|text| text.contains(unit)) => {
+                        offences.push(format!(
+                            "{file} {def}.{key}: {} lacks {unit}",
+                            description.unwrap_or("no description")
+                        ));
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        assert!(
+            offences.is_empty(),
+            "hydro penalty descriptions do not state the priced unit:\n{}",
+            offences.join("\n")
+        );
+
+        let mut hydro_section: Vec<String> =
+            properties("penalties.schema.json", "RawHydroPenalties")
+                .keys()
+                .cloned()
+                .collect();
+        hydro_section.sort_unstable();
+        let mut table: Vec<&str> = units.iter().map(|(key, _)| *key).collect();
+        table.sort_unstable();
+        assert_eq!(hydro_section, table);
+    }
 }

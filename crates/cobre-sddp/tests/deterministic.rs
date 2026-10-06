@@ -309,7 +309,7 @@ fn write_stage_wide_thermal_bound(
 /// storage at stage boundary = 105.12 hm³.
 ///
 /// Analytical thermal cost is `23_635_000 / 9 ≈ 2_626_111.11 $`. With
-/// `turbined_cost = 0.01 $/MWh` applied to every hydro's turbine column
+/// `turbined_cost = 0.01 $/(m³/s·h)` applied to every hydro's turbine column
 /// (see `fill_turbine_columns` in `lp::builder::columns`), the
 /// deterministic LB adds a fixed regularization contribution of
 /// `5_785 / 9 ≈ 642.78 $` (= 0.01 · 730 · (25_000/657 + 50) summed across the
@@ -2307,7 +2307,8 @@ pub const D19_EXPECTED_COST: f64 = 1_334_568.013_586_834_3;
 /// - Hydro: min_outflow=40, max_outflow=50, min_turbined=30, min_generation=20,
 ///   max_turbined=50, productivity=1.0, max_storage=200, initial_storage=10.
 /// - Inflows: stage 0 = 40 m3/s, stage 1 = 10 m3/s (zero std_dev).
-/// - Penalty costs: all 4 operational violations = 5000 $/MWh, deficit = 1000 $/MWh.
+/// - Penalty costs: all 4 operational violations = 5000 ($/(m³/s·h) for the
+///   three flow bounds, $/MWh for min_generation), deficit = 1000 $/MWh.
 ///
 /// ## Expected behaviour
 ///

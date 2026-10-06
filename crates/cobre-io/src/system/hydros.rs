@@ -399,28 +399,42 @@ pub(crate) struct RawUnitGroup {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct RawHydroPenaltyOverrides {
+    /// Spillage penalty ($/(m³/s·h)).
     #[serde(default)]
     spillage_cost: Option<f64>,
+    /// Diversion flow penalty ($/(m³/s·h)).
     #[serde(default)]
     diversion_cost: Option<f64>,
+    /// Turbined-flow regularization cost ($/(m³/s·h)).
     #[serde(default)]
     turbined_cost: Option<f64>,
+    /// Storage below-minimum violation penalty ($/hm³).
     #[serde(default)]
     storage_violation_below_cost: Option<f64>,
+    /// Filling-target violation penalty ($/hm³).
     #[serde(default)]
     filling_target_violation_cost: Option<f64>,
+    /// Turbined-flow below-minimum violation penalty ($/(m³/s·h)).
     #[serde(default)]
     turbined_violation_below_cost: Option<f64>,
+    /// Outflow below-minimum violation penalty ($/(m³/s·h)).
     #[serde(default)]
     outflow_violation_below_cost: Option<f64>,
+    /// Outflow above-maximum violation penalty ($/(m³/s·h)).
     #[serde(default)]
     outflow_violation_above_cost: Option<f64>,
+    /// Generation below-minimum violation penalty ($/`MWh`).
     #[serde(default)]
     generation_violation_below_cost: Option<f64>,
+    /// Symmetric evaporation violation penalty of this plant, applied in both
+    /// directions ($/(m³/s·h)).
     #[serde(default)]
     evaporation_violation_cost: Option<f64>,
+    /// Symmetric water withdrawal violation penalty of this plant, applied in
+    /// both directions ($/(m³/s·h)).
     #[serde(default)]
     water_withdrawal_violation_cost: Option<f64>,
+    /// Inflow non-negativity penalty ($/(m³/s·h)).
     #[serde(default)]
     inflow_nonnegativity_cost: Option<f64>,
 }

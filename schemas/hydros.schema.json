@@ -433,6 +433,7 @@
       "properties": {
         "diversion_cost": {
           "default": null,
+          "description": "Diversion flow penalty ($/(m³/s·h)).",
           "format": "double",
           "type": [
             "number",
@@ -441,6 +442,7 @@
         },
         "evaporation_violation_cost": {
           "default": null,
+          "description": "Symmetric evaporation violation penalty of this plant, applied in both\ndirections ($/(m³/s·h)).",
           "format": "double",
           "type": [
             "number",
@@ -449,6 +451,7 @@
         },
         "filling_target_violation_cost": {
           "default": null,
+          "description": "Filling-target violation penalty ($/hm³).",
           "format": "double",
           "type": [
             "number",
@@ -457,6 +460,7 @@
         },
         "generation_violation_below_cost": {
           "default": null,
+          "description": "Generation below-minimum violation penalty ($/`MWh`).",
           "format": "double",
           "type": [
             "number",
@@ -465,6 +469,7 @@
         },
         "inflow_nonnegativity_cost": {
           "default": null,
+          "description": "Inflow non-negativity penalty ($/(m³/s·h)).",
           "format": "double",
           "type": [
             "number",
@@ -473,6 +478,7 @@
         },
         "outflow_violation_above_cost": {
           "default": null,
+          "description": "Outflow above-maximum violation penalty ($/(m³/s·h)).",
           "format": "double",
           "type": [
             "number",
@@ -481,6 +487,7 @@
         },
         "outflow_violation_below_cost": {
           "default": null,
+          "description": "Outflow below-minimum violation penalty ($/(m³/s·h)).",
           "format": "double",
           "type": [
             "number",
@@ -489,6 +496,7 @@
         },
         "spillage_cost": {
           "default": null,
+          "description": "Spillage penalty ($/(m³/s·h)).",
           "format": "double",
           "type": [
             "number",
@@ -497,6 +505,7 @@
         },
         "storage_violation_below_cost": {
           "default": null,
+          "description": "Storage below-minimum violation penalty ($/hm³).",
           "format": "double",
           "type": [
             "number",
@@ -505,6 +514,7 @@
         },
         "turbined_cost": {
           "default": null,
+          "description": "Turbined-flow regularization cost ($/(m³/s·h)).",
           "format": "double",
           "type": [
             "number",
@@ -513,6 +523,7 @@
         },
         "turbined_violation_below_cost": {
           "default": null,
+          "description": "Turbined-flow below-minimum violation penalty ($/(m³/s·h)).",
           "format": "double",
           "type": [
             "number",
@@ -521,6 +532,7 @@
         },
         "water_withdrawal_violation_cost": {
           "default": null,
+          "description": "Symmetric water withdrawal violation penalty of this plant, applied in\nboth directions ($/(m³/s·h)).",
           "format": "double",
           "type": [
             "number",

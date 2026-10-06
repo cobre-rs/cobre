@@ -256,7 +256,12 @@ fn cleared_dir_refusal(
     cleared_dir: &Path,
     clearing: Clearing,
 ) -> LoadError {
-    let cleared_dir = cleared_dir.display();
+    // Output-relative, so spelled with `/` on every platform like the other cleared directories.
+    let cleared_dir = cleared_dir
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
     let message = match clearing {
         Clearing::WholeTree => format!(
             "{value:?} {relation} {cleared_dir}, which a run removes whole before writing its \

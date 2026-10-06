@@ -410,11 +410,194 @@ fn aggregate_simulation_solver_stats<C: Communicator>(
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
+    use std::any::Any;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use console::Term;
+    use tempfile::TempDir;
+
+    use cobre_comm::{
+        BackendKind, CommData, CommError, Communicator, ExecutionTopology, HostInfo, LocalBackend,
+        ReduceOp,
+    };
     use cobre_sddp::SimulationWeighting;
     use cobre_sddp::setup::{
         NodeGraph, NodeId, NodeOpenings, NodeRuntime, OpeningSource, StageIdx, Traversal,
     };
+
+    use super::run_simulation_phase;
+    use crate::commands::run::setup::broadcast_and_build_setup;
+    use crate::commands::run::training::run_training_phase;
+    use crate::commands::run::{CommBackendArg, RunArgs, RunContext};
+    use crate::error::CliError;
+    use crate::progress::RenderMode;
+
+    #[derive(Default)]
+    struct PeerFailedComm {
+        collective_calls: AtomicUsize,
+    }
+
+    impl PeerFailedComm {
+        fn collective_calls(&self) -> usize {
+            self.collective_calls.load(Ordering::SeqCst)
+        }
+
+        fn refuse(&self, operation: &'static str) -> CommError {
+            self.collective_calls.fetch_add(1, Ordering::SeqCst);
+            CommError::CollectiveFailed {
+                operation,
+                mpi_error_code: 0,
+                message: "only the reconcile flag is answered".to_string(),
+            }
+        }
+    }
+
+    impl Communicator for PeerFailedComm {
+        fn allgatherv<T: CommData>(
+            &self,
+            _send: &[T],
+            _recv: &mut [T],
+            _counts: &[usize],
+            _displs: &[usize],
+        ) -> Result<(), CommError> {
+            Err(self.refuse("allgatherv"))
+        }
+
+        fn allreduce<T: CommData>(
+            &self,
+            send: &[T],
+            recv: &mut [T],
+            op: ReduceOp,
+        ) -> Result<(), CommError> {
+            if op == ReduceOp::Max
+                && send.len() == 1
+                && let Some(flag) = recv
+                    .first_mut()
+                    .and_then(|r| (r as &mut dyn Any).downcast_mut::<i32>())
+            {
+                self.collective_calls.fetch_add(1, Ordering::SeqCst);
+                *flag = 1;
+                return Ok(());
+            }
+            Err(self.refuse("allreduce"))
+        }
+
+        fn broadcast<T: CommData>(&self, _buf: &mut [T], _root: usize) -> Result<(), CommError> {
+            Err(self.refuse("broadcast"))
+        }
+
+        fn barrier(&self) -> Result<(), CommError> {
+            Err(self.refuse("barrier"))
+        }
+
+        fn rank(&self) -> usize {
+            0
+        }
+
+        fn size(&self) -> usize {
+            2
+        }
+
+        fn abort(&self, error_code: i32) -> ! {
+            panic!("PeerFailedComm::abort({error_code})")
+        }
+    }
+
+    fn test_run_context<C: Communicator>(
+        comm: C,
+        world_size: usize,
+        case_dir: &Path,
+        output_dir: &Path,
+    ) -> RunContext<C> {
+        RunContext {
+            comm,
+            is_root: true,
+            quiet: true,
+            n_threads: 1,
+            output_dir: output_dir.to_path_buf(),
+            case_dir: case_dir.to_path_buf(),
+            term_width: 80,
+            stderr: Term::stderr(),
+            render_mode: RenderMode::auto(),
+            topology: ExecutionTopology {
+                backend: BackendKind::Local,
+                world_size,
+                hosts: vec![HostInfo {
+                    hostname: "localhost".to_string(),
+                    ranks: (0..world_size).collect(),
+                }],
+                mpi: None,
+                slurm: None,
+            },
+            solver_version: String::new(),
+        }
+    }
+
+    #[test]
+    fn simulation_writes_no_marker_when_a_peer_rank_fails() {
+        let case_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/1dtoy");
+        let output = TempDir::new().expect("output tempdir must be creatable");
+        let output_dir = output.path().to_path_buf();
+        let args = RunArgs {
+            case_dir: case_dir.clone(),
+            output: Some(output_dir.clone()),
+            quiet: true,
+            threads: Some(1),
+            comm_backend: CommBackendArg::Local,
+        };
+
+        let local = test_run_context(LocalBackend, 1, &case_dir, &output_dir);
+        let mut loaded = broadcast_and_build_setup(&local, &args)
+            .expect("1dtoy must load and build its study setup");
+        let training = run_training_phase(&local, &mut loaded.setup)
+            .expect("1dtoy must train under the local backend");
+        assert!(
+            training.error.is_none(),
+            "1dtoy training must finish without a mid-iteration error: {:?}",
+            training.error
+        );
+
+        let peer = test_run_context(PeerFailedComm::default(), 2, &case_dir, &output_dir);
+        let outcome = run_simulation_phase(
+            &peer,
+            &loaded.system,
+            &mut loaded.setup,
+            &training.result,
+            "localhost",
+        );
+
+        match outcome {
+            Err(CliError::Internal { message }) => assert!(
+                message.contains("a peer rank failed simulation"),
+                "expected the peer-failure lockstep error, got: {message}"
+            ),
+            other => panic!("expected the peer-failure lockstep error, got {other:?}"),
+        }
+        assert_eq!(
+            peer.comm.collective_calls(),
+            1,
+            "the reconcile must be the only collective entered"
+        );
+
+        let sim_dir = output_dir.join("simulation");
+        assert!(
+            !sim_dir.join("_SUCCESS").exists(),
+            "a peer failure must leave no simulation/_SUCCESS"
+        );
+        assert!(
+            !sim_dir.join("metadata.json").exists(),
+            "a peer failure must leave no simulation/metadata.json"
+        );
+        assert!(
+            sim_dir
+                .join("costs/scenario_id=0000/data.parquet")
+                .is_file(),
+            "rank 0 must have written its own partitions before the reconcile"
+        );
+    }
 
     /// A single-node, single-leaf graph — enough to resolve a `Traversal` in
     /// either axis without a full `StudySetup`.

@@ -88,7 +88,7 @@ pub(crate) struct RawStagesFile {
     stages: Vec<RawStage>,
 }
 
-/// Intermediate type for the `season_definitions` sub-object.
+/// The `season_definitions` sub-object.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -99,7 +99,7 @@ pub(crate) struct RawSeasonDefinitions {
     seasons: Vec<RawSeasonEntry>,
 }
 
-/// Intermediate type for one season entry.
+/// One season entry.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -121,7 +121,7 @@ pub(crate) struct RawSeasonEntry {
     day_end: Option<u32>,
 }
 
-/// Intermediate type for the `policy_graph` sub-object.
+/// The `policy_graph` sub-object.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -141,7 +141,7 @@ pub(crate) struct RawPolicyGraph {
     nodes: Vec<RawNode>,
 }
 
-/// Intermediate type for one policy graph transition.
+/// One policy graph transition.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -157,7 +157,7 @@ pub(crate) struct RawTransition {
     annual_discount_rate_override: Option<f64>,
 }
 
-/// Intermediate type for one policy-graph node.
+/// One policy-graph node.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -178,7 +178,7 @@ pub(crate) struct RawNode {
     label: Option<String>,
 }
 
-/// Intermediate type for a study stage entry.
+/// A study stage entry.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -317,7 +317,7 @@ impl<'de> Deserialize<'de> for RawNoiseMethod {
     }
 }
 
-/// Intermediate type for a pre-study stage entry (negative IDs).
+/// A pre-study stage entry (negative IDs).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -333,7 +333,7 @@ pub(crate) struct RawPreStudyStage {
     season_id: Option<usize>,
 }
 
-/// Intermediate type for one load block.
+/// One load block.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -346,7 +346,7 @@ pub(crate) struct RawBlock {
     hours: f64,
 }
 
-/// Intermediate type for the `state_variables` sub-object.
+/// The `state_variables` sub-object.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

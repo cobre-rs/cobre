@@ -379,7 +379,12 @@ mod tests {
         found
     }
 
-    const IMPLEMENTATION_MARKERS_ANY_CASE: [&str; 6] = [
+    const IMPLEMENTATION_MARKERS_ANY_CASE: [&str; 11] = [
+        "intermediate type",
+        "intermediate serde",
+        "intermediate enum",
+        "intermediate untagged",
+        "intermediate representation",
         "serde",
         "deserializ",
         "re-export",
@@ -535,7 +540,27 @@ mod tests {
         assert_eq!(raw_latex(r"Window size $\tau$."), [r"\t", r"$\tau$"]);
         assert_eq!(raw_latex("Maximum count $k_{max}$."), ["$k_{max}$"]);
 
-        let flagged: [(&str, &[&str]); 12] = [
+        let flagged: [(&str, &[&str]); 17] = [
+            (
+                "Top-level intermediate type for `hydros.json`.",
+                &["intermediate type"],
+            ),
+            (
+                "Intermediate serde type for `config.json`.",
+                &["intermediate serde", "serde"],
+            ),
+            (
+                "Raw intermediate enum for contract direction.",
+                &["intermediate enum"],
+            ),
+            (
+                "Intermediate untagged union for `risk_measure`.",
+                &["intermediate untagged", "untagged"],
+            ),
+            (
+                "Per-entry intermediate representation.",
+                &["intermediate representation"],
+            ),
             (
                 "Private — only used during deserialization. Not re-exported.",
                 &["deserializ", "re-export"],
@@ -586,6 +611,7 @@ mod tests {
             "An array such as `[1940, 1953, 1971]`.",
             "Must be symmetric: `|m[i][j] - m[j][i]| <= 1e-10`.",
             "```json\n{}\n```",
+            "Intermediate stages are allowed.",
             "Between $10 and $20.",
             "The `method` key selects the scheduler.",
         ];

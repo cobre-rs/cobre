@@ -2,7 +2,7 @@
   "$defs": {
     "RawLine": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single line entry.",
+      "description": "A single line entry.",
       "properties": {
         "capacity": {
           "$ref": "#/$defs/RawLineCapacity",
@@ -77,7 +77,7 @@
     },
     "RawLineCapacity": {
       "additionalProperties": false,
-      "description": "Intermediate type for the nested capacity sub-object.",
+      "description": "The nested capacity sub-object.",
       "properties": {
         "direct_mw": {
           "description": "Maximum flow from source to target (MW).",

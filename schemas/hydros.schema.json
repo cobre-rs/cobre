@@ -2,7 +2,7 @@
   "$defs": {
     "RawDiversionChannel": {
       "additionalProperties": false,
-      "description": "Intermediate type for the `diversion` sub-object.",
+      "description": "The `diversion` sub-object.",
       "properties": {
         "downstream_id": {
           "description": "Identifier of the downstream hydro plant receiving diverted water.",
@@ -22,7 +22,7 @@
       "type": "object"
     },
     "RawEfficiency": {
-      "description": "Tagged-union intermediate type for the `efficiency` sub-object.",
+      "description": "The `efficiency` sub-object.",
       "oneOf": [
         {
           "description": "Constant efficiency across all operating points.",
@@ -47,7 +47,7 @@
     },
     "RawEvaporation": {
       "additionalProperties": false,
-      "description": "Intermediate type for the `evaporation` sub-object.",
+      "description": "The `evaporation` sub-object.",
       "properties": {
         "coefficients_mm": {
           "description": "Monthly evaporation coefficients (mm/month), one per calendar month.\nIndex 0 = January, index 11 = December.",
@@ -77,7 +77,7 @@
     },
     "RawFillingConfig": {
       "additionalProperties": false,
-      "description": "Intermediate type for the `filling` sub-object.",
+      "description": "The `filling` sub-object.",
       "properties": {
         "filling_min_rate_m3s": {
           "default": 0.0,
@@ -216,7 +216,7 @@
       ]
     },
     "RawHydraulicLosses": {
-      "description": "Tagged-union intermediate type for the `hydraulic_losses` sub-object.",
+      "description": "The `hydraulic_losses` sub-object.",
       "oneOf": [
         {
           "description": "Losses as a fraction of net head.",
@@ -260,7 +260,7 @@
     },
     "RawHydro": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single hydro plant entry.",
+      "description": "A single hydro plant entry.",
       "properties": {
         "diversion": {
           "anyOf": [
@@ -544,7 +544,7 @@
     },
     "RawOutflow": {
       "additionalProperties": false,
-      "description": "Intermediate type for the `outflow` sub-object.",
+      "description": "The `outflow` sub-object.",
       "properties": {
         "max_outflow_m3s": {
           "description": "Maximum total outflow (m³/s). `null` = no upper bound.",
@@ -567,7 +567,7 @@
     },
     "RawReservoir": {
       "additionalProperties": false,
-      "description": "Intermediate type for the `reservoir` sub-object.",
+      "description": "The `reservoir` sub-object.",
       "properties": {
         "max_storage_hm3": {
           "description": "Maximum operational storage (hm³).",
@@ -636,7 +636,7 @@
     },
     "RawTailracePoint": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single piecewise tailrace breakpoint.",
+      "description": "A single piecewise tailrace breakpoint.",
       "properties": {
         "height_m": {
           "description": "Downstream water level (tailrace height) at this outflow (m).",
@@ -657,7 +657,7 @@
     },
     "RawUnitGroup": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single declared entry in the `unit_groups` array.",
+      "description": "A single declared entry in the `unit_groups` array.",
       "properties": {
         "bus_id": {
           "description": "Bus to which this group's generation is injected.",

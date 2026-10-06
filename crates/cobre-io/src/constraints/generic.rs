@@ -149,7 +149,7 @@ pub(crate) struct RawGenericConstraintsFile {
     expressions: Vec<RawNamedExpression>,
 }
 
-/// Intermediate type for a single constraint entry.
+/// A single constraint entry.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -175,7 +175,7 @@ struct RawConstraint {
     slack: RawSlackConfig,
 }
 
-/// Intermediate type for the slack configuration.
+/// The slack configuration.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -187,7 +187,7 @@ struct RawSlackConfig {
     penalty: Option<f64>,
 }
 
-/// Intermediate type for a named linear-expression declaration.
+/// A named linear-expression declaration.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

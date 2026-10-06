@@ -2,7 +2,7 @@
   "$defs": {
     "RawBus": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single bus entry.",
+      "description": "A single bus entry.",
       "properties": {
         "deficit_segments": {
           "description": "Optional entity-level deficit segment overrides.\nWhen absent, the global defaults from `penalties.json` are used.",
@@ -37,7 +37,7 @@
     },
     "RawDeficitSegment": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single deficit segment entry.",
+      "description": "A single deficit segment entry.",
       "properties": {
         "cost": {
           "description": "Cost per `MWh` of deficit in this segment ($/`MWh`).",

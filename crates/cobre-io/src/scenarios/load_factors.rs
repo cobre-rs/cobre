@@ -26,7 +26,7 @@ pub(crate) struct RawLoadFactorsFile {
     load_factors: Vec<RawLoadFactorEntry>,
 }
 
-/// Intermediate type for a single load factor entry (one bus-stage pair).
+/// A single load factor entry (one bus-stage pair).
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -39,7 +39,7 @@ struct RawLoadFactorEntry {
     block_factors: Vec<RawBlockFactor>,
 }
 
-/// Intermediate type for a single block factor.
+/// A single block factor.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

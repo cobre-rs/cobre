@@ -2,7 +2,7 @@
   "$defs": {
     "RawBlock": {
       "additionalProperties": false,
-      "description": "Intermediate type for one load block.",
+      "description": "One load block.",
       "properties": {
         "hours": {
           "description": "Block duration in hours. Must be > 0.0.",
@@ -65,7 +65,7 @@
     },
     "RawNode": {
       "additionalProperties": false,
-      "description": "Intermediate type for one policy-graph node.",
+      "description": "One policy-graph node.",
       "properties": {
         "id": {
           "description": "Unique node id, referenced by `transitions` endpoints when `nodes` is declared.",
@@ -138,7 +138,7 @@
     },
     "RawPolicyGraph": {
       "additionalProperties": false,
-      "description": "Intermediate type for the `policy_graph` sub-object.",
+      "description": "The `policy_graph` sub-object.",
       "properties": {
         "annual_discount_rate": {
           "description": "Global annual discount rate. Must be >= 0.0.",
@@ -187,7 +187,7 @@
     },
     "RawPreStudyStage": {
       "additionalProperties": false,
-      "description": "Intermediate type for a pre-study stage entry (negative IDs).",
+      "description": "A pre-study stage entry (negative IDs).",
       "properties": {
         "end_date": {
           "description": "End date as ISO 8601 string.",
@@ -244,7 +244,7 @@
     },
     "RawSeasonDefinitions": {
       "additionalProperties": false,
-      "description": "Intermediate type for the `season_definitions` sub-object.",
+      "description": "The `season_definitions` sub-object.",
       "properties": {
         "cycle_type": {
           "description": "Cycle type: `\"monthly\"`, `\"weekly\"`, or `\"custom\"`.",
@@ -266,7 +266,7 @@
     },
     "RawSeasonEntry": {
       "additionalProperties": false,
-      "description": "Intermediate type for one season entry.",
+      "description": "One season entry.",
       "properties": {
         "day_end": {
           "default": null,
@@ -324,7 +324,7 @@
     },
     "RawStage": {
       "additionalProperties": false,
-      "description": "Intermediate type for a study stage entry.",
+      "description": "A study stage entry.",
       "properties": {
         "annual_discount_rate_override": {
           "default": null,
@@ -411,7 +411,7 @@
     },
     "RawStateVariables": {
       "additionalProperties": false,
-      "description": "Intermediate type for the `state_variables` sub-object.",
+      "description": "The `state_variables` sub-object.",
       "properties": {
         "inflow_lags": {
           "default": false,
@@ -428,7 +428,7 @@
     },
     "RawTransition": {
       "additionalProperties": false,
-      "description": "Intermediate type for one policy graph transition.",
+      "description": "One policy graph transition.",
       "properties": {
         "annual_discount_rate_override": {
           "default": null,

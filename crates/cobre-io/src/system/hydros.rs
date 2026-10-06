@@ -83,7 +83,7 @@ pub(crate) struct RawHydroFile {
     hydros: Vec<RawHydro>,
 }
 
-/// Intermediate type for a single hydro plant entry.
+/// A single hydro plant entry.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -155,7 +155,7 @@ pub(crate) struct RawHydro {
     penalties: Option<RawHydroPenaltyOverrides>,
 }
 
-/// Intermediate type for the `reservoir` sub-object.
+/// The `reservoir` sub-object.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -166,7 +166,7 @@ pub(crate) struct RawReservoir {
     max_storage_hm3: f64,
 }
 
-/// Intermediate type for the `outflow` sub-object.
+/// The `outflow` sub-object.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -286,7 +286,7 @@ pub(crate) enum RawTailrace {
     },
 }
 
-/// Intermediate type for a single piecewise tailrace breakpoint.
+/// A single piecewise tailrace breakpoint.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -297,7 +297,7 @@ pub(crate) struct RawTailracePoint {
     height_m: f64,
 }
 
-/// Tagged-union intermediate type for the `hydraulic_losses` sub-object.
+/// The `hydraulic_losses` sub-object.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -314,7 +314,7 @@ pub(crate) enum RawHydraulicLosses {
     },
 }
 
-/// Tagged-union intermediate type for the `efficiency` sub-object.
+/// The `efficiency` sub-object.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -326,7 +326,7 @@ pub(crate) enum RawEfficiency {
     },
 }
 
-/// Intermediate type for the `evaporation` sub-object.
+/// The `evaporation` sub-object.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -343,7 +343,7 @@ pub(crate) struct RawEvaporation {
     reference_volumes_hm3: Option<Vec<f64>>,
 }
 
-/// Intermediate type for the `diversion` sub-object.
+/// The `diversion` sub-object.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -354,7 +354,7 @@ pub(crate) struct RawDiversionChannel {
     max_flow_m3s: f64,
 }
 
-/// Intermediate type for the `filling` sub-object.
+/// The `filling` sub-object.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -367,7 +367,7 @@ pub(crate) struct RawFillingConfig {
     filling_min_rate_m3s: f64,
 }
 
-/// Intermediate type for a single declared entry in the `unit_groups` array.
+/// A single declared entry in the `unit_groups` array.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

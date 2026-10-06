@@ -2,7 +2,7 @@
   "$defs": {
     "RawPumpingFlow": {
       "additionalProperties": false,
-      "description": "Intermediate type for the nested flow bounds sub-object.",
+      "description": "The nested flow bounds sub-object.",
       "properties": {
         "max_m3s": {
           "description": "Maximum pumped flow (m³/s).",
@@ -23,7 +23,7 @@
     },
     "RawPumpingStation": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single pumping station entry.",
+      "description": "A single pumping station entry.",
       "properties": {
         "bus_id": {
           "description": "Bus from which electrical power is consumed.",

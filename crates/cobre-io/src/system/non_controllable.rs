@@ -73,7 +73,7 @@ pub(crate) struct RawNcsFile {
     non_controllable_sources: Vec<RawNcs>,
 }
 
-/// Intermediate type for a single non-controllable source entry.
+/// A single non-controllable source entry.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

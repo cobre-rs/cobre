@@ -2,7 +2,7 @@
   "$defs": {
     "RawNcs": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single non-controllable source entry.",
+      "description": "A single non-controllable source entry.",
       "properties": {
         "allow_curtailment": {
           "default": true,

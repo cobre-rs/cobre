@@ -68,7 +68,7 @@ pub(crate) struct RawLineFile {
     lines: Vec<RawLine>,
 }
 
-/// Intermediate type for a single line entry.
+/// A single line entry.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -100,7 +100,7 @@ pub(crate) struct RawLine {
     losses_percent: f64,
 }
 
-/// Intermediate type for the nested capacity sub-object.
+/// The nested capacity sub-object.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

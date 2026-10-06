@@ -2,7 +2,7 @@
   "$defs": {
     "RawConstraint": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single constraint entry.",
+      "description": "A single constraint entry.",
       "properties": {
         "description": {
           "description": "Optional human-readable description.",
@@ -39,7 +39,7 @@
     },
     "RawNamedExpression": {
       "additionalProperties": false,
-      "description": "Intermediate type for a named linear-expression declaration.",
+      "description": "A named linear-expression declaration.",
       "properties": {
         "description": {
           "description": "Optional human-readable description.",
@@ -65,7 +65,7 @@
     },
     "RawSlackConfig": {
       "additionalProperties": false,
-      "description": "Intermediate type for the slack configuration.",
+      "description": "The slack configuration.",
       "properties": {
         "enabled": {
           "description": "Whether a slack variable is allowed.",

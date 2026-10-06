@@ -25,7 +25,7 @@ pub(crate) struct RawNcsFactorsFile {
     non_controllable_factors: Vec<RawNcsFactorEntry>,
 }
 
-/// Intermediate type for a single NCS factor entry (one NCS-stage pair).
+/// A single NCS factor entry (one NCS-stage pair).
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -38,7 +38,7 @@ struct RawNcsFactorEntry {
     block_factors: Vec<RawBlockFactor>,
 }
 
-/// Intermediate type for a single block factor.
+/// A single block factor.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

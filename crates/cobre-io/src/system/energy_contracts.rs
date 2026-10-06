@@ -77,7 +77,7 @@ pub(crate) struct RawContractFile {
     contracts: Vec<RawContract>,
 }
 
-/// Intermediate type for a single energy contract entry.
+/// A single energy contract entry.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -117,7 +117,7 @@ pub(crate) enum RawContractType {
     Export,
 }
 
-/// Intermediate type for the nested limits sub-object.
+/// The nested limits sub-object.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

@@ -2,7 +2,7 @@
   "$defs": {
     "RawContract": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single energy contract entry.",
+      "description": "A single energy contract entry.",
       "properties": {
         "bus_id": {
           "description": "Bus at which the contracted power is injected or withdrawn.",
@@ -67,7 +67,7 @@
     },
     "RawContractLimits": {
       "additionalProperties": false,
-      "description": "Intermediate type for the nested limits sub-object.",
+      "description": "The nested limits sub-object.",
       "properties": {
         "max_mw": {
           "description": "Maximum contracted power (MW).",

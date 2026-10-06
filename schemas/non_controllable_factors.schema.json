@@ -2,7 +2,7 @@
   "$defs": {
     "RawBlockFactor": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single block factor.",
+      "description": "A single block factor.",
       "properties": {
         "block_id": {
           "description": "Block identifier.",
@@ -23,7 +23,7 @@
     },
     "RawNcsFactorEntry": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single NCS factor entry (one NCS-stage pair).",
+      "description": "A single NCS factor entry (one NCS-stage pair).",
       "properties": {
         "block_factors": {
           "description": "Per-block scaling factors for this NCS-stage pair.",

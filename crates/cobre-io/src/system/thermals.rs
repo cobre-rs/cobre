@@ -66,7 +66,7 @@ pub(crate) struct RawThermalFile {
     thermals: Vec<RawThermal>,
 }
 
-/// Intermediate type for a single thermal plant entry.
+/// A single thermal plant entry.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -94,7 +94,7 @@ pub(crate) struct RawThermal {
     anticipated_config: Option<RawAnticipatedConfig>,
 }
 
-/// Intermediate type for the generation bounds sub-object.
+/// The generation bounds sub-object.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

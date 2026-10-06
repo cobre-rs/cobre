@@ -39,7 +39,7 @@ pub(crate) struct RawPenalties {
     non_controllable_source: RawNcsPenalties,
 }
 
-/// Intermediate type for the `bus` section.
+/// The `bus` section.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -50,7 +50,7 @@ pub(crate) struct RawBusPenalties {
     excess_cost: f64,
 }
 
-/// Intermediate type for one deficit segment entry.
+/// One deficit segment entry.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -61,7 +61,7 @@ pub(crate) struct RawDeficitSegment {
     cost: f64,
 }
 
-/// Intermediate type for the `line` section.
+/// The `line` section.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -112,7 +112,7 @@ pub(crate) struct RawHydroPenalties {
     inflow_nonnegativity_cost: Option<f64>,
 }
 
-/// Intermediate type for the `non_controllable_source` section.
+/// The `non_controllable_source` section.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

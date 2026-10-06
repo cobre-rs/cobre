@@ -64,7 +64,7 @@ pub(crate) struct RawBusFile {
     buses: Vec<RawBus>,
 }
 
-/// Intermediate type for a single bus entry.
+/// A single bus entry.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -80,7 +80,7 @@ pub(crate) struct RawBus {
     deficit_segments: Option<Vec<RawDeficitSegment>>,
 }
 
-/// Intermediate type for a single deficit segment entry.
+/// A single deficit segment entry.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

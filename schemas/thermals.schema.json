@@ -38,7 +38,7 @@
     },
     "RawThermal": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single thermal plant entry.",
+      "description": "A single thermal plant entry.",
       "properties": {
         "anticipated_config": {
           "anyOf": [
@@ -109,7 +109,7 @@
     },
     "RawThermalGeneration": {
       "additionalProperties": false,
-      "description": "Intermediate type for the generation bounds sub-object.",
+      "description": "The generation bounds sub-object.",
       "properties": {
         "max_mw": {
           "description": "Maximum generation (installed capacity) (MW).",

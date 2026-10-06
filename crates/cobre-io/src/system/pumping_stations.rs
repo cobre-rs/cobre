@@ -60,7 +60,7 @@ pub(crate) struct RawPumpingFile {
     pumping_stations: Vec<RawPumpingStation>,
 }
 
-/// Intermediate type for a single pumping station entry.
+/// A single pumping station entry.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -89,7 +89,7 @@ pub(crate) struct RawPumpingStation {
     flow: RawPumpingFlow,
 }
 
-/// Intermediate type for the nested flow bounds sub-object.
+/// The nested flow bounds sub-object.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

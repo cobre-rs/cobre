@@ -2,7 +2,7 @@
   "$defs": {
     "RawBlockFactor": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single block factor.",
+      "description": "A single block factor.",
       "properties": {
         "block_id": {
           "description": "Block identifier.",
@@ -23,7 +23,7 @@
     },
     "RawLoadFactorEntry": {
       "additionalProperties": false,
-      "description": "Intermediate type for a single load factor entry (one bus-stage pair).",
+      "description": "A single load factor entry (one bus-stage pair).",
       "properties": {
         "block_factors": {
           "description": "Per-block scaling factors for this bus-stage pair.",

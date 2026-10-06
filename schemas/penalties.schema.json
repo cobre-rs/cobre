@@ -2,7 +2,7 @@
   "$defs": {
     "RawBusPenalties": {
       "additionalProperties": false,
-      "description": "Intermediate type for the `bus` section.",
+      "description": "The `bus` section.",
       "properties": {
         "deficit_segments": {
           "description": "Piecewise-linear deficit cost segments.",
@@ -25,7 +25,7 @@
     },
     "RawDeficitSegment": {
       "additionalProperties": false,
-      "description": "Intermediate type for one deficit segment entry.",
+      "description": "One deficit segment entry.",
       "properties": {
         "cost": {
           "description": "Cost per `MWh` of deficit in this segment ($/`MWh`).",
@@ -163,7 +163,7 @@
     },
     "RawLinePenalties": {
       "additionalProperties": false,
-      "description": "Intermediate type for the `line` section.",
+      "description": "The `line` section.",
       "properties": {
         "exchange_cost": {
           "description": "Exchange cost ($/`MWh`).",
@@ -178,7 +178,7 @@
     },
     "RawNcsPenalties": {
       "additionalProperties": false,
-      "description": "Intermediate type for the `non_controllable_source` section.",
+      "description": "The `non_controllable_source` section.",
       "properties": {
         "curtailment_cost": {
           "description": "Curtailment cost ($/`MWh`).",

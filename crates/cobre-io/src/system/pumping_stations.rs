@@ -83,7 +83,7 @@ pub(crate) struct RawPumpingStation {
     /// Stage index when the station is decommissioned. Absent or null = never.
     #[serde(default)]
     exit_stage_id: Option<i32>,
-    /// Power consumption rate per unit of pumped flow [MW/(m³/s)].
+    /// Power consumption rate per unit of pumped flow (MW/(m³/s)).
     consumption_mw_per_m3s: f64,
     /// Nested flow bounds object.
     flow: RawPumpingFlow,
@@ -94,9 +94,9 @@ pub(crate) struct RawPumpingStation {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawPumpingFlow {
-    /// Minimum pumped flow [m³/s].
+    /// Minimum pumped flow (m³/s).
     min_m3s: f64,
-    /// Maximum pumped flow [m³/s].
+    /// Maximum pumped flow (m³/s).
     max_m3s: f64,
 }
 

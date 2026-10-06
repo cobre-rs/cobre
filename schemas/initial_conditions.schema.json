@@ -49,7 +49,7 @@
           "type": "string"
         },
         "value_m3s": {
-          "description": "Average release rate over the window [m³/s]. Must be finite and\nnon-negative.",
+          "description": "Average release rate over the window (m³/s). Must be finite and\nnon-negative.",
           "format": "double",
           "type": "number"
         }
@@ -72,7 +72,7 @@
           "type": "integer"
         },
         "value_hm3": {
-          "description": "Reservoir volume \\[hm³\\]. Must be >= 0.0.",
+          "description": "Reservoir volume (hm³). Must be >= 0.0.",
           "format": "double",
           "type": "number"
         }
@@ -101,7 +101,7 @@
           "type": "string"
         },
         "value_m3s": {
-          "description": "Average inflow observed during the period [m³/s]. Must be finite;\nnegative values are accepted (the quantity is incremental inflow).",
+          "description": "Average inflow observed during the period (m³/s). Must be finite;\nnegative values are accepted (the quantity is incremental inflow).",
           "format": "double",
           "type": "number"
         }
@@ -127,7 +127,7 @@
       ]
     },
     "filling_storage": {
-      "description": "Initial reservoir volumes for filling hydros \\[hm³\\].\nA filling hydro may not also appear in `storage`.",
+      "description": "Initial reservoir volumes for filling hydros (hm³).\nA filling hydro may not also appear in `storage`.",
       "items": {
         "$ref": "#/$defs/RawHydroStorage"
       },
@@ -141,21 +141,21 @@
       "type": "array"
     },
     "past_defluences": {
-      "description": "Past defluence (release) windows per arc [m³/s per date range], keyed by\nthe upstream hydro whose release feeds the arc. Each entry is a\nself-describing `[start_date, end_date)` window on the pre-study calendar.\nWindows for the same hydro must not overlap; adjacent ranges\n(start == previous end) are accepted. Optional; defaults to empty.",
+      "description": "Past defluence (release) windows per arc (m³/s per date range), keyed by\nthe upstream hydro whose release feeds the arc. Each entry is a\nself-describing `[start_date, end_date)` window on the pre-study calendar.\nWindows for the same hydro must not overlap; adjacent ranges\n(start == previous end) are accepted. Optional; defaults to empty.",
       "items": {
         "$ref": "#/$defs/RawHydroPastDefluence"
       },
       "type": "array"
     },
     "recent_observations": {
-      "description": "Observed inflow data for partial periods before the study start\n[m³/s per date range per hydro]. Used to seed the lag accumulator when\na study begins mid-season. Date ranges for the same hydro must not\noverlap; adjacent ranges (start == previous end) are accepted.\nOptional; defaults to empty.",
+      "description": "Observed inflow data for partial periods before the study start\n(m³/s per date range per hydro). Used to seed the lag accumulator when\na study begins mid-season. Date ranges for the same hydro must not\noverlap; adjacent ranges (start == previous end) are accepted.\nOptional; defaults to empty.",
       "items": {
         "$ref": "#/$defs/RawRecentObservation"
       },
       "type": "array"
     },
     "storage": {
-      "description": "Initial reservoir volumes for operating hydros \\[hm³\\].",
+      "description": "Initial reservoir volumes for operating hydros (hm³).",
       "items": {
         "$ref": "#/$defs/RawHydroStorage"
       },

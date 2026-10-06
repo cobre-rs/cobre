@@ -5,12 +5,12 @@
       "description": "Intermediate type for the nested flow bounds sub-object.",
       "properties": {
         "max_m3s": {
-          "description": "Maximum pumped flow [m³/s].",
+          "description": "Maximum pumped flow (m³/s).",
           "format": "double",
           "type": "number"
         },
         "min_m3s": {
-          "description": "Minimum pumped flow [m³/s].",
+          "description": "Minimum pumped flow (m³/s).",
           "format": "double",
           "type": "number"
         }
@@ -31,7 +31,7 @@
           "type": "integer"
         },
         "consumption_mw_per_m3s": {
-          "description": "Power consumption rate per unit of pumped flow [MW/(m³/s)].",
+          "description": "Power consumption rate per unit of pumped flow (MW/(m³/s)).",
           "format": "double",
           "type": "number"
         },

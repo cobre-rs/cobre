@@ -12,7 +12,7 @@
           "type": "array"
         },
         "excess_cost": {
-          "description": "Excess generation cost \\[$/`MWh`\\].",
+          "description": "Excess generation cost ($/`MWh`).",
           "format": "double",
           "type": "number"
         }
@@ -28,7 +28,7 @@
       "description": "Intermediate type for one deficit segment entry.",
       "properties": {
         "cost": {
-          "description": "Cost per `MWh` of deficit in this segment \\[$/`MWh`\\].",
+          "description": "Cost per `MWh` of deficit in this segment ($/`MWh`).",
           "format": "double",
           "type": "number"
         },
@@ -155,7 +155,7 @@
       "description": "Intermediate type for the `line` section.",
       "properties": {
         "exchange_cost": {
-          "description": "Exchange cost \\[$/`MWh`\\].",
+          "description": "Exchange cost ($/`MWh`).",
           "format": "double",
           "type": "number"
         }
@@ -170,7 +170,7 @@
       "description": "Intermediate type for the `non_controllable_source` section.",
       "properties": {
         "curtailment_cost": {
-          "description": "Curtailment cost \\[$/`MWh`\\].",
+          "description": "Curtailment cost ($/`MWh`).",
           "format": "double",
           "type": "number"
         }

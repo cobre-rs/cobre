@@ -365,4 +365,70 @@ mod tests {
         assert!(nested.is_dir());
         assert!(count > 0);
     }
+
+    fn rustdoc_escapes(text: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\'
+                && let Some(escaped) = chars.next_if(char::is_ascii_punctuation)
+            {
+                found.push(format!("\\{escaped}"));
+            }
+        }
+        found
+    }
+
+    fn collect_descriptions(value: &Value, pointer: &str, out: &mut Vec<(String, String)>) {
+        match value {
+            Value::Object(map) => {
+                if let Some(Value::String(text)) = map.get("description") {
+                    out.push((pointer.to_owned(), text.clone()));
+                }
+                for (key, child) in map {
+                    collect_descriptions(child, &format!("{pointer}/{key}"), out);
+                }
+            }
+            Value::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    collect_descriptions(child, &format!("{pointer}/{index}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn exported_schema_descriptions_carry_no_rustdoc_escapes() {
+        let mut offences = Vec::new();
+        for (name, schema) in generate_schemas().unwrap() {
+            let mut descriptions = Vec::new();
+            collect_descriptions(&schema, "", &mut descriptions);
+            for (pointer, text) in descriptions {
+                let escapes = rustdoc_escapes(&text);
+                if !escapes.is_empty() {
+                    offences.push(format!("{name} {pointer}: {}", escapes.join(" ")));
+                }
+            }
+        }
+        assert!(
+            offences.is_empty(),
+            "schema descriptions carry rustdoc escape artifacts:\n{}",
+            offences.join("\n")
+        );
+    }
+
+    #[test]
+    fn rustdoc_escape_scan_flags_backslash_punctuation_only() {
+        assert_eq!(rustdoc_escapes(r"Power \[MW\]."), ["\\[", "\\]"]);
+        assert_eq!(rustdoc_escapes(r"a\_b \* c"), ["\\_", "\\*"]);
+        for clean in [
+            r"Window $\tau$",
+            "see [`Type`]",
+            "Power (MW).",
+            "in [-1.0, 1.0]",
+        ] {
+            assert!(rustdoc_escapes(clean).is_empty(), "{clean:?} was flagged");
+        }
+    }
 }

@@ -159,7 +159,7 @@ struct RawCorrelationGroup {
     /// - Must be square.
     /// - Diagonal entries must be exactly 1.0.
     /// - Off-diagonal entries must be in [-1.0, 1.0].
-    /// - Must be symmetric: |m\[i\]\[j\] - m\[j\]\[i\]| <= 1e-10.
+    /// - Must be symmetric: `|m[i][j] - m[j][i]| <= 1e-10`.
     matrix: Vec<Vec<f64>>,
 }
 

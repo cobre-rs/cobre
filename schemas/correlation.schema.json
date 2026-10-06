@@ -22,7 +22,7 @@
           "type": "array"
         },
         "matrix": {
-          "description": "Symmetric correlation matrix in row-major order.\n- Must be square.\n- Diagonal entries must be exactly 1.0.\n- Off-diagonal entries must be in [-1.0, 1.0].\n- Must be symmetric: |m\\[i\\]\\[j\\] - m\\[j\\]\\[i\\]| <= 1e-10.",
+          "description": "Symmetric correlation matrix in row-major order.\n- Must be square.\n- Diagonal entries must be exactly 1.0.\n- Off-diagonal entries must be in [-1.0, 1.0].\n- Must be symmetric: `|m[i][j] - m[j][i]| <= 1e-10`.",
           "items": {
             "items": {
               "format": "double",

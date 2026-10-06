@@ -98,7 +98,7 @@ pub(crate) struct RawHydro {
     operational_start_date: String,
     /// Downstream hydro plant in the cascade. `null` = no downstream.
     downstream_id: Option<i32>,
-    /// Travel time on the cascade arc to `downstream_id` \[hours\]. Absent or
+    /// Travel time on the cascade arc to `downstream_id` (hours). Absent or
     /// null = instantaneous (v1 excludes diversion and pumping arcs).
     #[serde(default)]
     travel_time_hours: Option<f64>,
@@ -138,7 +138,7 @@ pub(crate) struct RawHydro {
     /// rejected.
     #[cfg_attr(feature = "schema", schemars(required))]
     unit_groups: Option<Vec<RawUnitGroup>>,
-    /// Specific productivity `ρ_esp` \[MW / ((m³/s) · m)\].
+    /// Specific productivity `ρ_esp` (MW / ((m³/s) · m)).
     ///
     /// **Resolution cascade** (first source that supplies a non-`null` value wins):
     ///
@@ -162,9 +162,9 @@ pub(crate) struct RawHydro {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct RawReservoir {
-    /// Minimum operational storage (dead volume) \[hm³\].
+    /// Minimum operational storage (dead volume) (hm³).
     min_storage_hm3: f64,
-    /// Maximum operational storage \[hm³\].
+    /// Maximum operational storage (hm³).
     max_storage_hm3: f64,
 }
 
@@ -173,9 +173,9 @@ pub(crate) struct RawReservoir {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct RawOutflow {
-    /// Minimum total outflow [m³/s].
+    /// Minimum total outflow (m³/s).
     min_outflow_m3s: f64,
-    /// Maximum total outflow [m³/s]. `null` = no upper bound.
+    /// Maximum total outflow (m³/s). `null` = no upper bound.
     max_outflow_m3s: Option<f64>,
 }
 
@@ -199,13 +199,13 @@ pub(crate) enum RawGeneration {
     /// accepted in `hydros.json`; supplying `productivity_mw_per_m3s` here
     /// produces a hard parse error.
     ConstantProductivity {
-        /// Minimum turbined flow [m³/s].
+        /// Minimum turbined flow (m³/s).
         min_turbined_m3s: f64,
-        /// Maximum turbined flow [m³/s].
+        /// Maximum turbined flow (m³/s).
         max_turbined_m3s: f64,
-        /// Minimum electrical generation \[MW\].
+        /// Minimum electrical generation (MW).
         min_generation_mw: f64,
-        /// Maximum electrical generation \[MW\].
+        /// Maximum electrical generation (MW).
         max_generation_mw: f64,
     },
     /// Head-dependent productivity linearized around an operating point.
@@ -215,13 +215,13 @@ pub(crate) enum RawGeneration {
     /// accepted in `hydros.json`; supplying `productivity_mw_per_m3s` here
     /// produces a hard parse error.
     LinearizedHead {
-        /// Minimum turbined flow [m³/s].
+        /// Minimum turbined flow (m³/s).
         min_turbined_m3s: f64,
-        /// Maximum turbined flow [m³/s].
+        /// Maximum turbined flow (m³/s).
         max_turbined_m3s: f64,
-        /// Minimum electrical generation \[MW\].
+        /// Minimum electrical generation (MW).
         min_generation_mw: f64,
-        /// Maximum electrical generation \[MW\].
+        /// Maximum electrical generation (MW).
         max_generation_mw: f64,
     },
     /// Full production function with head-area-productivity tables (FPHA model).
@@ -230,13 +230,13 @@ pub(crate) enum RawGeneration {
     /// `system/hydro_production_models.json`. The `productivity_mw_per_m3s`
     /// field is not accepted here or in any other `generation` variant.
     Fpha {
-        /// Minimum turbined flow [m³/s].
+        /// Minimum turbined flow (m³/s).
         min_turbined_m3s: f64,
-        /// Maximum turbined flow [m³/s].
+        /// Maximum turbined flow (m³/s).
         max_turbined_m3s: f64,
-        /// Minimum electrical generation \[MW\].
+        /// Minimum electrical generation (MW).
         min_generation_mw: f64,
-        /// Maximum electrical generation \[MW\].
+        /// Maximum electrical generation (MW).
         max_generation_mw: f64,
     },
 }
@@ -296,9 +296,9 @@ pub(crate) enum RawTailrace {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct RawTailracePoint {
-    /// Total outflow at this point [m³/s].
+    /// Total outflow at this point (m³/s).
     outflow_m3s: f64,
-    /// Downstream water level (tailrace height) at this outflow \[m\].
+    /// Downstream water level (tailrace height) at this outflow (m).
     height_m: f64,
 }
 
@@ -314,7 +314,7 @@ pub(crate) enum RawHydraulicLosses {
     },
     /// Constant head loss independent of flow or head.
     Constant {
-        /// Fixed head loss \[m\].
+        /// Fixed head loss (m).
         value_m: f64,
     },
 }
@@ -336,10 +336,10 @@ pub(crate) enum RawEfficiency {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct RawEvaporation {
-    /// Monthly evaporation coefficients [mm/month], one per calendar month.
+    /// Monthly evaporation coefficients (mm/month), one per calendar month.
     /// Index 0 = January, index 11 = December.
     coefficients_mm: Vec<f64>,
-    /// Monthly reservoir reference volumes \[hm³\] used as the linearization
+    /// Monthly reservoir reference volumes (hm³) used as the linearization
     /// reference point for evaporation, one per calendar month.
     /// Index 0 = January, index 11 = December.
     /// Absent = no reference volume override; the calling algorithm uses its
@@ -355,7 +355,7 @@ pub(crate) struct RawEvaporation {
 pub(crate) struct RawDiversionChannel {
     /// Identifier of the downstream hydro plant receiving diverted water.
     downstream_id: i32,
-    /// Maximum diversion flow capacity [m³/s].
+    /// Maximum diversion flow capacity (m³/s).
     max_flow_m3s: f64,
 }
 
@@ -366,7 +366,7 @@ pub(crate) struct RawDiversionChannel {
 pub(crate) struct RawFillingConfig {
     /// Stage index at which filling begins (inclusive).
     start_stage_id: i32,
-    /// Minimum accumulation rate applied during filling [m³/s].
+    /// Minimum accumulation rate applied during filling (m³/s).
     /// Absent = passive filling (no minimum rate, defaults to 0.0 per spec).
     #[serde(default)]
     filling_min_rate_m3s: f64,
@@ -383,13 +383,13 @@ pub(crate) struct RawUnitGroup {
     name: String,
     /// Bus to which this group's generation is injected.
     bus_id: i32,
-    /// Minimum electrical generation \[MW\].
+    /// Minimum electrical generation (MW).
     min_generation_mw: f64,
-    /// Maximum electrical generation \[MW\].
+    /// Maximum electrical generation (MW).
     max_generation_mw: f64,
-    /// Minimum turbined flow [m³/s].
+    /// Minimum turbined flow (m³/s).
     min_turbined_m3s: f64,
-    /// Maximum turbined flow [m³/s].
+    /// Maximum turbined flow (m³/s).
     max_turbined_m3s: f64,
 }
 

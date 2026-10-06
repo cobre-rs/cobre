@@ -48,7 +48,7 @@ pub(crate) struct RawPenalties {
 pub(crate) struct RawBusPenalties {
     /// Piecewise-linear deficit cost segments.
     deficit_segments: Vec<RawDeficitSegment>,
-    /// Excess generation cost \[$/`MWh`\].
+    /// Excess generation cost ($/`MWh`).
     excess_cost: f64,
 }
 
@@ -59,7 +59,7 @@ pub(crate) struct RawBusPenalties {
 pub(crate) struct RawDeficitSegment {
     /// MW depth of this segment. `null` means the segment is unbounded (last segment).
     depth_mw: Option<f64>,
-    /// Cost per `MWh` of deficit in this segment \[$/`MWh`\].
+    /// Cost per `MWh` of deficit in this segment ($/`MWh`).
     cost: f64,
 }
 
@@ -68,7 +68,7 @@ pub(crate) struct RawDeficitSegment {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct RawLinePenalties {
-    /// Exchange cost \[$/`MWh`\].
+    /// Exchange cost ($/`MWh`).
     exchange_cost: f64,
 }
 
@@ -110,7 +110,7 @@ pub(crate) struct RawHydroPenalties {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) struct RawNcsPenalties {
-    /// Curtailment cost \[$/`MWh`\].
+    /// Curtailment cost ($/`MWh`).
     curtailment_cost: f64,
 }
 

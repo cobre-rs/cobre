@@ -26,7 +26,9 @@
 //!
 //! ```text
 //! relation   ::= side (('<=' | '>=' | '==') side)?
-//! side       ::= term (('+' | '-') term)*
+//! side       ::= side_term (('+' | '-') side_term)*
+//! side_term  ::= term
+//!              | coefficient                             (only in a relation with an operator)
 //! term       ::= coefficient '*' '@' name '*' variable   (parameter coefficient, scaled)
 //!              | '@' name '*' variable                   (parameter coefficient)
 //!              | coefficient '*' '@' name                (named-expression reference, scaled)
@@ -35,7 +37,6 @@
 //!              | coefficient '*' group
 //!              | group
 //!              | variable
-//!              | coefficient                             (relational side only)
 //! group      ::= '(' term (('+' | '-') term)* ')'
 //! variable   ::= var_name '(' entity_id (',' block_id)? (',' 'bus' '=' bus_id)? ')'
 //! ```
@@ -51,13 +52,14 @@
 //! A `group` — bare, or scaled by a leading literal `coefficient '*'` — distributes
 //! that coefficient into every inner term's scale at parse time (nesting to
 //! arbitrary depth), yielding the same flat term list as the hand-expanded form; a
-//! `group` may itself contain any `term` form, including nested groups. Only a
-//! literal coefficient may scale a `group` — `@param * (...)` is rejected for the
-//! same reason as `@param * @name`.
+//! `group` may contain any `term` form, including nested groups, but not a bare
+//! `coefficient`; a constant inside a group is rejected on either side of an
+//! operator. Only a literal coefficient may scale a `group` — `@param * (...)` is
+//! rejected for the same reason as `@param * @name`.
 //!
 //! A bare `coefficient` — a standalone numeric literal with no trailing `*` — is
-//! valid only on a relational side; it has no linear-core representation, so an
-//! operator-free `expression` rejects it.
+//! valid only as a `side_term` of a relation with an operator, outside every group;
+//! it has no linear-core representation, so an operator-free `expression` rejects it.
 //! At most one top-level relational operator (`<=`, `>=`, `==`, outside any
 //! parenthesis or variable argument list) is accepted; a second one is a
 //! descriptive error — an inline double-relational range (`LI <= expr <= LS`) is
@@ -2629,6 +2631,21 @@ mod tests {
         );
     }
 
+    /// A bare numeric constant inside a group is rejected, scaled or not.
+    #[test]
+    fn test_expr_constant_inside_group_is_rejected() {
+        for expr in [
+            "hydro_generation(0) + (hydro_generation(1) + 5)",
+            "2 * (hydro_generation(1) - 3)",
+        ] {
+            let err = parse_expression(expr, &HashMap::new()).unwrap_err();
+            assert!(
+                err.contains("expected '*' after coefficient"),
+                "expected constant-inside-group error for {expr:?}, got: {err}"
+            );
+        }
+    }
+
     /// An unterminated group (no closing `)`) is rejected.
     #[test]
     fn test_expr_unterminated_group_is_rejected() {
@@ -3536,6 +3553,35 @@ mod tests {
                 assert!(
                     message.contains("unknown variable"),
                     "message should contain 'unknown variable', got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// A constant inside a group on a relational side → SchemaError on the expression field.
+    #[test]
+    fn parse_generic_constraints_relational_constant_inside_group_is_schema_error() {
+        let json = r#"{
+  "constraints": [
+    {
+      "id": 0,
+      "name": "bad",
+      "expression": "thermal_generation(5) <= 2 * (hydro_generation(140) + 73)",
+      "slack": { "enabled": false }
+    }
+  ]
+}"#;
+        let f = write_json(json);
+        let err =
+            parse_generic_constraints(f.path(), &HashMap::new(), &LineBusPairIndex::default())
+                .unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert_eq!(field, "constraints[0].expression");
+                assert!(
+                    message.contains("expected '*' after coefficient 73"),
+                    "message should name the rejected constant, got: {message}"
                 );
             }
             other => panic!("expected SchemaError, got: {other:?}"),

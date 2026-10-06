@@ -527,7 +527,7 @@
         },
         "path": {
           "default": "./policy",
-          "description": "Directory for policy data (rows, states, vertices, basis).",
+          "description": "Policy directory, resolved against the output directory unless absolute. A checkpoint write replaces the whole directory, so an empty path, `.`, `..`, the output directory and its ancestors are refused. So is a directory that names or contains one a run clears before writing its outputs, such as `simulation/solver` or `training/solver`, or that lies inside one a run removes whole, such as `simulation/costs`.",
           "type": "string"
         }
       },

@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use std::fmt;
 use std::num::NonZeroU64;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+use crate::LoadError;
 
 /// Policy initialization mode (`config.json → policy.mode`).
 ///
@@ -72,7 +74,7 @@ impl BoundaryPolicy {
 #[serde(default, deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PolicyConfig {
-    /// Directory for policy data (rows, states, vertices, basis).
+    /// Policy directory, resolved against the output directory unless absolute. A checkpoint write replaces the whole directory, so an empty path, `.`, `..`, the output directory and its ancestors are refused. So is a directory that names or contains one a run clears before writing its outputs, such as `simulation/solver` or `training/solver`, or that lies inside one a run removes whole, such as `simulation/costs`.
     pub path: String,
 
     /// Initialization mode: `"fresh"`, `"warm_start"`, or `"resume"`.
@@ -94,6 +96,54 @@ impl Default for PolicyConfig {
             checkpointing: CheckpointingConfig::default(),
             boundary: None,
         }
+    }
+}
+
+impl PolicyConfig {
+    /// Refuses a [`Self::path`] that names the output directory or one of its
+    /// ancestors wherever the output directory is.
+    pub(crate) fn check_path(&self, config_path: &Path) -> Result<(), LoadError> {
+        let names_a_subdirectory = normalize_lexically(Path::new(&self.path))
+            .components()
+            .any(|component| matches!(component, Component::Normal(_)));
+        if names_a_subdirectory {
+            Ok(())
+        } else {
+            Err(output_dir_or_ancestor_refusal(config_path, &self.path))
+        }
+    }
+}
+
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) =>
+            {
+                normalized.pop();
+            }
+            Component::ParentDir
+            | Component::Normal(_)
+            | Component::RootDir
+            | Component::Prefix(_) => normalized.push(component),
+        }
+    }
+    normalized
+}
+
+fn output_dir_or_ancestor_refusal(config_path: &Path, value: &str) -> LoadError {
+    LoadError::SchemaError {
+        path: config_path.to_path_buf(),
+        field: "policy.path".to_string(),
+        message: format!(
+            "{value:?} names the output directory or one of its ancestors, which a \
+             checkpoint write would replace; choose another directory, such as \"./policy\""
+        ),
     }
 }
 

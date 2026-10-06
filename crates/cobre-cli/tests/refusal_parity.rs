@@ -101,6 +101,33 @@ const ROWS: &[ParityRow] = &[
         },
         fragment: "repeated block argument in variable",
     },
+    ParityRow {
+        name: "policy_path_empty",
+        base_case: "1dtoy",
+        mutate: empty_policy_path,
+        outcome: Outcome::BracketedRefusal {
+            kind: "SchemaViolation",
+        },
+        fragment: "names the output directory or one of its ancestors",
+    },
+    ParityRow {
+        name: "policy_path_current_directory",
+        base_case: "1dtoy",
+        mutate: current_directory_policy_path,
+        outcome: Outcome::BracketedRefusal {
+            kind: "SchemaViolation",
+        },
+        fragment: "names the output directory or one of its ancestors",
+    },
+    ParityRow {
+        name: "policy_path_parent_directory",
+        base_case: "1dtoy",
+        mutate: parent_directory_policy_path,
+        outcome: Outcome::BracketedRefusal {
+            kind: "SchemaViolation",
+        },
+        fragment: "names the output directory or one of its ancestors",
+    },
 ];
 
 fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) {
@@ -150,6 +177,24 @@ fn repeat_generic_constraint_block_argument(case: &Path) {
             constraints["constraints"][0]["expression"] = json!("thermal_generation(0, 0, 0)");
         },
     );
+}
+
+fn set_policy_path(case: &Path, policy_path: &str) {
+    edit_json(&case.join("config.json"), |config| {
+        config["policy"]["path"] = json!(policy_path);
+    });
+}
+
+fn empty_policy_path(case: &Path) {
+    set_policy_path(case, "");
+}
+
+fn current_directory_policy_path(case: &Path) {
+    set_policy_path(case, ".");
+}
+
+fn parent_directory_policy_path(case: &Path) {
+    set_policy_path(case, "..");
 }
 
 struct Observed<'a> {

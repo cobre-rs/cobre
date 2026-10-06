@@ -156,8 +156,8 @@ fn extract_field_from_serde_msg(msg: &str) -> String {
     "<unknown>".to_string()
 }
 
-/// Post-deserialization validation that the mandatory `forward_passes` and
-/// `stopping_rules` fields are present.
+/// Post-deserialization validation that the mandatory `training.selection` and
+/// `training.stopping_rules` fields are present.
 pub(crate) fn validate_config(config: &Config, path: &Path) -> Result<(), LoadError> {
     if config.resolve_forward_passes().is_none() {
         return Err(LoadError::SchemaError {
@@ -178,6 +178,7 @@ pub(crate) fn validate_config(config: &Config, path: &Path) -> Result<(), LoadEr
     config.training_scenario_source(path)?;
     config.simulation_scenario_source(path)?;
     config.checkpoint_schedule(path)?;
+    config.policy.check_path(path)?;
 
     Ok(())
 }
@@ -2109,6 +2110,61 @@ mod tests {
                 cfg.checkpoint_schedule(Path::new("config.json")).unwrap(),
                 None
             );
+        }
+    }
+
+    // ── policy.path ───────────────────────────────────────────────────────────
+
+    fn parse_with_policy_path(policy_path: &str) -> Result<Config, LoadError> {
+        let mut config = base_value(OVERRIDE_BASE_CONFIG);
+        config["policy"]["path"] = serde_json::json!(policy_path);
+        parse_config(write_config(&config.to_string()).path())
+    }
+
+    #[test]
+    fn policy_path_naming_the_output_directory_or_above_is_refused_at_config_load() {
+        for policy_path in ["", ".", "./", "..", "../..", "a/..", "/"] {
+            match parse_with_policy_path(policy_path) {
+                Err(LoadError::SchemaError { field, message, .. }) => {
+                    assert_eq!(field, "policy.path");
+                    assert_eq!(
+                        message,
+                        format!(
+                            "{policy_path:?} names the output directory or one of its \
+                             ancestors, which a checkpoint write would replace; choose another \
+                             directory, such as \"./policy\""
+                        )
+                    );
+                }
+                other => panic!("expected SchemaError for {policy_path:?}, got: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn policy_path_inside_the_output_directory_is_accepted_at_config_load() {
+        for policy_path in [
+            "./policy",
+            "policy",
+            "a/../policy",
+            "../elsewhere",
+            "/data/pol",
+        ] {
+            let cfg = parse_with_policy_path(policy_path)
+                .unwrap_or_else(|e| panic!("{policy_path:?} must load, got: {e:?}"));
+            assert_eq!(cfg.policy.path, policy_path);
+        }
+    }
+
+    #[test]
+    fn policy_path_override_naming_the_output_directory_is_refused() {
+        let overrides = override_map(&[("policy.path", serde_json::json!("."))]);
+        match Config::with_overrides(&base_value(OVERRIDE_BASE_CONFIG), &overrides) {
+            Err(LoadError::SchemaError { path, field, .. }) => {
+                assert_eq!(field, "policy.path");
+                assert_eq!(path, Path::new("<config_overrides>"));
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
         }
     }
 

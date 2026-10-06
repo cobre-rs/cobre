@@ -87,6 +87,25 @@ def _repeat_generic_constraint_block_argument(case: pathlib.Path) -> None:
     _edit_json(case / "constraints" / "generic_constraints.json", edit)
 
 
+def _set_policy_path(case: pathlib.Path, policy_path: str) -> None:
+    def edit(config: Any) -> None:
+        config.setdefault("policy", {})["path"] = policy_path
+
+    _edit_json(case / "config.json", edit)
+
+
+def _empty_policy_path(case: pathlib.Path) -> None:
+    _set_policy_path(case, "")
+
+
+def _current_directory_policy_path(case: pathlib.Path) -> None:
+    _set_policy_path(case, ".")
+
+
+def _parent_directory_policy_path(case: pathlib.Path) -> None:
+    _set_policy_path(case, "..")
+
+
 ROWS = [
     _row(
         name="travel_time_negative",
@@ -131,6 +150,33 @@ ROWS = [
         outcome="BracketedRefusal",
         kind="SchemaViolation",
         fragment="repeated block argument in variable",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="policy_path_empty",
+        base_case="1dtoy",
+        mutate=_empty_policy_path,
+        outcome="BracketedRefusal",
+        kind="SchemaViolation",
+        fragment="names the output directory or one of its ancestors",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="policy_path_current_directory",
+        base_case="1dtoy",
+        mutate=_current_directory_policy_path,
+        outcome="BracketedRefusal",
+        kind="SchemaViolation",
+        fragment="names the output directory or one of its ancestors",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="policy_path_parent_directory",
+        base_case="1dtoy",
+        mutate=_parent_directory_policy_path,
+        outcome="BracketedRefusal",
+        kind="SchemaViolation",
+        fragment="names the output directory or one of its ancestors",
         error_class_name="ValidationError",
     ),
 ]

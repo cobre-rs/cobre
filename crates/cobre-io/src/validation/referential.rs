@@ -1053,7 +1053,7 @@ fn validate_variable_ref_entity(
 ) {
     use cobre_core::VariableRef;
 
-    let file = "system/generic_constraints.json";
+    let file = "constraints/generic_constraints.json";
     match var {
         VariableRef::HydroStorage { hydro_id, .. }
         | VariableRef::HydroEvaporation { hydro_id, .. }
@@ -3159,7 +3159,7 @@ mod tests {
             .errors()
             .into_iter()
             .filter(|e| e.kind == ErrorKind::InvalidReference)
-            .filter(|e| e.file == std::path::Path::new("system/generic_constraints.json"))
+            .filter(|e| e.file == std::path::Path::new("constraints/generic_constraints.json"))
             .collect();
         assert_eq!(
             inv.len(),
@@ -3250,7 +3250,7 @@ mod tests {
             .errors()
             .into_iter()
             .filter(|e| e.kind == ErrorKind::InvalidReference)
-            .filter(|e| e.file == std::path::Path::new("system/generic_constraints.json"))
+            .filter(|e| e.file == std::path::Path::new("constraints/generic_constraints.json"))
             .collect();
         assert!(
             inv.is_empty(),
@@ -3302,7 +3302,7 @@ mod tests {
             .errors()
             .into_iter()
             .filter(|e| e.kind == ErrorKind::InvalidReference)
-            .filter(|e| e.file == std::path::Path::new("system/generic_constraints.json"))
+            .filter(|e| e.file == std::path::Path::new("constraints/generic_constraints.json"))
             .collect();
         assert_eq!(
             inv.len(),
@@ -3365,7 +3365,7 @@ mod tests {
             .errors()
             .into_iter()
             .filter(|e| e.kind == ErrorKind::InvalidReference)
-            .filter(|e| e.file == std::path::Path::new("system/generic_constraints.json"))
+            .filter(|e| e.file == std::path::Path::new("constraints/generic_constraints.json"))
             .collect();
         assert_eq!(
             inv.len(),
@@ -3383,5 +3383,69 @@ mod tests {
             "message must name Hydro 7, got: {}",
             inv[0].message
         );
+    }
+
+    /// Both the dangling-reference error and the contract-stub warning name the
+    /// file generic constraints are read from.
+    #[test]
+    fn generic_constraint_reference_findings_name_the_constraints_file() {
+        use cobre_core::{
+            ConstraintExpression, GenericConstraint, LinearTerm, SlackConfig, VariableRef,
+        };
+
+        let dir = TempDir::new().unwrap();
+        make_minimal_case(&dir);
+        let mut data = parse_case(&dir);
+
+        let gc = GenericConstraint {
+            id: EntityId::from(1),
+            name: "test_constraint".to_string(),
+            description: None,
+            expression: ConstraintExpression {
+                terms: vec![
+                    LinearTerm::literal(
+                        1.0,
+                        VariableRef::HydroStorage {
+                            hydro_id: EntityId::from(99),
+                        },
+                    ),
+                    LinearTerm::literal(
+                        1.0,
+                        VariableRef::ContractImport {
+                            contract_id: EntityId::from(77),
+                            block_id: None,
+                        },
+                    ),
+                ],
+            },
+            slack: SlackConfig {
+                enabled: false,
+                penalty: None,
+            },
+            bound_lower_affine: None,
+            bound_upper_affine: None,
+        };
+        data.generic_constraints = vec![gc];
+
+        let mut ctx = ValidationContext::new();
+        validate_referential_integrity(&data, &mut ctx);
+
+        let of_constraint = |e: &&crate::validation::ValidationEntry| {
+            e.entity
+                .as_deref()
+                .is_some_and(|s| s.starts_with("GenericConstraint 1"))
+        };
+        let errors: Vec<_> = ctx.errors().into_iter().filter(of_constraint).collect();
+        let warnings: Vec<_> = ctx.warnings().into_iter().filter(of_constraint).collect();
+        assert_eq!(errors.len(), 1, "expected one error, got: {errors:?}");
+        assert_eq!(warnings.len(), 1, "expected one warning, got: {warnings:?}");
+        for entry in errors.into_iter().chain(warnings) {
+            assert_eq!(
+                entry.file,
+                std::path::Path::new("constraints/generic_constraints.json"),
+                "wrong file label on: {}",
+                entry.message
+            );
+        }
     }
 }

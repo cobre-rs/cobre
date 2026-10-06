@@ -20,9 +20,16 @@ use cobre_core::{
 
 use crate::StochasticError;
 use crate::par::fitting::find_season_for_date;
+use crate::season_cast::observation_occurrence_year;
 
 /// Aggregate fine-grained observations into one duration-weighted observation
 /// per `(entity, season, year)` group; each group inherits its earliest date.
+///
+/// The year is the season occurrence's ([`observation_occurrence_year`]), so a
+/// group is one occurrence: an ISO week-numbering year under a `Weekly` map, and
+/// one occurrence for a `Custom` season that spans 1 January. Under a `Weekly`
+/// map ISO week 53 carries season 51, so a 53-week year contributes one season-51
+/// value averaged over weeks 52 and 53 (week 53 is folded for fitting).
 ///
 /// # Errors
 ///
@@ -90,7 +97,7 @@ pub fn aggregate_observations_to_season(
                 ),
             })?;
 
-        let year = date.year();
+        let year = observation_occurrence_year(season_map, season_id, date);
         group_map
             .entry((entity_id, season_id, year))
             .or_default()
@@ -154,12 +161,12 @@ mod tests {
     use cobre_core::{
         EntityId,
         temporal::{SeasonCycleType, SeasonDefinition, SeasonMap, Stage},
-        test_support::{StageSpec, date, single_block},
+        test_support::{StageSpec, date, f64_bits_eq, single_block},
     };
 
     use super::aggregate_observations_to_season;
     use crate::StochasticError;
-    use crate::test_support::{MonthlyLabels, monthly_season_map};
+    use crate::test_support::{MonthlyLabels, monthly_season_map, weekly_season_map};
 
     // -----------------------------------------------------------------------
     // Helper constructors
@@ -534,5 +541,111 @@ mod tests {
             28,
             "Feb 2021 must have 28 days (non-leap year)"
         );
+    }
+
+    fn daily_observations(first: NaiveDate, last: NaiveDate) -> Vec<(EntityId, NaiveDate, f64)> {
+        first
+            .iter_days()
+            .take_while(|day| *day <= last)
+            .zip(0_u32..)
+            .map(|(day, i)| (EntityId::from(1), day, f64::from(i)))
+            .collect()
+    }
+
+    fn mean_over_days(
+        observations: &[(EntityId, NaiveDate, f64)],
+        first: NaiveDate,
+        last: NaiveDate,
+    ) -> f64 {
+        let values: Vec<f64> = observations
+            .iter()
+            .filter(|(_, day, _)| (first..=last).contains(day))
+            .map(|&(_, _, value)| value)
+            .collect();
+        values.iter().sum::<f64>() / f64::from(u32::try_from(values.len()).unwrap())
+    }
+
+    #[test]
+    fn weekly_history_is_grouped_by_iso_week_numbering_year() {
+        let season_map = weekly_season_map();
+        let observations = daily_observations(date(2013, 12, 30), date(2015, 1, 4));
+
+        let result = aggregate_observations_to_season(&observations, &[], &season_map).unwrap();
+
+        let season_0: Vec<(NaiveDate, f64)> = result
+            .iter()
+            .filter(|(_, day, _)| season_map.season_for_date(*day) == Some(0))
+            .map(|&(_, day, value)| (day, value))
+            .collect();
+        assert_eq!(
+            season_0.iter().map(|&(day, _)| day).collect::<Vec<_>>(),
+            vec![date(2013, 12, 30), date(2014, 12, 29)],
+            "one season-0 value per ISO week-numbering year: {season_0:?}"
+        );
+        let expected = [
+            mean_over_days(&observations, date(2013, 12, 30), date(2014, 1, 5)),
+            mean_over_days(&observations, date(2014, 12, 29), date(2015, 1, 4)),
+        ];
+        for (&(day, got), want) in season_0.iter().zip(expected) {
+            assert!(f64_bits_eq(got, want), "{day}: expected {want}, got {got}");
+        }
+    }
+
+    #[test]
+    fn iso_week_53_is_folded_into_the_last_weekly_season() {
+        let season_map = weekly_season_map();
+        let observations = daily_observations(date(2015, 12, 21), date(2016, 1, 3));
+
+        let result = aggregate_observations_to_season(&observations, &[], &season_map).unwrap();
+
+        assert_eq!(
+            result.len(),
+            1,
+            "weeks 52 and 53 of ISO 2015 form one value: {result:?}"
+        );
+        let (_, day, got) = result[0];
+        assert_eq!(day, date(2015, 12, 21));
+        let want = mean_over_days(&observations, date(2015, 12, 21), date(2016, 1, 3));
+        assert!(f64_bits_eq(got, want), "expected {want}, got {got}");
+    }
+
+    #[test]
+    fn a_custom_season_spanning_new_year_is_grouped_as_one_occurrence() {
+        let season = |id: usize, month_start: u32, month_end: u32| SeasonDefinition {
+            id,
+            label: format!("S{id}"),
+            month_start,
+            day_start: None,
+            month_end: Some(month_end),
+            day_end: None,
+        };
+        let season_map = SeasonMap {
+            cycle_type: SeasonCycleType::Custom,
+            seasons: vec![
+                season(0, 3, 5),
+                season(1, 6, 8),
+                season(2, 9, 11),
+                season(3, 12, 2),
+            ],
+        };
+        let (a, b, c) = (110.3, 230.7, 170.9);
+        let entity = EntityId::from(1);
+        let observations = vec![
+            (entity, date(2020, 12, 1), a),
+            (entity, date(2021, 1, 1), b),
+            (entity, date(2021, 2, 1), c),
+        ];
+
+        let result = aggregate_observations_to_season(&observations, &[], &season_map).unwrap();
+
+        assert_eq!(
+            result.len(),
+            1,
+            "the Dec 2020 - Feb 2021 occurrence forms one value: {result:?}"
+        );
+        let (_, day, got) = result[0];
+        assert_eq!(day, date(2020, 12, 1));
+        let want = (a * 31.0 + b * 31.0 + c * 28.0) / 90.0;
+        assert!(f64_bits_eq(got, want), "expected {want}, got {got}");
     }
 }

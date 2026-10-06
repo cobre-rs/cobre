@@ -6,6 +6,7 @@ use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
 
 use cobre_core::SeasonMap;
 use cobre_core::temporal::SUB_PERIOD_TOLERANCE_DAYS;
+use cobre_stochastic::season_cast::observation_occurrence_year;
 
 // ── Rules 27+29: Season ID range coverage and resolution consistency ──────────
 
@@ -134,8 +135,6 @@ pub(super) fn estimation_active(data: &ParsedData) -> bool {
 
 /// Rule 31: warns on finer-than-season observations (auto-aggregated), errors on coarser-than-season (cannot disaggregate).
 pub(super) fn check_observation_season_alignment(data: &ParsedData, ctx: &mut ValidationContext) {
-    use chrono::Datelike;
-
     if !estimation_active(data) {
         return;
     }
@@ -152,7 +151,7 @@ pub(super) fn check_observation_season_alignment(data: &ParsedData, ctx: &mut Va
             .or_else(|| season_map.season_for_date(row.start_date));
 
         if let Some(sid) = season_id {
-            let year = row.start_date.year();
+            let year = observation_occurrence_year(season_map, sid, row.start_date);
             *counts.entry((row.hydro_id.0, sid, year)).or_insert(0) += 1;
         }
     }
@@ -1744,6 +1743,49 @@ mod tests {
         assert!(
             target.is_some(),
             "expected an error for hydro 1 season 6 year 2005; got: {coarser_errors:?}"
+        );
+    }
+
+    #[test]
+    fn rule_31_counts_weekly_history_by_iso_week_numbering_year() {
+        use cobre_stochastic::test_support::weekly_season_map;
+
+        let mut stages = make_stages_with_seasons(0, /*with_season_map=*/ false);
+        stages.policy_graph.season_map = Some(weekly_season_map());
+        let last_monday = chrono::NaiveDate::from_ymd_opt(2017, 12, 25).unwrap();
+        let history: Vec<InflowHistoryRow> = chrono::NaiveDate::from_ymd_opt(2013, 12, 30)
+            .unwrap()
+            .iter_weeks()
+            .take_while(|monday| *monday <= last_monday)
+            .map(|monday| history_row(EntityId::from(1), monday, 100.0))
+            .collect();
+        let data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+
+        let mut ctx = ValidationContext::new();
+        check_observation_season_alignment(&data, &mut ctx);
+
+        let missing_week_1: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| e.message.contains("season 0 year 2015"))
+            .collect();
+        assert!(
+            missing_week_1.is_empty(),
+            "ISO 2015-W01 starts on 2014-12-29 and must count toward 2015; got: {missing_week_1:?}"
+        );
+        let week_53_fold: Vec<_> = ctx
+            .warnings()
+            .into_iter()
+            .filter(|w| {
+                w.message
+                    .contains("has 2 observations for season 51 year 2015")
+            })
+            .collect();
+        assert_eq!(
+            week_53_fold.len(),
+            1,
+            "ISO 2015-W52 and W53 must share one season-51 bucket; got: {:?}",
+            ctx.warnings()
         );
     }
 }

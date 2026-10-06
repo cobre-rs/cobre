@@ -341,6 +341,37 @@ pub(crate) fn occurrence_year(
     }
 }
 
+/// The year identifying which occurrence of season `season_id` an observation
+/// dated `date` belongs to: the ISO week-numbering year under a `Weekly` map,
+/// and under a `Monthly` or `Custom` map the year the occurrence starts in, so
+/// the days after 1 January of a season spanning it belong to the previous
+/// year. Falls back to `date.year()` when `season_id` is unknown or, under a
+/// `Monthly` or `Custom` map, `date` lies outside that season's own window.
+#[must_use]
+pub fn observation_occurrence_year(
+    season_map: &SeasonMap,
+    season_id: usize,
+    date: NaiveDate,
+) -> i32 {
+    let Some(season_def) = season_map.seasons.iter().find(|s| s.id == season_id) else {
+        return date.year();
+    };
+    let Some(next_day) = date.succ_opt() else {
+        return date.year();
+    };
+    let in_own_window = match season_map.cycle_type {
+        SeasonCycleType::Weekly => true,
+        SeasonCycleType::Monthly | SeasonCycleType::Custom => {
+            season_map.season_for_date(date) == Some(season_id)
+        }
+    };
+    if in_own_window {
+        occurrence_year(season_map, season_def, date, next_day)
+    } else {
+        date.year()
+    }
+}
+
 /// The calendar year identifying which occurrence of `season_def` `stage`
 /// belongs to. See [`occurrence_year`].
 pub(crate) fn resolved_year(
@@ -713,8 +744,10 @@ mod tests {
     use super::{
         DatedWindow, RealizedWindow, SeasonCycleType, SeasonDefinition, SeasonMap,
         SeasonPeriodWindow, Stage, StageCalendar, cast, merge_layered_windows, month_exclusive_end,
-        nth_previous_occurrence, post_study_calendar_stages, season_period_window,
+        nth_previous_occurrence, observation_occurrence_year, post_study_calendar_stages,
+        season_period_window,
     };
+    use crate::test_support::{MonthlyLabels, monthly_season_map, weekly_season_map};
     use chrono::NaiveDate;
     use cobre_core::PostStudyStage;
     use cobre_core::temporal::{
@@ -922,6 +955,51 @@ mod tests {
         assert_eq!(result.start, anchor.start);
         assert_eq!(result.end, anchor.end);
         assert_eq!(result.hours, anchor.hours);
+    }
+
+    #[test]
+    fn observation_occurrence_year_names_the_occurrence_a_dated_observation_belongs_to() {
+        let day = |y: i32, m: u32, d: u32| NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        let season = |id: usize, month_start: u32, month_end: u32| SeasonDefinition {
+            id,
+            label: format!("S{id}"),
+            month_start,
+            day_start: None,
+            month_end: Some(month_end),
+            day_end: None,
+        };
+        let weekly = weekly_season_map();
+        let custom = SeasonMap {
+            cycle_type: SeasonCycleType::Custom,
+            seasons: vec![
+                season(0, 3, 5),
+                season(1, 6, 8),
+                season(2, 9, 11),
+                season(3, 12, 2),
+            ],
+        };
+        let monthly = monthly_season_map(MonthlyLabels::ZeroBased);
+
+        let cases = [
+            (&weekly, 0, day(2013, 12, 30), 2014),
+            (&weekly, 0, day(2014, 12, 29), 2015),
+            (&weekly, 51, day(2016, 1, 3), 2015),
+            (&custom, 3, day(2020, 12, 1), 2020),
+            (&custom, 3, day(2021, 2, 15), 2020),
+            (&custom, 0, day(2021, 4, 1), 2021),
+            (&custom, 3, day(2021, 4, 1), 2021),
+            (&custom, 99, day(2021, 4, 1), 2021),
+            (&monthly, 11, day(2020, 12, 15), 2020),
+            (&monthly, 0, day(2021, 2, 1), 2021),
+        ];
+        for (season_map, season_id, date, want) in cases {
+            assert_eq!(
+                observation_occurrence_year(season_map, season_id, date),
+                want,
+                "{:?} season {season_id} on {date}",
+                season_map.cycle_type
+            );
+        }
     }
 
     fn april_2026() -> SeasonPeriodWindow {

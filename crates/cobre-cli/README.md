@@ -25,13 +25,23 @@ programmatic embedding of the solver, depend on `cobre-sddp` directly.
 All subcommands map failures to a typed exit code through the `CliError` type
 (`src/error.rs`). The mapping is stable across releases:
 
-| Exit Code | Variant      | Cause                                                                |
-| --------- | ------------ | -------------------------------------------------------------------- |
-| `0`       | Success      | Command completed without errors                                     |
-| `1`       | `Validation` | Case directory failed the validation pipeline                        |
-| `2`       | `Io`         | Filesystem error during loading or output                            |
-| `3`       | `Solver`     | LP infeasible or numerical solver failure during training/simulation |
-| `4`       | `Internal`   | Communication failure or unexpected state                            |
+| Exit Code | Variant      | Cause                                                                                                                                                                            |
+| --------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`       | Success      | Command completed without errors                                                                                                                                                 |
+| `1`       | `Validation` | Case directory failed the validation pipeline                                                                                                                                    |
+| `2`       | `Io`         | Filesystem error during loading or output                                                                                                                                        |
+| `3`       | `Solver`     | LP infeasible or numerical solver failure during training/simulation                                                                                                             |
+| `4`       | `Internal`   | Communication failure or unexpected state                                                                                                                                        |
+| `5`       | —            | `cobre run` only: a SIGTERM or SIGINT stopped training at an iteration boundary; the training outputs and policy checkpoint were written and a configured simulation was skipped |
+
+Exit code `5` is not a failure and has no `CliError` variant. Under MPI every
+rank exits 5, so the launcher reports 5. When writing the training outputs or
+the skipped-simulation files fails, the run exits with that failure's code
+instead. A signal received before training starts, or during a simulation,
+terminates the process by that signal, and so does a second SIGINT in a
+single-process run. Shells report 128 plus the signal number: 130 for SIGINT,
+143 for SIGTERM. Under MPI a repeated SIGINT only repeats the stop request, and
+aborting is left to the launcher.
 
 This contract enables `cobre run` to be driven from shell scripts and batch
 schedulers by inspecting the process exit code. `CliError` also carries the

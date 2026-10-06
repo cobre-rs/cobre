@@ -18,11 +18,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use commands::{
     init::{self, InitArgs},
-    run::{self, RunArgs},
+    run::{self, RunArgs, RunOutcome},
     schema::{self, SchemaArgs},
     validate::{self, ValidateArgs},
     version,
 };
+use error::CliError;
 
 /// Color output mode for stderr (no environment variable override).
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -91,16 +92,16 @@ fn main() {
         )
         .try_init();
 
-    let result = match cli.command {
-        Command::Init(args) => init::execute(args),
-        Command::Run(ref args) => run::execute(args),
-        Command::Validate(ref args) => validate::execute(args),
-        Command::Schema(ref args) => schema::execute(args),
-        Command::Version => version::execute(),
+    let result: Result<i32, CliError> = match cli.command {
+        Command::Init(args) => init::execute(args).map(|()| 0),
+        Command::Run(ref args) => run::execute(args).map(RunOutcome::exit_code),
+        Command::Validate(ref args) => validate::execute(args).map(|()| 0),
+        Command::Schema(ref args) => schema::execute(args).map(|()| 0),
+        Command::Version => version::execute().map(|()| 0),
     };
 
     match result {
-        Ok(()) => std::process::exit(0),
+        Ok(code) => std::process::exit(code),
         Err(e) => {
             e.format_error(&console::Term::stderr());
             std::process::exit(e.exit_code());

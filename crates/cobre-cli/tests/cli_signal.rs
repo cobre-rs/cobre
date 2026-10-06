@@ -84,6 +84,36 @@ const THREE_ITERATION_CONFIG: &str = r#"{
   "modeling": { "inflow_non_negativity": { "method": "none" } }
 }"#;
 
+const SLOW_THREE_ITERATION_CONFIG: &str = r#"{
+  "training": {
+    "selection": { "method": "sampled", "forward_passes": 32 },
+    "stopping_rules": [{ "type": "iteration_limit", "limit": 3 }],
+    "scenario_source": {
+      "seed": 42,
+      "inflow": { "scheme": "in_sample" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" }
+    }
+  },
+  "simulation": { "enabled": true, "selection": { "method": "sampled", "num_scenarios": 100 } },
+  "modeling": { "inflow_non_negativity": { "method": "none" } }
+}"#;
+
+const NO_SIMULATION_CONFIG: &str = r#"{
+  "training": {
+    "selection": { "method": "sampled", "forward_passes": 1 },
+    "stopping_rules": [{ "type": "iteration_limit", "limit": 1000 }],
+    "scenario_source": {
+      "seed": 42,
+      "inflow": { "scheme": "in_sample" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" }
+    }
+  },
+  "simulation": { "enabled": false },
+  "modeling": { "inflow_non_negativity": { "method": "none" } }
+}"#;
+
 fn case_with_config(config_json: &str) -> TempDir {
     let case = TempDir::new().unwrap();
     copy_dir_recursive(&case_dir("1dtoy"), case.path());
@@ -198,6 +228,18 @@ fn wait_until(child: &mut Child, deadline: Instant) -> ExitStatus {
     }
 }
 
+/// The stderr lines not yet consumed, through the end of the stream.
+fn remaining_lines(rx: &Receiver<String>, deadline: Instant) -> Vec<String> {
+    let mut lines = Vec::new();
+    loop {
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(line) => lines.push(line),
+            Err(RecvTimeoutError::Disconnected) => return lines,
+            Err(RecvTimeoutError::Timeout) => panic!("stderr stayed open after the run exited"),
+        }
+    }
+}
+
 fn read_json(path: &Path) -> Value {
     let text = fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("{} must be readable: {e}", path.display()));
@@ -217,13 +259,20 @@ fn assert_signal_stop_outputs(out: &Path) {
         "the stop must land on a boundary after the signalled iteration, got {completed}"
     );
 
+    assert_checkpoint_at(out, completed);
+    assert_skipped_simulation(out);
+}
+
+fn assert_checkpoint_at(out: &Path, completed: u64) {
     let checkpoint = cobre_io::read_policy_checkpoint(&out.join("policy"))
         .expect("the stopped run must leave a readable policy checkpoint");
     assert_eq!(
         u64::from(checkpoint.metadata.producer.completed_iterations),
         completed
     );
+}
 
+fn assert_skipped_simulation(out: &Path) {
     let simulation = read_json(&out.join("simulation/metadata.json"));
     assert_eq!(simulation["status"], "partial");
     assert_eq!(
@@ -245,8 +294,8 @@ fn assert_one_signal_stops_gracefully(sig: &str) {
     let status = wait_until(&mut child, deadline);
 
     assert_eq!(
-        status.signal(),
-        None,
+        status.code(),
+        Some(5),
         "the run must stop gracefully: {status}"
     );
     assert_signal_stop_outputs(out.path());
@@ -281,8 +330,8 @@ fn repeated_sigterm_stays_graceful_through_the_final_writes() {
     let status = wait_until(&mut child, deadline);
 
     assert_eq!(
-        status.signal(),
-        None,
+        status.code(),
+        Some(5),
         "the run must stop gracefully: {status}"
     );
     assert_signal_stop_outputs(out.path());
@@ -344,6 +393,7 @@ fn sigterm_during_the_training_writes_never_completes_the_simulation() {
     let out = out.path();
     if status.signal().is_none() {
         println!("branch a");
+        assert_eq!(status.code(), Some(5), "{status}");
         let training = read_json(&out.join("training/metadata.json"));
         assert_eq!(training["status"], "complete");
         assert_eq!(
@@ -359,6 +409,64 @@ fn sigterm_during_the_training_writes_never_completes_the_simulation() {
         assert_eq!(status.signal(), Some(SIGTERM), "{status}");
         assert!(!out.join("simulation/_SUCCESS").exists());
     }
+}
+
+#[test]
+fn signal_coincident_with_the_iteration_limit_exits_5_with_complete_training() {
+    let case = case_with_config(SLOW_THREE_ITERATION_CONFIG);
+    let out = output_with_a_stale_simulation_partition();
+    let deadline = Instant::now() + TIMEOUT;
+    let (mut child, rx) = spawn_run(None, case.path(), out.path());
+
+    wait_for_line(
+        &mut child,
+        &rx,
+        |line| line.starts_with("Training   2/3 iter"),
+        deadline,
+    );
+    send(&mut child, "TERM");
+    let status = wait_until(&mut child, deadline);
+    let timings: Vec<String> = remaining_lines(&rx, deadline)
+        .into_iter()
+        .filter(|line| line.starts_with("Training   3/3") || line.contains("Output written to"))
+        .collect();
+    println!("{timings:#?}");
+
+    assert_ne!(
+        status.signal(),
+        Some(SIGTERM),
+        "iteration 3 plus the training writes must outlast the signal's delivery: {timings:#?}"
+    );
+    assert_eq!(status.code(), Some(5), "{status}");
+    let out = out.path();
+    let training = read_json(&out.join("training/metadata.json"));
+    assert_eq!(training["status"], "complete");
+    assert_eq!(
+        training["convergence"]["termination_reason"],
+        "iteration_limit"
+    );
+    assert_eq!(training["iterations"]["completed"], 3);
+    assert_checkpoint_at(out, 3);
+    assert_skipped_simulation(out);
+}
+
+#[test]
+fn sigterm_stop_without_a_configured_simulation_exits_5() {
+    let case = case_with_config(NO_SIMULATION_CONFIG);
+    let out = TempDir::new().unwrap();
+    let deadline = Instant::now() + TIMEOUT;
+    let (mut child, rx) = spawn_run(None, case.path(), out.path());
+
+    wait_for_line(&mut child, &rx, is_progress_line, deadline);
+    send(&mut child, "TERM");
+    let status = wait_until(&mut child, deadline);
+
+    assert_eq!(status.code(), Some(5), "{status}");
+    let out = out.path();
+    let training = read_json(&out.join("training/metadata.json"));
+    assert_eq!(training["status"], "partial");
+    assert_checkpoint_at(out, training["iterations"]["completed"].as_u64().unwrap());
+    assert!(!out.join("simulation/metadata.json").exists());
 }
 
 #[cfg(feature = "mpi")]
@@ -411,9 +519,10 @@ mod mpi {
     }
 
     fn assert_graceful_launcher_exit(status: ExitStatus) {
-        assert!(
-            status.code().is_some(),
-            "the launcher must exit, not die by a signal: {status}"
+        assert_eq!(
+            status.code(),
+            Some(5),
+            "the launcher must report every rank's exit 5: {status}"
         );
     }
 
@@ -427,8 +536,13 @@ mod mpi {
         wait_for_line(&mut child, &rx, is_progress_line, deadline);
         signal_pids(&[rank_pid(out.path(), 1)], "TERM");
         let status = wait_until(&mut child, deadline);
+        let stderr = remaining_lines(&rx, deadline);
 
         assert_graceful_launcher_exit(status);
+        assert!(
+            !stderr.iter().any(|line| line.contains("MPI_Abort")),
+            "{stderr:#?}"
+        );
         assert_signal_stop_outputs(out.path());
     }
 

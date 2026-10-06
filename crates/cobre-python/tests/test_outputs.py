@@ -251,3 +251,39 @@ def test_d28_convergence_has_iterations(d28_output: pathlib.Path) -> None:
     conv_path = d28_output / "training" / "convergence.parquet"
     table = pq.read_table(conv_path)
     assert len(table) > 0, "convergence.parquet must have at least one row"
+
+
+# ---------------------------------------------------------------------------
+# Phase success markers
+# ---------------------------------------------------------------------------
+
+
+def _run_1dtoy_with_a_directory_at(output_dir: pathlib.Path, blocked: str) -> None:
+    import cobre.errors
+    import cobre.run
+
+    (output_dir / blocked).mkdir(parents=True)
+    with pytest.raises(cobre.errors.CaseIoError):
+        cobre.run.run(VALID_CASE, output_dir=str(output_dir))
+
+
+def test_run_writes_no_training_marker_when_the_last_training_write_fails(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A failed training write leaves no training/_SUCCESS beside the files written before it."""
+    _run_1dtoy_with_a_directory_at(tmp_path, "training/solver/retry_histogram.parquet")
+
+    assert (tmp_path / "training" / "metadata.json").is_file()
+    assert not (tmp_path / "training" / "_SUCCESS").exists()
+
+
+def test_run_writes_no_simulation_marker_when_the_last_simulation_write_fails(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A failed simulation metadata write leaves no simulation/_SUCCESS."""
+    _run_1dtoy_with_a_directory_at(tmp_path, "simulation/metadata.json.tmp")
+
+    assert not (tmp_path / "simulation" / "_SUCCESS").exists()
+    assert not (tmp_path / "simulation" / "metadata.json").exists()
+    assert (tmp_path / "simulation" / "scenario_summary.parquet").is_file()
+    assert (tmp_path / "training" / "_SUCCESS").is_file()

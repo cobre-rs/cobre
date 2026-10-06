@@ -1633,3 +1633,72 @@ fn infeasible_training_lp_exits_3_naming_stage_iteration_and_scenario() {
         ))
         .stderr(predicate::str::contains("report this at").not());
 }
+
+// ── Phase success markers ─────────────────────────────────────────────────────
+
+fn assert_empty_file(path: &Path) {
+    let metadata =
+        fs::metadata(path).unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
+    assert!(metadata.is_file(), "{} must be a file", path.display());
+    assert_eq!(metadata.len(), 0, "{} must be empty", path.display());
+}
+
+fn run_1dtoy_with_a_directory_at(blocked: &str) -> TempDir {
+    let out = TempDir::new().unwrap();
+    fs::create_dir_all(out.path().join(blocked)).unwrap();
+    cobre()
+        .args([
+            "run",
+            case_dir("1dtoy").to_str().unwrap(),
+            "--output",
+            out.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .failure();
+    out
+}
+
+#[test]
+fn run_writes_a_success_marker_for_each_executed_phase() {
+    let out = TempDir::new().unwrap();
+    run_case(&case_dir("1dtoy"), out.path());
+
+    assert_empty_file(&out.path().join("training/_SUCCESS"));
+    assert_empty_file(&out.path().join("simulation/_SUCCESS"));
+}
+
+#[test]
+fn training_only_run_writes_no_simulation_success_marker() {
+    let dir = TempDir::new().unwrap();
+    make_valid_case(dir.path(), None, None, None, None);
+    let out = TempDir::new().unwrap();
+    run_case(dir.path(), out.path());
+
+    assert_empty_file(&out.path().join("training/_SUCCESS"));
+    assert!(!out.path().join("simulation/_SUCCESS").exists());
+}
+
+#[test]
+fn run_writes_no_training_marker_when_the_last_training_write_fails() {
+    let out = run_1dtoy_with_a_directory_at("training/solver/retry_histogram.parquet");
+
+    assert!(out.path().join("training/metadata.json").is_file());
+    assert!(
+        !out.path().join("training/_SUCCESS").exists(),
+        "training/_SUCCESS must not exist when a training write failed"
+    );
+    assert!(!out.path().join("simulation/_SUCCESS").exists());
+}
+
+#[test]
+fn run_writes_no_simulation_marker_when_the_last_simulation_write_fails() {
+    let out = run_1dtoy_with_a_directory_at("simulation/scenario_summary.parquet");
+
+    assert!(out.path().join("simulation/metadata.json").is_file());
+    assert!(out.path().join("training/_SUCCESS").is_file());
+    assert!(
+        !out.path().join("simulation/_SUCCESS").exists(),
+        "simulation/_SUCCESS must not exist when a simulation write failed"
+    );
+}

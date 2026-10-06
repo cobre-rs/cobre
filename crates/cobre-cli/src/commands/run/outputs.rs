@@ -23,6 +23,7 @@ use cobre_io::write_row_selection_records;
 use cobre_io::write_simulation_results;
 use cobre_io::write_simulation_solver_stats;
 use cobre_io::write_solver_stats;
+use cobre_io::write_success_marker;
 use cobre_io::write_training_results;
 use cobre_sddp::SolverStatsDelta;
 use cobre_sddp::StudySetup;
@@ -93,8 +94,7 @@ pub(super) fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(),
             .map_err(CliError::from)?;
     }
 
-    // No evaporation-modeled hydro writes no file (FPHA "if-any" behavior);
-    // mirror on the Python side: `write_evaporation_models_if_any`.
+    // No evaporation-modeled hydro writes no file (FPHA "if-any" behavior).
     let evaporation_rows = build_evaporation_model_rows(&args.setup.hydro_models, args.system);
     if !evaporation_rows.is_empty() {
         let evaporation_path = args
@@ -104,8 +104,7 @@ pub(super) fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(),
         write_evaporation_models(&evaporation_path, &evaporation_rows).map_err(CliError::from)?;
     }
 
-    // Off by default, so a default run writes no file and stays byte-identical;
-    // mirror on the Python side: `write_fpha_deviation_points_if_any`.
+    // Off by default, so a default run writes no file and stays byte-identical.
     let deviation_point_rows = args.setup.hydro_models.fpha_deviation_point_rows.as_slice();
     if args.config.exports.fpha_deviation_points && !deviation_point_rows.is_empty() {
         let deviation_points_path = args
@@ -116,10 +115,9 @@ pub(super) fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(),
             .map_err(CliError::from)?;
     }
 
-    // No generic constraint writes no file, so a default run stays byte-identical;
-    // mirror on the Python side: `write_generic_constraint_echo_if_any`. The writer
-    // is called fully qualified, not imported, so the Python-parity checker's
-    // `cobre_io::write_*` match sees it.
+    // No generic constraint writes no file, so a default run stays byte-identical.
+    // The writer is called fully qualified, not imported, so the Python-parity
+    // checker's `cobre_io::write_*` match sees it.
     if !args.system.generic_constraints().is_empty() {
         let rows = build_generic_constraint_echo_rows(args.setup, args.system);
         let echo_path = args
@@ -141,6 +139,8 @@ pub(super) fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(),
         write_row_selection_records(args.output_dir, &args.training_output.cut_selection_records)
             .map_err(CliError::from)?;
     }
+
+    write_success_marker(&args.output_dir.join("training")).map_err(CliError::from)?;
 
     if !args.quiet {
         let write_secs = write_start.elapsed().as_secs_f64();
@@ -208,6 +208,8 @@ pub(super) fn write_simulation_outputs(args: &WriteSimulationArgs<'_>) -> Result
         })
         .collect();
     write_scenario_summary(args.output_dir, &scenario_summary_rows).map_err(CliError::from)?;
+
+    write_success_marker(&args.output_dir.join("simulation")).map_err(CliError::from)?;
 
     if !args.quiet {
         let write_secs = write_start.elapsed().as_secs_f64();

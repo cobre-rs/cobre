@@ -82,6 +82,7 @@ use cobre_io::write_scaling_report;
 use cobre_io::write_simulation_results;
 use cobre_io::write_simulation_solver_stats;
 use cobre_io::write_solver_stats;
+use cobre_io::write_success_marker;
 use cobre_io::write_training_results;
 use cobre_sddp::BoundaryLoadRequest;
 use cobre_sddp::FullFcf;
@@ -501,9 +502,8 @@ fn single_process_distribution(n_threads: usize) -> DistributionInfo {
     }
 }
 
-/// Write the training artifacts: policy checkpoint, training results, solver
-/// stats, and cut selection records.
-pub(crate) fn write_training_artifacts(
+/// Write every training-phase output, ending with the phase marker.
+pub(crate) fn write_training_outputs(
     output_dir: &Path,
     system: &System,
     config: &Config,
@@ -527,17 +527,6 @@ pub(crate) fn write_training_artifacts(
     )
     .map_err(|e| format!("{POLICY_CHECKPOINT_ERROR_PREFIX}: {e}"))?;
 
-    if !training.result.solver_stats_log.is_empty() {
-        let rows = solver_stats_log_to_rows(&training.result.solver_stats_log);
-        write_solver_stats(output_dir, &rows)
-            .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: solver stats output: {e}"))?;
-    }
-
-    if !training.output.cut_selection_records.is_empty() {
-        write_row_selection_records(output_dir, &training.output.cut_selection_records)
-            .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: cut selection output: {e}"))?;
-    }
-
     let training_ctx = OutputContext {
         hostname: get_hostname(),
         solver: active_solver_metadata_id().to_string(),
@@ -553,18 +542,6 @@ pub(crate) fn write_training_artifacts(
     write_training_results(output_dir, &training.output, system, config, &training_ctx)
         .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: training results output: {e}"))?;
 
-    Ok(())
-}
-
-/// Write the trained FPHA hyperplanes sidecar, when the model produced any.
-///
-/// Both `run()` and `Study.train()` reach this through the shared
-/// `Study::train_native`, so they emit it identically. Training-only:
-/// simulation-only runs do not write it.
-pub(crate) fn write_fpha_hyperplanes_if_any(
-    output_dir: &Path,
-    setup: &StudySetup,
-) -> Result<(), String> {
     if !setup.hydro_models.fpha_export_rows.is_empty() {
         let fpha_path = output_dir
             .join("hydro_models")
@@ -573,43 +550,27 @@ pub(crate) fn write_fpha_hyperplanes_if_any(
             format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write fpha_hyperplanes: {e}")
         })?;
     }
-    Ok(())
-}
 
-/// Write the resolved evaporation-model coefficients sidecar, when the case
-/// models evaporation for at least one hydro.
-///
-/// Both `run()` and `Study.train()` reach this through the shared
-/// `Study::train_native`, which keeps them matched to the CLI's
-/// `write_evaporation_models` output (the Python-parity hard rule).
-pub(crate) fn write_evaporation_models_if_any(
-    output_dir: &Path,
-    setup: &StudySetup,
-    system: &System,
-) -> Result<(), String> {
-    let rows = build_evaporation_model_rows(&setup.hydro_models, system);
-    if !rows.is_empty() {
+    let evaporation_rows = build_evaporation_model_rows(&setup.hydro_models, system);
+    if !evaporation_rows.is_empty() {
         let evaporation_path = output_dir
             .join("hydro_models")
             .join("evaporation_models.parquet");
-        write_evaporation_models(&evaporation_path, &rows).map_err(|e| {
+        write_evaporation_models(&evaporation_path, &evaporation_rows).map_err(|e| {
             format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write evaporation_models: {e}")
         })?;
     }
-    Ok(())
-}
 
-/// Write the resolved generic-constraint echo sidecar, when the case declares at
-/// least one generic constraint.
-///
-/// Both `run()` and `Study.train()` reach this through the shared
-/// `Study::train_native`, which keeps them matched to the CLI's
-/// `write_generic_constraint_echo` output (the Python-parity hard rule).
-pub(crate) fn write_generic_constraint_echo_if_any(
-    output_dir: &Path,
-    setup: &StudySetup,
-    system: &System,
-) -> Result<(), String> {
+    let deviation_point_rows = setup.hydro_models.fpha_deviation_point_rows.as_slice();
+    if config.exports.fpha_deviation_points && !deviation_point_rows.is_empty() {
+        let deviation_points_path = output_dir
+            .join("hydro_models")
+            .join("fpha_deviation_points.parquet");
+        write_fpha_deviation_points(&deviation_points_path, deviation_point_rows).map_err(|e| {
+            format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write fpha_deviation_points: {e}")
+        })?;
+    }
+
     if !system.generic_constraints().is_empty() {
         let rows = build_generic_constraint_echo_rows(setup, system);
         let echo_path = output_dir
@@ -619,48 +580,25 @@ pub(crate) fn write_generic_constraint_echo_if_any(
             format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write generic_constraint_echo: {e}")
         })?;
     }
-    Ok(())
-}
 
-/// Write the run-level fixed post-horizon commitment echo.
-///
-/// Both `run()` and `Study.train()` reach this through the shared
-/// `Study::train_native`, which keeps them matched to the CLI's
-/// `write_fixed_delivery` output (the Python-parity hard rule).
-pub(crate) fn write_fixed_delivery_if_any(
-    output_dir: &Path,
-    setup: &StudySetup,
-    system: &System,
-) -> Result<(), String> {
-    let rows = build_fixed_delivery_rows(setup, system);
-    write_fixed_delivery(output_dir, &rows)
-        .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write fixed_delivery: {e}"))
-}
+    let fixed_rows = build_fixed_delivery_rows(setup, system);
+    write_fixed_delivery(output_dir, &fixed_rows)
+        .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write fixed_delivery: {e}"))?;
 
-/// Write the per-sampled-point FPHA deviation table sidecar, when the run opted
-/// in (`config.exports.fpha_deviation_points`) AND the fit produced any points.
-///
-/// Off by default, so a default run writes no file and is byte-identical to the
-/// CLI. Both `run()` and `Study.train()` reach this through the shared
-/// `Study::train_native`, which keeps them matched to the CLI's
-/// `write_fpha_deviation_points` output (the Python-parity hard rule).
-pub(crate) fn write_fpha_deviation_points_if_any(
-    output_dir: &Path,
-    setup: &StudySetup,
-    config: &Config,
-) -> Result<(), String> {
-    if !config.exports.fpha_deviation_points {
-        return Ok(());
+    if !training.result.solver_stats_log.is_empty() {
+        let rows = solver_stats_log_to_rows(&training.result.solver_stats_log);
+        write_solver_stats(output_dir, &rows)
+            .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: solver stats output: {e}"))?;
     }
-    let rows = setup.hydro_models.fpha_deviation_point_rows.as_slice();
-    if !rows.is_empty() {
-        let deviation_points_path = output_dir
-            .join("hydro_models")
-            .join("fpha_deviation_points.parquet");
-        write_fpha_deviation_points(&deviation_points_path, rows).map_err(|e| {
-            format!("{OUTPUT_WRITE_ERROR_PREFIX}: failed to write fpha_deviation_points: {e}")
-        })?;
+
+    if !training.output.cut_selection_records.is_empty() {
+        write_row_selection_records(output_dir, &training.output.cut_selection_records)
+            .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: cut selection output: {e}"))?;
     }
+
+    write_success_marker(&output_dir.join("training"))
+        .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: training success marker: {e}"))?;
+
     Ok(())
 }
 
@@ -827,6 +765,8 @@ pub(crate) fn run_simulation_phase_py(
     };
     write_simulation_results(output_dir, &sim_out, &sim_ctx)
         .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: simulation results output: {e}"))?;
+    write_success_marker(&output_dir.join("simulation"))
+        .map_err(|e| format!("{OUTPUT_WRITE_ERROR_PREFIX}: simulation success marker: {e}"))?;
 
     Ok(sim_summary)
 }

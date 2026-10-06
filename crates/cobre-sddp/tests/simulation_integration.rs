@@ -900,7 +900,7 @@ fn train_simulate_write_cycle() {
         assert_eq!(value["problem_dimensions"]["num_hydros"].as_u64(), Some(1));
     }
 
-    assert!(output_dir.join("training/_SUCCESS").is_file());
+    assert!(!output_dir.join("training/_SUCCESS").exists());
 
     let codes_path = output_dir.join("training/dictionaries/codes.json");
     assert!(codes_path.is_file());
@@ -913,7 +913,7 @@ fn train_simulate_write_cycle() {
     let sim_metadata_path = output_dir.join("simulation/metadata.json");
     assert!(sim_metadata_path.is_file());
 
-    assert!(output_dir.join("simulation/_SUCCESS").is_file());
+    assert!(!output_dir.join("simulation/_SUCCESS").exists());
 
     let policy_manifest_path = policy_dir.join("manifest.bin");
     assert!(policy_manifest_path.is_file());

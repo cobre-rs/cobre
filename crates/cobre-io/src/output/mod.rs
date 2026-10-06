@@ -7,9 +7,10 @@
 //! result tables, the training dictionaries, and the training/simulation
 //! completion metadata. It does not write the simulation scenario Parquet
 //! data, the policy checkpoint, provenance, hydro-model exports, stochastic
-//! echoes, or solver-stats sidecars — each caller writes those directly
-//! through the individual writer modules in this crate, and the CLI and the
-//! Python bindings must stay in parity on the full artifact set.
+//! echoes, solver-stats sidecars, or the `_SUCCESS` phase markers — each
+//! caller writes those directly through the individual writer modules in this
+//! crate, and the CLI and the Python bindings must stay in parity on the full
+//! artifact set.
 
 use chrono::{Datelike, NaiveDate};
 
@@ -49,7 +50,9 @@ pub use manifest::{
     write_simulation_metadata, write_training_metadata,
 };
 pub use provenance::write_provenance_report;
-pub use results_writer::{write_results, write_simulation_results, write_training_results};
+pub use results_writer::{
+    write_results, write_simulation_results, write_success_marker, write_training_results,
+};
 pub use scaling_report::write_scaling_report;
 pub use simulation_writer::{SimulationParquetWriter, simulation_family_subpaths};
 pub use software::{SOFTWARE_NAME, SOFTWARE_VERSION, SoftwareIdentity};

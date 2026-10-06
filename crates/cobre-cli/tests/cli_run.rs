@@ -1415,3 +1415,100 @@ fn simulation_only_refuses_a_policy_with_a_wider_stored_basis() {
         .stderr(predicate::str::contains("written by cobre 0.0.1"))
         .stderr(predicate::str::contains("stored basis for node").not());
 }
+
+fn policy_mode_config(mode: &str) -> String {
+    format!(
+        r#"{{
+    "training": {{
+        "selection": {{ "method": "sampled", "forward_passes": 1 }},
+        "stopping_rules": [ {{ "type": "iteration_limit", "limit": 2 }} ],
+        "scenario_source": {{
+            "seed": 42,
+            "inflow": {{ "scheme": "in_sample" }},
+            "load": {{ "scheme": "in_sample" }},
+            "ncs": {{ "scheme": "in_sample" }}
+        }}
+    }},
+    "simulation": {{ "enabled": false }},
+    "modeling": {{ "inflow_non_negativity": {{ "method": "none" }} }},
+    "policy": {{ "mode": "{mode}" }}
+}}"#
+    )
+}
+
+#[test]
+fn missing_policy_directory_is_reported_for_each_load_kind() {
+    let cases = [
+        (
+            policy_mode_config("warm_start"),
+            "Cannot warm-start without a prior policy.",
+        ),
+        (
+            policy_mode_config("resume"),
+            "Cannot resume without a prior checkpoint.",
+        ),
+        (
+            CONFIG_SIMULATION_ONLY_JSON.to_string(),
+            "Cannot run simulation-only mode without a trained policy.",
+        ),
+    ];
+    for (config, sentence) in cases {
+        let case = TempDir::new().unwrap();
+        copy_dir_recursive(&case_dir("1dtoy"), case.path());
+        write_file(case.path(), "config.json", &config);
+        let output = TempDir::new().unwrap();
+        cobre()
+            .args([
+                "run",
+                case.path().to_str().unwrap(),
+                "--output",
+                output.path().to_str().unwrap(),
+                "--quiet",
+            ])
+            .assert()
+            .failure()
+            .code(4)
+            .stderr(predicate::str::contains("Policy directory not found: "))
+            .stderr(predicate::str::contains(sentence));
+    }
+}
+
+#[test]
+fn unreadable_policy_checkpoint_is_reported_as_a_read_failure() {
+    let case = TempDir::new().unwrap();
+    copy_dir_recursive(&case_dir("1dtoy"), case.path());
+    write_file(case.path(), "config.json", &policy_mode_config("fresh"));
+    let output = TempDir::new().unwrap();
+    cobre()
+        .args([
+            "run",
+            case.path().to_str().unwrap(),
+            "--output",
+            output.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .success();
+
+    fs::write(output.path().join("policy/manifest.bin"), b"garbage").unwrap();
+
+    write_file(
+        case.path(),
+        "config.json",
+        &policy_mode_config("warm_start"),
+    );
+    cobre()
+        .args([
+            "run",
+            case.path().to_str().unwrap(),
+            "--output",
+            output.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .failure()
+        .code(4)
+        .stderr(predicate::str::contains(
+            "failed to read policy checkpoint: ",
+        ));
+}

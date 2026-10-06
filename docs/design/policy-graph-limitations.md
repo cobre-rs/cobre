@@ -232,10 +232,10 @@ Their intent survives as standing engine behavior, not as re-added validation:
   (rule 40), not a rejection. `check_node_graph`'s surviving structural rules
   (well-formedness, every edge `t → t+1`, the pointer bound) are the whole gate.
 
-Retired rule numbers in the Layer-5b catalog
-(`crates/cobre-io/src/validation/semantic/mod.rs`) are **never reused** — a
-retired number is marked as retired and left unoccupied, so a rule number always
-denotes the same behavior across the project's life.
+Retired rule ids in the cobre-io validation rule table
+(`crates/cobre-io/src/validation/rules.rs`) are **never reused** — a retired
+id is listed as never assignable, so a rule id always denotes the same
+behavior across the project's life.
 
 ## References
 

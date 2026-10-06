@@ -1,6 +1,6 @@
 //! Layer 5b — correlation-domain semantic validation.
 
-use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::super::{ValidationContext, rules, schema::ParsedData};
 use super::CORR_TOLERANCE;
 
 // ── Rules 14-16: Correlation matrix validation ────────────────────────────────
@@ -33,8 +33,8 @@ pub(super) fn check_correlation_matrices(data: &ParsedData, ctx: &mut Validation
                     let val = group.matrix[i][j];
 
                     if i == j && (val - 1.0).abs() > CORR_TOLERANCE {
-                        ctx.add_error(
-                            ErrorKind::BusinessRuleViolation,
+                        ctx.emit(
+                            &rules::SEMANTIC_CORRELATION_DIAGONAL,
                             "scenarios/correlation.json",
                             Some(format!("CorrelationGroup {group_name}")),
                             format!(
@@ -46,8 +46,8 @@ pub(super) fn check_correlation_matrices(data: &ParsedData, ctx: &mut Validation
                     }
 
                     if i != j && !((-1.0_f64)..=1.0).contains(&val) {
-                        ctx.add_error(
-                            ErrorKind::BusinessRuleViolation,
+                        ctx.emit(
+                            &rules::SEMANTIC_CORRELATION_OFF_DIAGONAL_RANGE,
                             "scenarios/correlation.json",
                             Some(format!("CorrelationGroup {group_name}")),
                             format!(
@@ -62,8 +62,8 @@ pub(super) fn check_correlation_matrices(data: &ParsedData, ctx: &mut Validation
                     if i < j {
                         let symmetric = group.matrix[j][i];
                         if (val - symmetric).abs() > CORR_TOLERANCE {
-                            ctx.add_error(
-                                ErrorKind::BusinessRuleViolation,
+                            ctx.emit(
+                                &rules::SEMANTIC_CORRELATION_ASYMMETRIC,
                                 "scenarios/correlation.json",
                                 Some(format!("CorrelationGroup {group_name}")),
                                 format!(
@@ -97,8 +97,8 @@ pub(super) fn check_correlation_same_type(data: &ParsedData, ctx: &mut Validatio
             let first_type = &group.entities[0].entity_type;
             for entity in &group.entities[1..] {
                 if entity.entity_type != *first_type {
-                    ctx.add_error(
-                        ErrorKind::BusinessRuleViolation,
+                    ctx.emit(
+                        &rules::SEMANTIC_CORRELATION_MIXED_ENTITY_TYPES,
                         "scenarios/correlation.json",
                         Some(format!("CorrelationGroup '{}'", group.name)),
                         format!(
@@ -236,6 +236,47 @@ mod tests {
                 .iter()
                 .any(|e| e.kind == ErrorKind::BusinessRuleViolation),
             "off-diagonal > 1.0 should produce BusinessRuleViolation"
+        );
+    }
+
+    // ── Rule 16a: Correlation group entity-type coherence ─────────────────────
+
+    /// A group mixing `inflow` and `load` entities produces exactly one
+    /// `BusinessRuleViolation` error and no warning.
+    #[test]
+    fn test_5b_correlation_mixed_entity_types_rejected() {
+        let mut group = make_corr_group("Mixed", vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+        group.entities[1].entity_type = "load".to_string();
+        let corr = make_correlation(group);
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            Some(corr),
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+        let errors = ctx.errors();
+        let relevant: Vec<_> = errors
+            .iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("must share the same entity_type")
+            })
+            .collect();
+        assert_eq!(
+            relevant.len(),
+            1,
+            "expected exactly one same-entity_type BusinessRuleViolation, got: {errors:?}"
+        );
+        assert!(
+            !ctx.warnings()
+                .iter()
+                .any(|w| w.message.contains("entity_type")),
+            "mixed entity types must not warn, got: {:?}",
+            ctx.warnings()
         );
     }
 

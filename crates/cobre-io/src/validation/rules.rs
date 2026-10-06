@@ -352,6 +352,45 @@ declare_rules! {
     SEMANTIC_CYCLIC_GRAPH_DISCOUNT_RATE = "semantic.5b.3",
         Semantic, InvalidValue, Error,
         "A cyclic policy graph has an annual_discount_rate that is not positive";
+    SEMANTIC_PENALTY_DEFICIT_NOT_ABOVE_GENERATION_VIOLATION = "semantic.5b.8",
+        Semantic, ModelQuality, Warning,
+        "The maximum deficit-segment cost does not exceed a hydro's generation_violation_below_cost (both $/MWh)";
+    SEMANTIC_PENALTY_FLOW_VIOLATION_NOT_ABOVE_RESOURCE = "semantic.5b.9",
+        Semantic, ModelQuality, Warning,
+        "A hydro's minimum flow-violation cost does not exceed the maximum spillage or diversion cost over all hydros (both $/(m³/s·h))";
+    SEMANTIC_PENALTY_RESOURCE_COST_NOT_POSITIVE = "semantic.5b.10",
+        Semantic, ModelQuality, Warning,
+        "A hydro's spillage_cost or diversion_cost is not positive";
+    SEMANTIC_FPHA_TURBINED_COST_NEGATIVE = "semantic.5b.11",
+        Semantic, BusinessRuleViolation, Error,
+        "An FPHA hydro has a negative turbined_cost";
+    SEMANTIC_INFLOW_STD_ZERO = "semantic.5b.12",
+        Semantic, ModelQuality, Warning,
+        "An inflow seasonal standard deviation is zero (deterministic inflow) while a scenario source generates inflow";
+    SEMANTIC_CORRELATION_ASYMMETRIC = "semantic.5b.14",
+        Semantic, BusinessRuleViolation, Error,
+        "A correlation matrix is not symmetric within tolerance";
+    SEMANTIC_CORRELATION_DIAGONAL = "semantic.5b.15",
+        Semantic, BusinessRuleViolation, Error,
+        "A correlation matrix diagonal entry differs from 1 beyond tolerance";
+    SEMANTIC_CORRELATION_OFF_DIAGONAL_RANGE = "semantic.5b.16",
+        Semantic, BusinessRuleViolation, Error,
+        "A correlation matrix off-diagonal entry lies outside [-1, 1]";
+    SEMANTIC_CORRELATION_MIXED_ENTITY_TYPES = "semantic.5b.16a",
+        Semantic, BusinessRuleViolation, Error,
+        "A correlation group mixes entities of different entity_type";
+    SEMANTIC_LOAD_FACTOR_BLOCK_ID = "semantic.5b.17",
+        Semantic, BusinessRuleViolation, Error,
+        "A load factor names a block_id that its stage does not declare";
+    SEMANTIC_ESTIMATION_WITHOUT_SEASON_DEFINITIONS = "semantic.5b.19",
+        Semantic, BusinessRuleViolation, Error,
+        "Estimation from inflow history is required but stages.json declares no season_definitions";
+    SEMANTIC_ESTIMATION_FEW_OBSERVATIONS = "semantic.5b.20",
+        Semantic, ModelQuality, Warning,
+        "A hydro and season have fewer inflow history observations than the recommended minimum for estimation";
+    SEMANTIC_ESTIMATION_HYDRO_WITHOUT_HISTORY = "semantic.5b.21",
+        Semantic, BusinessRuleViolation, Error,
+        "Estimation is required but a hydro has no inflow history observation";
     SEMANTIC_SOBOL_OPENING_COUNT = "semantic.5b.25",
         Semantic, ModelQuality, Warning,
         "A stage using the qmc_sobol noise method has a num_openings that is not a power of 2";
@@ -373,9 +412,18 @@ declare_rules! {
     SEMANTIC_HISTORY_COARSER_THAN_SEASON = "semantic.5b.31.2",
         Semantic, BusinessRuleViolation, Error,
         "A hydro's inflow history misses a defined season in an interior year, which indicates coarser-than-season observations that cannot be disaggregated";
+    SEMANTIC_FILLING_SCHEDULE_SHORT_OF_DEAD_VOLUME = "semantic.5b.33",
+        Semantic, BusinessRuleViolation, Error,
+        "A filling hydro's minimum filling schedule cannot reach the dead volume before its entry stage, within a relative tolerance";
     SEMANTIC_INFLOW_LAGS_DISABLED_UNDER_AR_MODEL = "semantic.5b.34",
         Semantic, ModelQuality, Warning,
         "Every study stage disables inflow_lags although the inflow model has an autoregressive order above zero";
+    SEMANTIC_AR_COEFFICIENT_SEASON_UNRESOLVED = "semantic.5b.35.1",
+        Semantic, BusinessRuleViolation, Error,
+        "User-supplied autoregressive coefficients of nonzero order sit at a stage whose season cannot be resolved";
+    SEMANTIC_AR_COEFFICIENT_NOT_STATIONARY = "semantic.5b.35.2",
+        Semantic, InvalidValue, Error,
+        "User-supplied autoregressive coefficients fail the periodic stationarity check";
     SEMANTIC_NODE_SCENARIO_ID_DECLARATION = "semantic.5b.36",
         Semantic, InvalidValue, Error,
         "Under enumerated forward selection, a node has no scenario_id at a stage carrying a slot-occupying external class, or declares one at a stage carrying none";
@@ -409,6 +457,24 @@ declare_rules! {
     SEMANTIC_SAMPLING_METHOD_INERT = "semantic.5b.44",
         Semantic, ModelQuality, Warning,
         "Under a node graph, a stage's sampling_method has no effect because the stage carries external openings or several nodes";
+    SEMANTIC_EXTERNAL_SCHEME_WITHOUT_DATA = "semantic.5b.44a",
+        Semantic, BusinessRuleViolation, Error,
+        "A class resolved to the external scheme has no external scenario data";
+    SEMANTIC_EXTERNAL_COLUMN_COUNT_DISAGREEMENT = "semantic.5b.45",
+        Semantic, BusinessRuleViolation, Error,
+        "Two slot-occupying external classes disagree on a stage's column count";
+    SEMANTIC_EXTERNAL_SCENARIO_ID_SET = "semantic.5b.46",
+        Semantic, BusinessRuleViolation, Error,
+        "An external class does not carry each scenario_id from 0 to the stage's column count minus one exactly once per entity and stage";
+    SEMANTIC_EXTERNAL_STAGE_UNRESOLVED = "semantic.5b.47",
+        Semantic, InvalidValue, Error,
+        "An external scenario row's stage_id is not a declared study stage";
+    SEMANTIC_EXTERNAL_PREFIX_INCOHERENT = "semantic.5b.48",
+        Semantic, ModelQuality, Warning,
+        "Along a node-graph edge, an external class's pointed columns disagree over their shared history prefix";
+    SEMANTIC_EXTERNAL_INFLOW_CONSTANT_UNDER_AR_MODEL = "semantic.5b.50",
+        Semantic, BusinessRuleViolation, Error,
+        "An external inflow library is constant at a stage for a hydro whose inflow model has autoregressive order above zero";
     SEMANTIC_STAGE_BLOCKS = "semantic.5b.52",
         Semantic, InvalidValue, Error,
         "A study stage declares no block, or a block whose duration_hours is not finite and positive";
@@ -452,6 +518,18 @@ mod tests {
         "semantic.5a.27",
         "semantic.5a.42",
         "semantic.5a.48",
+        "semantic.5b.4",
+        "semantic.5b.5",
+        "semantic.5b.6",
+        "semantic.5b.7",
+        "semantic.5b.13",
+        "semantic.5b.18",
+        "semantic.5b.22",
+        "semantic.5b.23",
+        "semantic.5b.24",
+        "semantic.5b.26",
+        "semantic.5b.32",
+        "semantic.5b.49",
     ];
 
     // Spelled from chars so the source grep in `tests/genericity_gate.rs` does not match this file.

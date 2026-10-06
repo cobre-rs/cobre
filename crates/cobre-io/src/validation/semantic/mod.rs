@@ -24,65 +24,9 @@
 //!
 //! ## Layer 5b rules (stages, penalties, and scenario domain) — `validate_semantic_stages_penalties_scenarios`
 //!
-//! | #  | Rule                                                                    | Source file                                    | `ErrorKind`              |
-//! |----|-------------------------------------------------------------------------|------------------------------------------------|--------------------------|
-//! | 1  | Every transition `source_id`/`target_id` must refer to an existing stage| `stages.json`                                  | `InvalidValue`           |
-//! | 2  | Outgoing transition probabilities sum to 1.0 (±1e-6) per source stage  | `stages.json`                                  | `InvalidValue`           |
-//! | 3  | Cyclic graph: `annual_discount_rate > 0.0`                              | `stages.json`                                  | `InvalidValue`           |
-//! | 4  | *(retired — enforced at the parse layer by `stages.rs`'s `validate_block_hours` / `validate_risk_measure`; number never reused)* | — | — |
-//! | 5  | *(retired — enforced at the parse layer by `stages.rs`'s `validate_block_hours` / `validate_risk_measure`; number never reused)* | — | — |
-//! | 6  | *(retired — compared a $/hm³ cost with a $/`MWh` cost, which needs plant productivity; number never reused)* | — | — |
-//! | 7  | *(retired — compared a $/hm³ cost with a $/`MWh` cost, which needs plant productivity; number never reused)* | — | — |
-//! | 8  | `max(deficit_segment_costs) > generation_violation_below_cost` (both $/`MWh`) | `penalties.json`                               | `ModelQuality` (warning) |
-//! | 9  | `min(flow_violation_costs) > max(resource_costs)` (both $/(m³/s·h))     | `penalties.json`                               | `ModelQuality` (warning) |
-//! |10  | `min(resource_costs) > 0`                                               | `penalties.json`                               | `ModelQuality` (warning) |
-//! |11  | FPHA hydros: `turbined_cost >= 0`                                  | `penalties.json`                               | `BusinessRuleViolation`  |
-//! |12  | `std_m3s >= 0.0`; warn when `== 0.0` (deterministic inflow) — suppressed for a class whose resolved scheme is External | `scenarios/inflow_seasonal_stats.parquet` | `ModelQuality` (warning) |
-//! |13  | *(retired — number never reused)* | — | — |
-//! |14  | Correlation matrix symmetry (`matrix[i][j] == matrix[j][i]` ±1e-9)     | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
-//! |15  | Correlation matrix diagonal entries equal 1.0 (±1e-9)                  | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
-//! |16  | Correlation off-diagonal entries in [-1.0, 1.0]                        | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
-//! |16a | All entities within a correlation group share the same `entity_type`  | `scenarios/correlation.json`                   | `BusinessRuleViolation`  |
-//! |17  | Each `block_factors[j].block_id` matches a `Block.index` in its stage  | `scenarios/load_factors.json`                  | `BusinessRuleViolation`  |
-//! |18  | *(retired — number never reused)* | — | — |
-//! |19  | `season_definitions` required in `stages.json` when estimating          | `scenarios/inflow_history.parquet`             | `BusinessRuleViolation`  |
-//! |20  | Minimum observations per `(hydro, season)` group for estimation         | `scenarios/inflow_history.parquet`             | `ModelQuality` (warning) |
-//! |21  | All hydros in `hydros.json` must have observations in history           | `scenarios/inflow_history.parquet`             | `BusinessRuleViolation`  |
-//! |22  | *(retired — number never reused)* | — | — |
-//! |23  | *(retired — number never reused)* | — | — |
-//! |24  | *(retired — number never reused)* | — | — |
-//! |25  | Sobol stages: `branching_factor` should be a power of 2                 | `stages.json`                                  | `ModelQuality` (warning) |
-//! |26  | *(retired — `simulation.selection.method` is parse-layer enforced by a `#[serde(deny_unknown_fields)]`-tagged enum, not the semantic layer; number never reused)* | — | — |
-//! |27  | Every stage `season_id` must reference a season defined in `season_definitions` | `stages.json`                        | `BusinessRuleViolation`  |
-//! |28  | Season with zero observations when inflow scheme is not External         | `stages.json`                                  | `ModelQuality` (warning) |
-//! |29  | All stages sharing a `season_id` must have compatible durations (within 7d) | `stages.json`                        | `BusinessRuleViolation`  |
-//! |30  | Season defined in `season_definitions` but not referenced by any stage   | `stages.json`                                  | `ModelQuality` (warning) |
-//! |31  | Observation-to-season alignment: finer-than-season observations are aggregated during PAR estimation (warning); an interior hydro-year missing a season under coarser-than-season observations cannot be disaggregated (error) | `scenarios/inflow_history.parquet` | `BusinessRuleViolation` |
-//! |32  | *(retired — number never reused)* | — | — |
-//! |33  | Filling schedule reaches the dead volume, within a relative tolerance: `Σ ζ_s·rate_s >= min_storage − seed` | `system/hydros.json` | `BusinessRuleViolation`  |
-//! |34  | PAR order > 0 but every study stage has `inflow_lags == false` (inflow-lag state omitted) | `stages.json`        | `ModelQuality` (warning) |
-//! |35  | User-supplied `inflow_ar_coefficients.parquet` must pass the periodic-ACF closure stationarity gate (external-input path only; annual-aware; season resolved via `resolve_stage_seasons`'s `season_map`-or-fallback) | `scenarios/inflow_ar_coefficients.parquet` | `InvalidValue` (or `BusinessRuleViolation` when a stage's season is genuinely unresolvable) |
-//! |36  | Node `scenario_id` required at a stage carrying a slot-occupying external class, rejected as meaningless where none (declared `nodes[]`, enumerated forward selection only) | `stages.json` | `InvalidValue` |
-//! |37  | Node `scenario_id` in `[0, raw_c(t))` for every slot-occupying external class (declared `nodes[]`, enumerated forward selection only) | `stages.json` | `InvalidValue` |
-//! |38  | Node graph well-formedness: unique/known node ids, resolvable stage, no empty stage, no unreachable node, acyclic, no mid-horizon leaf (declared `nodes[]` only) | `stages.json` | `InvalidValue` / `DuplicateId` / `CycleDetected` |
-//! |39  | Every graph edge advances exactly one stage (`t → t+1`, no stage-skipping) (declared `nodes[]` only) | `stages.json` | `InvalidValue` |
-//! |40  | A stage carrying multiple nodes with structurally identical subtrees (recombinable signature) (declared `nodes[]` only) | `stages.json` | `ModelQuality` (warning) |
-//! |41  | `num_openings` required at a stage carrying generated openings, rejected as meaningless where a stage carries only external openings (declared `nodes[]` only; chain-dialect requiredness is a parse-layer check) | `stages.json` | `InvalidValue` |
-//! |42  | Per-edge `annual_discount_rate_override` rejected under `nodes[]` — the override is a per-stage quantity on `stages[]` (legal in the chain dialect) | `stages.json` | `InvalidValue` |
-//! |43  | `scenarios/noise_openings.parquet` present under enumerated forward selection — the generated backward opening tree is not consumed there | `stages.json` | `InvalidValue` |
-//! |44  | `sampling_method` inert under external openings / ill-defined at a multi-node stage (declared `nodes[]` only) | `stages.json` | `ModelQuality` (warning) |
-//! |44a | A class resolved to the `External` scheme has non-empty `external_*_scenarios.parquet` data | `config.json` | `BusinessRuleViolation` |
-//! |45  | All slot-occupying external classes agree on the per-stage raw column-count vector `raw_c(t)` — no element-wise-minimum reconciliation, fires with or without `nodes[]` (P-B1) | `scenarios/external_*_scenarios.parquet` | `BusinessRuleViolation` |
-//! |46  | Every (slot-occupying external class, stage) carries the exact `scenario_id` set `{0..raw_c(t)-1}` per entity — a set check (rejects 1-based deck, gap, duplicate, out-of-range), not a bound check (A1) | `scenarios/external_*_scenarios.parquet` | `BusinessRuleViolation` |
-//! |47  | Every external scenario row's `stage_id` resolves to a declared study stage via the [`crate::StageIdResolver`], never silently dropped (A2) | `scenarios/external_*_scenarios.parquet` | `InvalidValue` |
-//! |48  | Per edge `n → m` and slot-occupying external class, the raw cells of columns `scenario_id(n)`/`scenario_id(m)` agree bitwise over the shared prefix `s <= t(n)` (declared `nodes[]` only) | `scenarios/external_*_scenarios.parquet` | `ModelQuality` (warning) |
-//! |50  | Under External, load/NCS get no σ check at all (their μ is defined by the external file itself, so there is no seasonal μ left to disagree with); inflow's remaining σ = 0 case is decided from the same external cells' own sample σ ([`cobre_stochastic::derive_external_sample_moments`], the reduction the engine also derives its `(μ, σ)` from) — accepted for an AR(0) hydro (no declared lag coefficient or annual component: its deterministic base is exactly μ), rejected for an AR(p > 0) hydro, naming the entity and stage, since a deterministic value there would have to equal that model's own deterministic PAR output, which this loader does not compute upstream | `scenarios/external_*_scenarios.parquet` | `BusinessRuleViolation` |
-//! |52  | Every study stage declares at least one block and every block's `hours` is finite and `> 0` | `stages.json` | `InvalidValue` |
-//!
-//! Rule 49 (G2 — each standardized external library's `n_entities()` matches its
-//! `noise_entity_order` block width) is enforced downstream at study setup
-//! (`build_scenario_libraries`), where the standardized libraries exist; it is
-//! not a pre-build load-time semantic rule.
+//! The Layer 5b rules are the `semantic.5b.*` entries of
+//! [`RULES`](crate::validation::rules::RULES). Rule 49 is checked at study setup,
+//! once the standardized external libraries exist, and has no entry there.
 
 use super::{ValidationContext, schema::ParsedData};
 

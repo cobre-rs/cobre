@@ -13,7 +13,7 @@ use cobre_stochastic::season_cast::{RealizedWindow, SeasonPeriodWindow, cast};
 
 use crate::{LoadError, StageIdResolver};
 
-use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::super::{ValidationContext, rules, schema::ParsedData};
 use super::envelope_tolerance;
 
 // ── Rules 8-10: Penalty ordering ──────────────────────────────────────────────
@@ -28,7 +28,7 @@ use super::envelope_tolerance;
 /// reads the directional evaporation and withdrawal costs because those are the
 /// ones the LP prices; the symmetric pair is only their fallback.
 ///
-/// Emits one `ModelQuality` warning per violated ordering check, aggregating
+/// Emits one warning per violated ordering check, aggregating
 /// all violating entities into a single warning with the count and worst-case ID.
 pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationContext) {
     let max_deficit_cost: f64 = data
@@ -51,8 +51,8 @@ pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationCont
             .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         {
             let count = violations.len();
-            ctx.add_warning(
-                ErrorKind::ModelQuality,
+            ctx.emit(
+                &rules::SEMANTIC_PENALTY_DEFICIT_NOT_ABOVE_GENERATION_VIOLATION,
                 "penalties.json",
                 None::<&str>,
                 format!(
@@ -96,8 +96,8 @@ pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationCont
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         {
             let count = violations.len();
-            ctx.add_warning(
-                ErrorKind::ModelQuality,
+            ctx.emit(
+                &rules::SEMANTIC_PENALTY_FLOW_VIOLATION_NOT_ABOVE_RESOURCE,
                 "penalties.json",
                 None::<&str>,
                 format!(
@@ -126,8 +126,8 @@ pub(super) fn check_penalty_ordering(data: &ParsedData, ctx: &mut ValidationCont
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         {
             let count = violations.len();
-            ctx.add_warning(
-                ErrorKind::ModelQuality,
+            ctx.emit(
+                &rules::SEMANTIC_PENALTY_RESOURCE_COST_NOT_POSITIVE,
                 "penalties.json",
                 None::<&str>,
                 format!(
@@ -157,8 +157,8 @@ pub(super) fn check_fpha_penalty_rule(data: &ParsedData, ctx: &mut ValidationCon
         let fpha_cost = hydro.penalties.turbined_cost;
         if fpha_cost < 0.0 {
             let entity_str = format!("Hydro {}", hydro.id.0);
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_FPHA_TURBINED_COST_NEGATIVE,
                 "penalties.json",
                 Some(&entity_str),
                 format!(
@@ -171,10 +171,6 @@ pub(super) fn check_fpha_penalty_rule(data: &ParsedData, ctx: &mut ValidationCon
 }
 
 // ── Rule 12: Scenario model rules ───────────────────────────────────────────
-//
-// Rule 13 is retired; the number is never reused — rules 14-35 are referenced
-// by number elsewhere in this module and in the crate-level rule catalogue
-// (`validation/semantic/mod.rs`).
 
 /// Rule 12: validates inflow model standard deviation.
 pub(super) fn check_scenario_models(data: &ParsedData, ctx: &mut ValidationContext) {
@@ -188,8 +184,8 @@ pub(super) fn check_scenario_models(data: &ParsedData, ctx: &mut ValidationConte
     }
     for row in &data.inflow_seasonal_stats {
         if row.std_m3s == 0.0 {
-            ctx.add_warning(
-                ErrorKind::ModelQuality,
+            ctx.emit(
+                &rules::SEMANTIC_INFLOW_STD_ZERO,
                 "scenarios/inflow_seasonal_stats.parquet",
                 Some(format!("Hydro {}", row.hydro_id.0)),
                 format!(
@@ -250,14 +246,14 @@ fn inflow_scheme_is_external_everywhere(data: &ParsedData) -> bool {
 /// stages sharing a season carry identical `ψ*`. Calls
 /// [`check_stationarity_annual`] when any season carries an annual component
 /// (`inflow_annual_components.parquet`), else [`check_stationarity`]. Every
-/// [`ClosureRejection`] becomes an `InvalidValue` error naming the offending
+/// [`ClosureRejection`] becomes an error naming the offending
 /// season/lag and the failing quantity.
 ///
 /// A hydro whose order-bearing coefficients reference a stage with no
 /// resolvable season (no `season_map` AND no usable per-stage `season_id` --
 /// the same condition under which
 /// [`crate::scenarios::populate_derived_residual_ratios`] itself errors) gets
-/// a `BusinessRuleViolation` naming the unresolved stage(s), and is skipped
+/// an error naming the unresolved stage(s), and is skipped
 /// for the stationarity check (other hydros still run). Bare per-stage
 /// `season_id`s with no `season_map` (the fallback) resolve cleanly and ARE
 /// gated. Never silently skipped.
@@ -307,8 +303,8 @@ pub(super) fn check_par_stationarity(data: &ParsedData, ctx: &mut ValidationCont
             .copied()
             .collect();
         if !unresolved.is_empty() {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_AR_COEFFICIENT_SEASON_UNRESOLVED,
                 "scenarios/inflow_ar_coefficients.parquet",
                 Some(format!("Hydro {hydro_id}")),
                 format!(
@@ -354,8 +350,8 @@ pub(super) fn check_par_stationarity(data: &ParsedData, ctx: &mut ValidationCont
 
         if let Err(rejection) = result {
             let entity_str = format!("Hydro {hydro_id}");
-            ctx.add_error(
-                ErrorKind::InvalidValue,
+            ctx.emit(
+                &rules::SEMANTIC_AR_COEFFICIENT_NOT_STATIONARY,
                 "scenarios/inflow_ar_coefficients.parquet",
                 Some(&entity_str),
                 describe_par_rejection(hydro_id, &rejection),
@@ -423,8 +419,8 @@ pub(super) fn check_external_scheme_has_files(data: &ParsedData, ctx: &mut Valid
     let mut check_external =
         |section: &str, scheme: SamplingScheme, class_name: &str, is_empty: bool| {
             if scheme == SamplingScheme::External && is_empty {
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::SEMANTIC_EXTERNAL_SCHEME_WITHOUT_DATA,
                     "config.json",
                     Some(format!("{section}.scenario_source.{class_name}")),
                     format!(
@@ -609,7 +605,7 @@ fn extract_class(
         // A2 (rule 47): an out-of-range stage_id is rejected through the shared
         // StageIdResolver constructor, never silently dropped.
         let Some(stage_idx) = resolver.resolve(stage_id) else {
-            add_resolver_error(
+            emit_resolver_error(
                 ctx,
                 resolver.unresolved_stage_id_error(
                     file,
@@ -627,8 +623,8 @@ fn extract_class(
             !seen_keys.insert((stage_idx, scenario_id, entity_id))
         };
         if is_duplicate {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_EXTERNAL_SCENARIO_ID_SET,
                 file,
                 Some(format!("{row_label}[{i}]")),
                 format!(
@@ -689,8 +685,8 @@ fn extract_class(
             if name == "inflow" {
                 let (_, sigma) = inflow_moments[t * n_entities + e_idx];
                 if sigma == 0.0 && hydros_with_ar_dynamics.contains(&e) {
-                    ctx.add_error(
-                        ErrorKind::BusinessRuleViolation,
+                    ctx.emit(
+                        &rules::SEMANTIC_EXTERNAL_INFLOW_CONSTANT_UNDER_AR_MODEL,
                         file,
                         Some(format!("{name} entity {e} stage {stage_id}")),
                         format!(
@@ -711,8 +707,8 @@ fn extract_class(
                 .collect();
             let missing: Vec<i32> = (0..c_i32).filter(|m| !es.contains(m)).collect();
             if !out_of_range.is_empty() || !missing.is_empty() {
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::SEMANTIC_EXTERNAL_SCENARIO_ID_SET,
                     file,
                     Some(format!("{name} entity {e} stage {stage_id}")),
                     format!(
@@ -738,14 +734,19 @@ fn extract_class(
 /// Feed [`StageIdResolver::unresolved_stage_id_error`] into the
 /// validation context so A2 reports the identical message shape the
 /// `noise_openings.parquet` resolver uses — one message shape, not two.
-fn add_resolver_error(ctx: &mut ValidationContext, err: LoadError) {
+fn emit_resolver_error(ctx: &mut ValidationContext, err: LoadError) {
     if let LoadError::SchemaError {
         path,
         field,
         message,
     } = err
     {
-        ctx.add_error(ErrorKind::InvalidValue, path, Some(field), message);
+        ctx.emit(
+            &rules::SEMANTIC_EXTERNAL_STAGE_UNRESOLVED,
+            path,
+            Some(field),
+            message,
+        );
     }
 }
 
@@ -766,8 +767,8 @@ fn check_raw_c_agreement(
         for (t, (&bc, &oc)) in base.raw_c.iter().zip(other.raw_c.iter()).enumerate() {
             if bc != oc {
                 let stage_id = study_ids.get(t).copied().unwrap_or_default();
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::SEMANTIC_EXTERNAL_COLUMN_COUNT_DISAGREEMENT,
                     other.file,
                     Some(format!("stage {stage_id}")),
                     format!(
@@ -820,8 +821,8 @@ fn check_prefix_coherence(
             walk.extend_to(class, cn, cm, sn);
             if let Some((s, e, va, vb)) = walk.disagreement.filter(|&(s, ..)| s <= sn) {
                 let stage_id = resolver.id_at(s).unwrap_or_default();
-                ctx.add_warning(
-                    ErrorKind::ModelQuality,
+                ctx.emit(
+                    &rules::SEMANTIC_EXTERNAL_PREFIX_INCOHERENT,
                     class.file,
                     Some(format!("edge {}->{}", tr.source_id, tr.target_id)),
                     format!(
@@ -877,12 +878,6 @@ impl PrefixWalk {
 }
 
 // ── Rule 17: Load factor consistency ──────────────────────────────────────────
-//
-// Rule 18 is retired; the number is never reused — rule 19 is referenced by
-// number elsewhere in this module and in the crate-level rule catalogue
-// (`validation/semantic/mod.rs`). Its claim that block factors have no effect
-// at `std_mw == 0.0` was false: `PrecomputedNormal::build` applies factors
-// unconditionally, independent of `std`.
 
 /// Validates cross-file consistency between `load_factors.json` and
 /// `load_seasonal_stats.parquet`.
@@ -916,8 +911,8 @@ pub(super) fn check_load_factor_consistency(data: &ParsedData, ctx: &mut Validat
             if !valid_indices.contains(&block_idx) {
                 let mut sorted: Vec<usize> = valid_indices.iter().copied().collect();
                 sorted.sort_unstable();
-                ctx.add_error(
-                    ErrorKind::BusinessRuleViolation,
+                ctx.emit(
+                    &rules::SEMANTIC_LOAD_FACTOR_BLOCK_ID,
                     "scenarios/load_factors.json",
                     Some(format!("LoadFactorEntry[{i}]")),
                     format!(
@@ -962,8 +957,8 @@ pub(super) fn check_estimation_prerequisites(data: &ParsedData, ctx: &mut Valida
     }
 
     if data.stages.policy_graph.season_map.is_none() {
-        ctx.add_error(
-            ErrorKind::BusinessRuleViolation,
+        ctx.emit(
+            &rules::SEMANTIC_ESTIMATION_WITHOUT_SEASON_DEFINITIONS,
             "scenarios/inflow_history.parquet",
             None::<&str>,
             "season_definitions is required in stages.json when estimating from \
@@ -981,8 +976,8 @@ pub(super) fn check_estimation_prerequisites(data: &ParsedData, ctx: &mut Valida
         .collect();
     missing_hydros.sort_unstable();
     for id in missing_hydros {
-        ctx.add_error(
-            ErrorKind::BusinessRuleViolation,
+        ctx.emit(
+            &rules::SEMANTIC_ESTIMATION_HYDRO_WITHOUT_HISTORY,
             "scenarios/inflow_history.parquet",
             Some(format!("Hydro {id}")),
             format!(
@@ -1046,8 +1041,8 @@ pub(super) fn check_estimation_prerequisites(data: &ParsedData, ctx: &mut Valida
         // Sort for deterministic output order.
         violations.sort_unstable_by_key(|&(hid, sid, _)| (hid, sid));
         for (hid, sid, n) in violations {
-            ctx.add_warning(
-                ErrorKind::ModelQuality,
+            ctx.emit(
+                &rules::SEMANTIC_ESTIMATION_FEW_OBSERVATIONS,
                 "scenarios/inflow_history.parquet",
                 Some(format!("Hydro {hid}")),
                 format!(
@@ -1136,8 +1131,8 @@ pub(super) fn check_filling_sufficiency(data: &ParsedData, ctx: &mut ValidationC
 
         if capacity < required - tolerance {
             let entity_str = format!("Hydro {}", hydro.id.0);
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
+            ctx.emit(
+                &rules::SEMANTIC_FILLING_SCHEDULE_SHORT_OF_DEAD_VOLUME,
                 "system/hydros.json",
                 Some(&entity_str),
                 format!(

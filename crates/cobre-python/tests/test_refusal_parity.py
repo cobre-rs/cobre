@@ -80,6 +80,13 @@ def _duplicate_january_season(case: pathlib.Path) -> None:
     _edit_json(case / "stages.json", edit)
 
 
+def _repeat_generic_constraint_block_argument(case: pathlib.Path) -> None:
+    def edit(constraints: Any) -> None:
+        constraints["constraints"][0]["expression"] = "thermal_generation(0, 0, 0)"
+
+    _edit_json(case / "constraints" / "generic_constraints.json", edit)
+
+
 ROWS = [
     _row(
         name="travel_time_negative",
@@ -115,6 +122,15 @@ ROWS = [
         outcome="BracketedRefusal",
         kind="SchemaViolation",
         fragment="overlap within one resolution level",
+        error_class_name="ValidationError",
+    ),
+    _row(
+        name="generic_constraint_repeated_block_argument",
+        base_case="deterministic/d13-generic-constraint",
+        mutate=_repeat_generic_constraint_block_argument,
+        outcome="BracketedRefusal",
+        kind="SchemaViolation",
+        fragment="repeated block argument in variable",
         error_class_name="ValidationError",
     ),
 ]

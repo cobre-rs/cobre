@@ -92,6 +92,15 @@ const ROWS: &[ParityRow] = &[
         },
         fragment: "overlap within one resolution level",
     },
+    ParityRow {
+        name: "generic_constraint_repeated_block_argument",
+        base_case: "deterministic/d13-generic-constraint",
+        mutate: repeat_generic_constraint_block_argument,
+        outcome: Outcome::BracketedRefusal {
+            kind: "SchemaViolation",
+        },
+        fragment: "repeated block argument in variable",
+    },
 ];
 
 fn edit_json(path: &Path, edit: impl FnOnce(&mut Value)) {
@@ -132,6 +141,15 @@ fn duplicate_january_season(case: &Path) {
                 "day_end": 31
             }));
     });
+}
+
+fn repeat_generic_constraint_block_argument(case: &Path) {
+    edit_json(
+        &case.join("constraints/generic_constraints.json"),
+        |constraints| {
+            constraints["constraints"][0]["expression"] = json!("thermal_generation(0, 0, 0)");
+        },
+    );
 }
 
 struct Observed<'a> {

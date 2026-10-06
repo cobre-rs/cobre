@@ -1354,6 +1354,11 @@ fn parse_variable_ref(
                                 "positional block argument must precede the named \"bus=\" argument in variable \"{var_name}\""
                             ));
                         }
+                        if block_id.is_some() {
+                            return Err(format!(
+                                "repeated block argument in variable \"{var_name}\""
+                            ));
+                        }
                         let b_usize = token_f64_to_usize(*b).ok_or_else(|| {
                             format!(
                                 "block_id must be a non-negative integer, got {b} in variable \"{var_name}\""
@@ -2932,6 +2937,64 @@ mod tests {
         );
     }
 
+    /// A second positional block argument is refused, equal or not, with or without `bus=`.
+    #[test]
+    fn test_expr_repeated_block_argument_is_rejected() {
+        for expr in [
+            "hydro_turbined(5, 0, 0)",
+            "hydro_turbined(5, 0, 1)",
+            "hydro_generation(5, 1, 2, bus=3)",
+            "thermal_generation(0, 0, 0)",
+            "2 * (hydro_turbined(5, 0, 1))",
+        ] {
+            let err = parse_expression(expr, &HashMap::new()).expect_err(expr);
+            assert!(
+                err.contains("repeated block argument in variable"),
+                "expected the repeated-block message for \"{expr}\", got: {err}"
+            );
+        }
+
+        let err = parse_expression("hydro_turbined(5, 0, 1)", &HashMap::new()).unwrap_err();
+        assert!(
+            err.contains("\"hydro_turbined\""),
+            "expected the variable name in the message, got: {err}"
+        );
+    }
+
+    /// One block argument per variable stays accepted, including across separate terms.
+    #[test]
+    fn test_expr_single_block_argument_per_variable_is_accepted() {
+        for expr in ["hydro_turbined(5, 1)", "hydro_turbined(5, 1, bus=2)"] {
+            let parsed = parse_expression(expr, &HashMap::new());
+            assert!(
+                parsed.is_ok(),
+                "expected Ok for \"{expr}\", got: {parsed:?}"
+            );
+        }
+
+        for (expr, expected) in [
+            (
+                "hydro_turbined(5, 0) + hydro_turbined(5, 1)",
+                [Some(0), Some(1)],
+            ),
+            (
+                "hydro_turbined(5, 0) + hydro_turbined(5, 0)",
+                [Some(0), Some(0)],
+            ),
+        ] {
+            let parsed = parse_expression(expr, &HashMap::new()).unwrap();
+            let blocks: Vec<Option<usize>> = parsed
+                .terms
+                .iter()
+                .map(|term| match term.variable {
+                    VariableRef::HydroTurbined { block_id, .. } => block_id,
+                    ref other => panic!("expected HydroTurbined for \"{expr}\", got {other:?}"),
+                })
+                .collect();
+            assert_eq!(blocks, expected, "for \"{expr}\"");
+        }
+    }
+
     // ── Line bus-pair addressing unit tests ────────────────────────────────────
 
     /// A pair matching a line's declared source→target resolves to that line with a
@@ -3553,6 +3616,53 @@ mod tests {
                 assert!(
                     message.contains("unknown variable"),
                     "message should contain 'unknown variable', got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// A repeated block argument → SchemaError on the constraint and on the named-expression field.
+    #[test]
+    fn parse_generic_constraints_repeated_block_argument_is_schema_error() {
+        let in_constraint = r#"{
+  "constraints": [
+    { "id": 0, "name": "bad", "expression": "thermal_generation(0, 0, 1) <= 10", "slack": { "enabled": false } }
+  ]
+}"#;
+        let f = write_json(in_constraint);
+        let err =
+            parse_generic_constraints(f.path(), &HashMap::new(), &LineBusPairIndex::default())
+                .unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert_eq!(field, "constraints[0].expression");
+                assert!(
+                    message.contains("repeated block argument in variable \"thermal_generation\""),
+                    "message should name the repeated block argument, got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+
+        let in_named_expression = r#"{
+  "expressions": [
+    { "name": "e", "expression": "hydro_turbined(5, 0, 1)" }
+  ],
+  "constraints": [
+    { "id": 0, "name": "c0", "expression": "@e <= 10", "slack": { "enabled": false } }
+  ]
+}"#;
+        let f = write_json(in_named_expression);
+        let err =
+            parse_generic_constraints(f.path(), &HashMap::new(), &LineBusPairIndex::default())
+                .unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert_eq!(field, "expressions[0].expression");
+                assert!(
+                    message.contains("repeated block argument in variable \"hydro_turbined\""),
+                    "message should name the repeated block argument, got: {message}"
                 );
             }
             other => panic!("expected SchemaError, got: {other:?}"),

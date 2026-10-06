@@ -62,6 +62,8 @@ pub struct LoopParams {
     pub max_iterations: u64,
     /// Starting iteration offset for resumed training runs.
     pub(crate) start_iteration: u64,
+    /// Lower bounds of the resumed run's recorded iterations.
+    pub(crate) resume_lower_bound_history: Vec<f64>,
     /// Stopping rules controlling convergence.
     pub(crate) stopping_rules: StoppingRuleSet,
 }
@@ -94,6 +96,10 @@ pub struct LoopConfig {
     /// the loop runs `start_iteration + 1` through `max_iterations`. Default `0`.
     pub start_iteration: u64,
 
+    /// Lower bounds of the resumed run's recorded iterations, oldest first,
+    /// restored with `start_iteration`. Default empty.
+    pub resume_lower_bound_history: Vec<f64>,
+
     /// Number of rayon threads for forward-pass parallelism; `1` is single-threaded.
     pub n_fwd_threads: usize,
 
@@ -108,6 +114,7 @@ impl Default for LoopConfig {
             training_enumerated: false,
             max_iterations: 1,
             start_iteration: 0,
+            resume_lower_bound_history: Vec::new(),
             n_fwd_threads: 1,
             stopping_rules: StoppingRuleSet {
                 rules: vec![StoppingRule::IterationLimit { limit: 1 }],

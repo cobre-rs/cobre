@@ -41,9 +41,11 @@ impl StudySetup {
         &self.boundary_requirements
     }
 
-    /// Set the starting iteration for resumed training.
-    pub fn set_start_iteration(&mut self, iteration: u64) {
-        self.loop_params.start_iteration = iteration;
+    /// Set the resume point: the iterations the earlier run completed and the
+    /// lower bound it recorded for each of them.
+    pub fn set_resume_point(&mut self, completed_iterations: u64, lower_bound_history: Vec<f64>) {
+        self.loop_params.start_iteration = completed_iterations;
+        self.loop_params.resume_lower_bound_history = lower_bound_history;
     }
 
     /// Seed the per-stage warm-start basis cache for warm-start / resume

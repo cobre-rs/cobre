@@ -68,7 +68,9 @@ pub struct MonitorState {
     /// enumerated forwards that [`StoppingRule::Gap`] compares against.
     pub upper_bound: f64,
 
-    /// Lower bounds from past iterations, chronological: `[i]` is iteration `i + 1`.
+    /// Lower bounds of the evaluated iterations, oldest first; the last entry is
+    /// the current iteration. A resumed run continues the series its checkpoint
+    /// recorded.
     pub lower_bound_history: Vec<f64>,
 
     /// Whether a shutdown has been requested, from any

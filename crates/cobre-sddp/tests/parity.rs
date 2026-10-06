@@ -1267,6 +1267,7 @@ mod determinism {
                 training_enumerated: false,
                 max_iterations: n_iterations,
                 start_iteration: 0,
+                resume_lower_bound_history: Vec::new(),
                 n_fwd_threads: 1,
                 stopping_rules: iteration_limit(n_iterations),
             },

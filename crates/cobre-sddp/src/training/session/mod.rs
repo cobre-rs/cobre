@@ -271,9 +271,13 @@ where
         let periodic_checkpoint = config.events.periodic_checkpoint.take();
         let export_states = config.events.export_states;
 
-        let convergence_monitor = ConvergenceMonitor::with_iteration_budget(
+        let mut convergence_monitor = ConvergenceMonitor::with_iteration_budget(
             config.loop_config.stopping_rules.clone(),
             config.loop_config.max_iterations,
+        );
+        convergence_monitor.resume_at(
+            config.loop_config.start_iteration,
+            &config.loop_config.resume_lower_bound_history,
         );
 
         // Emit before the locals move into RuntimeHandles, while `event_sender`
@@ -694,7 +698,8 @@ where
             Some(frozen_templates),
         );
         result.stop_decision = stop_decision;
-        result.lower_bound_history = self.convergence_monitor.lower_bound_history().to_vec();
+        result.lower_bound_history =
+            committed_lower_bound_history(&self.convergence_monitor, completed_iterations).to_vec();
 
         Ok(TrainingOutcome {
             result,
@@ -770,7 +775,8 @@ where
             visited_archive,
             Some(frozen_templates),
         );
-        result.lower_bound_history = self.convergence_monitor.lower_bound_history().to_vec();
+        result.lower_bound_history =
+            committed_lower_bound_history(&self.convergence_monitor, completed_iterations).to_vec();
 
         TrainingOutcome {
             result,
@@ -1481,6 +1487,19 @@ where
     }
 }
 
+/// The monitor's lower-bound series without the trailing entries of iterations
+/// the run did not commit: a failed collective after the stop decision leaves
+/// the monitor one iteration ahead of `completed_iterations`.
+fn committed_lower_bound_history(
+    monitor: &ConvergenceMonitor,
+    completed_iterations: u64,
+) -> &[f64] {
+    let history = monitor.lower_bound_history();
+    let uncommitted =
+        usize::try_from(monitor.iteration_count() - completed_iterations).unwrap_or(usize::MAX);
+    &history[..history.len().saturating_sub(uncommitted)]
+}
+
 /// Pool → per-iteration selection-record index, in the order
 /// [`TrainingSession::run_cut_management`] emits `per_stage`: the root pool's
 /// record first (index 0), then each interior cut-generating node's pool in
@@ -1949,6 +1968,7 @@ mod tests {
                 training_enumerated: false,
                 max_iterations,
                 start_iteration: 0,
+                resume_lower_bound_history: Vec::new(),
                 n_fwd_threads: 1,
                 stopping_rules: iteration_limit_rules(limit),
             },

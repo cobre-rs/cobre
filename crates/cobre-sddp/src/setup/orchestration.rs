@@ -119,6 +119,7 @@ impl StudySetup {
                 training_enumerated: self.loop_params.training_enumerated,
                 max_iterations: self.loop_params.max_iterations,
                 start_iteration: self.loop_params.start_iteration,
+                resume_lower_bound_history: self.loop_params.resume_lower_bound_history.clone(),
                 n_fwd_threads: n_threads,
                 stopping_rules: self.loop_params.stopping_rules.clone(),
             },

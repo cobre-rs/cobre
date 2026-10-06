@@ -632,6 +632,7 @@ fn ac_two_scenarios_three_stages_fixed_solution() {
             training_enumerated: false,
             max_iterations: 100,
             start_iteration: 0,
+            resume_lower_bound_history: Vec::new(),
             n_fwd_threads: 1,
             stopping_rules: StoppingRuleSet {
                 rules: vec![StoppingRule::IterationLimit { limit: 100 }],
@@ -741,6 +742,7 @@ fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
             training_enumerated: false,
             max_iterations: 100,
             start_iteration: 0,
+            resume_lower_bound_history: Vec::new(),
             n_fwd_threads: 1,
             stopping_rules: StoppingRuleSet {
                 rules: vec![StoppingRule::IterationLimit { limit: 100 }],
@@ -854,6 +856,7 @@ fn cost_statistics_accumulated_correctly() {
             training_enumerated: false,
             max_iterations: 100,
             start_iteration: 0,
+            resume_lower_bound_history: Vec::new(),
             n_fwd_threads: 1,
             stopping_rules: StoppingRuleSet {
                 rules: vec![StoppingRule::IterationLimit { limit: 100 }],
@@ -1487,6 +1490,7 @@ fn run_one_iteration(
             training_enumerated: false,
             max_iterations: 100,
             start_iteration: 0,
+            resume_lower_bound_history: Vec::new(),
             n_fwd_threads: 1,
             stopping_rules: StoppingRuleSet {
                 rules: vec![StoppingRule::IterationLimit { limit: 100 }],
@@ -2171,6 +2175,7 @@ fn none_method_unchanged_with_truncation_code_present() {
             training_enumerated: false,
             max_iterations: 100,
             start_iteration: 0,
+            resume_lower_bound_history: Vec::new(),
             n_fwd_threads: 1,
             stopping_rules: StoppingRuleSet {
                 rules: vec![StoppingRule::IterationLimit { limit: 100 }],

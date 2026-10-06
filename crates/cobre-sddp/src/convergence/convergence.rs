@@ -101,14 +101,24 @@ impl ConvergenceMonitor {
         monitor
     }
 
-    /// Seed the iteration counter of a resumed run, so the next [`Self::update`]
-    /// evaluates iteration `completed_iterations + 1` and `IterationLimit` and
-    /// the budget fire at absolute iteration numbers.
+    /// Restore a resumed run's iteration counter and lower-bound history, so the
+    /// next [`Self::update`] evaluates iteration `completed_iterations + 1`:
+    /// `IterationLimit` and the budget fire at absolute iteration numbers and
+    /// `BoundStalling` reads the window the earlier run recorded.
     ///
-    /// Call it once, before the first `update`, in the same restore that
-    /// restores the lower-bound history.
-    pub fn resume_at(&mut self, completed_iterations: u64) {
+    /// `lower_bound_history` is the earlier run's series, oldest first. Only its
+    /// first `completed_iterations` entries are restored; a shorter series is
+    /// restored as recorded.
+    ///
+    /// Call it once, before the first `update`.
+    pub fn resume_at(&mut self, completed_iterations: u64, lower_bound_history: &[f64]) {
+        let committed = usize::try_from(completed_iterations)
+            .unwrap_or(usize::MAX)
+            .min(lower_bound_history.len());
         self.iteration_count = completed_iterations;
+        self.lower_bound_history.clear();
+        self.lower_bound_history
+            .extend_from_slice(&lower_bound_history[..committed]);
     }
 
     /// Update bound statistics and evaluate stopping rules at
@@ -593,7 +603,7 @@ mod tests {
             make_rule_set(StoppingRule::IterationLimit { limit: 7 }),
             7,
         );
-        monitor.resume_at(5);
+        monitor.resume_at(5, &[]);
 
         let first = monitor.update(100.0, &default_sync(), 0.0);
         assert_eq!(monitor.iteration_count(), 6);
@@ -605,6 +615,33 @@ mod tests {
         assert!(second.configured_stop());
         assert!(second.mask().contains(StopMask::ITERATION_LIMIT));
         assert_eq!(second.termination_reason(), Some("iteration_limit"));
+    }
+
+    #[test]
+    fn resumed_monitor_restores_the_recorded_lower_bound_series() {
+        let mut monitor = ConvergenceMonitor::with_iteration_budget(
+            make_rule_set(StoppingRule::IterationLimit { limit: 8 }),
+            8,
+        );
+        monitor.resume_at(2, &[10.0, 12.0]);
+        assert_eq!(monitor.lower_bound_history(), [10.0, 12.0]);
+
+        monitor.update(13.0, &default_sync(), 0.0);
+
+        assert_eq!(monitor.lower_bound_history(), [10.0, 12.0, 13.0]);
+        assert_eq!(monitor.iteration_count(), 3);
+    }
+
+    #[test]
+    fn resumed_monitor_drops_entries_beyond_the_committed_iterations() {
+        let mut monitor = ConvergenceMonitor::with_iteration_budget(
+            make_rule_set(StoppingRule::IterationLimit { limit: 8 }),
+            8,
+        );
+        monitor.resume_at(2, &[10.0, 12.0, 14.0]);
+
+        assert_eq!(monitor.lower_bound_history(), [10.0, 12.0]);
+        assert_eq!(monitor.iteration_count(), 2);
     }
 
     #[test]

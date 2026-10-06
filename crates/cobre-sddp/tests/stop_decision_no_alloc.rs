@@ -1,6 +1,6 @@
 //! Pins the stop decision and the convergence monitor's per-iteration update to
 //! zero heap allocation, for both stopping modes and a rule set holding every
-//! configurable rule kind.
+//! configurable rule kind, and the monitor of a resumed run to the same bound.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
@@ -94,4 +94,15 @@ fn stop_decision_and_convergence_update_allocate_nothing() {
     }
 
     assert_eq!(alloc_count(), 0, "the stop decision must not allocate");
+
+    let recorded: Vec<f64> = (0..10).map(f64::from).collect();
+    let mut resumed = ConvergenceMonitor::with_iteration_budget(any_set.clone(), 64);
+
+    reset_alloc_count();
+    resumed.resume_at(10, &recorded);
+    for i in 0..40 {
+        black_box(resumed.update(100.0 + f64::from(i), &sync, 0.0));
+    }
+
+    assert_eq!(alloc_count(), 0, "a resumed monitor must not allocate");
 }

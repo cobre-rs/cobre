@@ -1690,6 +1690,7 @@ fn resolve_phase_configs(
             training_enumerated: config.training_enumerated,
             max_iterations,
             start_iteration: 0,
+            resume_lower_bound_history: Vec::new(),
             stopping_rules: config.stopping_rule_set.clone(),
         },
         SimulationConfig {

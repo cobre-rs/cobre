@@ -486,6 +486,7 @@ fn train_fixture(
                 training_enumerated: false,
                 max_iterations: 10,
                 start_iteration: 0,
+                resume_lower_bound_history: Vec::new(),
                 n_fwd_threads: 1,
                 stopping_rules: StoppingRuleSet {
                     rules: vec![StoppingRule::IterationLimit { limit: iterations }],

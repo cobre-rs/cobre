@@ -1218,7 +1218,7 @@ mod basis_reconstruct_churn {
         config.training.stopping_rules =
             Some(vec![StoppingRuleConfig::IterationLimit { limit: 2 }]);
 
-        setup.set_start_iteration(1);
+        setup.set_resume_point(1, Vec::new());
 
         let mut solver2 = ActiveSolver::new().expect("ActiveSolver phase2 must succeed");
 
@@ -1259,7 +1259,7 @@ mod basis_reconstruct_churn {
             );
             let deactivated_fcf = std::mem::replace(&mut setup.fcf, placeholder_fcf);
             setup2.replace_fcf(deactivated_fcf);
-            setup2.set_start_iteration(1);
+            setup2.set_resume_point(1, Vec::new());
 
             let outcome2 = setup2
                 .train(&mut solver2, &comm, 1, ActiveSolver::new, None, None)
@@ -1740,8 +1740,10 @@ mod warm_start {
         )
         .expect("warm-start FCF");
         setup_phase2.replace_fcf(warm_fcf);
-        setup_phase2
-            .set_start_iteration(u64::from(checkpoint.metadata.producer.completed_iterations));
+        setup_phase2.set_resume_point(
+            u64::from(checkpoint.metadata.producer.completed_iterations),
+            checkpoint.metadata.producer.lower_bound_history.clone(),
+        );
 
         let mut solver_phase2 = ActiveSolver::new().expect("ActiveSolver");
         let outcome_phase2 = setup_phase2
@@ -3170,8 +3172,10 @@ mod range_warm_start_determinism {
         )
         .expect("warm-start FCF");
         setup_warm.replace_fcf(warm_fcf);
-        setup_warm
-            .set_start_iteration(u64::from(checkpoint.metadata.producer.completed_iterations));
+        setup_warm.set_resume_point(
+            u64::from(checkpoint.metadata.producer.completed_iterations),
+            checkpoint.metadata.producer.lower_bound_history.clone(),
+        );
 
         let mut solver_warm = ActiveSolver::new().expect("ActiveSolver::new");
         let warm_outcome = setup_warm

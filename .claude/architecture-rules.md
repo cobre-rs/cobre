@@ -130,7 +130,7 @@ duplicates the other's resolution sequence.
 `StudySetup` exposes a small impl surface: context builders (`stage_ctx`,
 `training_ctx`, `simulation_ctx`) are `SolveInputs` methods `StudySetup`
 delegates to unchanged, plus targeted mutation setters (`replace_fcf`,
-`set_start_iteration`, `set_export_states`) and one typed read accessor
+`set_resume_point`, `set_export_states`) and one typed read accessor
 (`simulation_config`). Every other access uses direct field paths
 (`setup.inputs.sub_struct.field` for a `SolveInputs`-held sub-struct,
 `setup.sub_struct.field` otherwise). Do not add accessor methods for plain

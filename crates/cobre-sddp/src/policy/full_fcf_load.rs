@@ -270,7 +270,8 @@ impl CheckedFullFcfLoad {
     }
 
     /// Install the loaded FCF, the stored basis cache (when the checkpoint
-    /// holds bases) and, for resume, the start iteration into `setup`.
+    /// holds bases) and, for resume, the completed iterations and their recorded
+    /// lower bounds into `setup`.
     pub fn apply_to_training(self, setup: &mut StudySetup) {
         debug_assert!(self.kind != FullFcfLoadKind::SimulationOnly);
         let completed = self.completed_iterations();
@@ -281,7 +282,7 @@ impl CheckedFullFcfLoad {
             setup.set_warm_start_basis_cache(self.basis_cache);
         }
         if self.kind == FullFcfLoadKind::Resume {
-            setup.set_start_iteration(completed);
+            setup.set_resume_point(completed, self.producer.lower_bound_history);
         }
     }
 

@@ -55,8 +55,9 @@ pub struct TrainingResult {
     /// Final lower bound at termination.
     pub final_lb: f64,
 
-    /// The convergence monitor's lower-bound history at termination, oldest
-    /// first; empty when the result was not produced by a training loop.
+    /// The lower bound of each completed iteration the run or its resumed
+    /// checkpoint recorded, oldest first; empty when the result was not
+    /// produced by a training loop.
     pub lower_bound_history: Vec<f64>,
 
     /// Final upper bound mean at termination.

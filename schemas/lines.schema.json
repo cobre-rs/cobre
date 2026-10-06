@@ -19,7 +19,7 @@
         },
         "exchange_cost": {
           "default": null,
-          "description": "Optional entity-level exchange cost override ($/`MWh`).\nWhen absent, falls back to global `line_exchange_cost`.",
+          "description": "Optional entity-level exchange cost override ($/`MWh`).\nWhen absent, falls back to `line.exchange_cost` in `penalties.json`.",
           "format": "double",
           "type": [
             "number",

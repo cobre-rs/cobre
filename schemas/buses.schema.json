@@ -5,7 +5,7 @@
       "description": "A single bus entry.",
       "properties": {
         "deficit_segments": {
-          "description": "Optional entity-level deficit segment overrides.\nWhen absent, the global defaults from `penalties.json` are used.",
+          "description": "Optional entity-level deficit segment overrides.\nWhen absent, falls back to `bus.deficit_segments` in `penalties.json`.",
           "items": {
             "$ref": "#/$defs/RawDeficitSegment"
           },

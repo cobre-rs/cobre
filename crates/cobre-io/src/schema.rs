@@ -758,4 +758,112 @@ mod tests {
         table.sort_unstable();
         assert_eq!(hydro_section, table);
     }
+
+    fn schema_named<'a>(schemas: &'a [(String, Value)], name: &str) -> &'a Value {
+        let Some((_, schema)) = schemas.iter().find(|(file, _)| file == name) else {
+            panic!("{name} not found in schemas");
+        };
+        schema
+    }
+
+    #[test]
+    fn entity_penalty_override_descriptions_cite_penalties_json_keys() {
+        let schemas = generate_schemas().unwrap();
+        let penalties = schema_named(&schemas, "penalties.schema.json");
+        for (file, def, property, section, key) in [
+            (
+                "non_controllable_sources.schema.json",
+                "RawNcs",
+                "curtailment_cost",
+                "non_controllable_source",
+                "curtailment_cost",
+            ),
+            (
+                "lines.schema.json",
+                "RawLine",
+                "exchange_cost",
+                "line",
+                "exchange_cost",
+            ),
+            (
+                "buses.schema.json",
+                "RawBus",
+                "deficit_segments",
+                "bus",
+                "deficit_segments",
+            ),
+        ] {
+            let pointer = format!("/$defs/{def}/properties/{property}/description");
+            let description = schema_named(&schemas, file)
+                .pointer(&pointer)
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{file} has no {pointer}"));
+            let cited = format!("`{section}.{key}`");
+            assert!(
+                description.contains(&cited) && description.contains("`penalties.json`"),
+                "{file} {pointer} does not cite {cited} in `penalties.json`: {description:?}"
+            );
+
+            let reference = penalties
+                .pointer(&format!("/properties/{section}/$ref"))
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!("penalties.schema.json has no /properties/{section}/$ref")
+                });
+            let section_properties = reference
+                .strip_prefix('#')
+                .and_then(|def_pointer| penalties.pointer(def_pointer))
+                .and_then(|section_def| section_def.get("properties"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("penalties.schema.json {reference} has no properties"));
+            assert!(
+                section_properties.contains_key(key),
+                "penalties.schema.json {reference}/properties has no {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn hydro_penalty_override_fields_are_fields_of_the_penalties_hydro_section() {
+        let schemas = generate_schemas().unwrap();
+        let penalties = schema_named(&schemas, "penalties.schema.json");
+        let hydros = schema_named(&schemas, "hydros.schema.json");
+
+        let reference = penalties
+            .pointer("/properties/hydro/$ref")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("penalties.schema.json has no /properties/hydro/$ref"));
+        let hydro_section = reference
+            .strip_prefix('#')
+            .and_then(|def_pointer| penalties.pointer(def_pointer))
+            .and_then(|section_def| section_def.get("properties"))
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("penalties.schema.json {reference} has no properties"));
+        let overrides = hydros
+            .pointer("/$defs/RawHydroPenaltyOverrides/properties")
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| {
+                panic!("hydros.schema.json has no /$defs/RawHydroPenaltyOverrides/properties")
+            });
+        let foreign: Vec<&String> = overrides
+            .keys()
+            .filter(|key| !hydro_section.contains_key(*key))
+            .collect();
+        assert!(
+            foreign.is_empty(),
+            "hydros.schema.json /$defs/RawHydroPenaltyOverrides/properties names keys absent \
+             from penalties.schema.json {reference}/properties: {foreign:?}"
+        );
+
+        let pointer = "/$defs/RawHydro/properties/penalties/description";
+        let description = hydros
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("hydros.schema.json has no {pointer}"));
+        assert!(
+            description.contains("`hydro`") && description.contains("`penalties.json`"),
+            "hydros.schema.json {pointer} does not cite the `hydro` section of \
+             `penalties.json`: {description:?}"
+        );
+    }
 }

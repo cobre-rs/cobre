@@ -92,7 +92,7 @@ pub(crate) struct RawLine {
     /// Nested capacity object with direct and reverse MW limits.
     capacity: RawLineCapacity,
     /// Optional entity-level exchange cost override ($/`MWh`).
-    /// When absent, falls back to global `line_exchange_cost`.
+    /// When absent, falls back to `line.exchange_cost` in `penalties.json`.
     #[serde(default)]
     exchange_cost: Option<f64>,
     /// Transmission losses as percentage. Defaults to 0.0 when absent.

@@ -76,7 +76,7 @@ pub(crate) struct RawBus {
     /// Date the entity enters service (ISO 8601 `YYYY-MM-DD`).
     operational_start_date: String,
     /// Optional entity-level deficit segment overrides.
-    /// When absent, the global defaults from `penalties.json` are used.
+    /// When absent, falls back to `bus.deficit_segments` in `penalties.json`.
     deficit_segments: Option<Vec<RawDeficitSegment>>,
 }
 

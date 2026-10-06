@@ -107,7 +107,7 @@ pub(crate) struct RawNcs {
     #[serde(default = "default_allow_curtailment")]
     allow_curtailment: bool,
     /// Optional entity-level curtailment cost override ($/`MWh`).
-    /// When absent, falls back to global `ncs_curtailment_cost`.
+    /// When absent, falls back to `non_controllable_source.curtailment_cost` in `penalties.json`.
     #[serde(default)]
     curtailment_cost: Option<f64>,
 }

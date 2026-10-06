@@ -373,7 +373,7 @@
               "type": "null"
             }
           ],
-          "description": "Entity-level penalty overrides. Absent = all penalties use global defaults."
+          "description": "Entity-level penalty overrides. When absent, every penalty uses the `hydro` section of `penalties.json`."
         },
         "reservoir": {
           "$ref": "#/$defs/RawReservoir",
@@ -429,7 +429,7 @@
     },
     "RawHydroPenaltyOverrides": {
       "additionalProperties": false,
-      "description": "Entity-level hydro penalty overrides.\n\nEvery field is optional; an absent field uses the global default for that\npenalty.\n\nJSON field names mirror `HydroPenalties` and `HydroPenaltyOverrides` field names.",
+      "description": "Entity-level hydro penalty overrides.\n\nEach field is named after a field of the `hydro` section of `penalties.json`; an absent field falls back to that section's value.",
       "properties": {
         "diversion_cost": {
           "default": null,

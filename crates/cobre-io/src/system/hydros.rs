@@ -150,7 +150,7 @@ pub(crate) struct RawHydro {
     /// explicit error.
     #[serde(default)]
     specific_productivity_mw_per_m3s_per_m: Option<f64>,
-    /// Entity-level penalty overrides. Absent = all penalties use global defaults.
+    /// Entity-level penalty overrides. When absent, every penalty uses the `hydro` section of `penalties.json`.
     #[serde(default)]
     penalties: Option<RawHydroPenaltyOverrides>,
 }
@@ -390,10 +390,7 @@ pub(crate) struct RawUnitGroup {
 
 /// Entity-level hydro penalty overrides.
 ///
-/// Every field is optional; an absent field uses the global default for that
-/// penalty.
-///
-/// JSON field names mirror `HydroPenalties` and `HydroPenaltyOverrides` field names.
+/// Each field is named after a field of the `hydro` section of `penalties.json`; an absent field falls back to that section's value.
 #[allow(clippy::struct_field_names)]
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]

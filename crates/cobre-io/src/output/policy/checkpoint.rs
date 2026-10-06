@@ -326,6 +326,7 @@ fn bin_file_name(id: u32) -> String {
 ///         training_block_mode: "parallel".to_string(),
 ///         training_block_mode_per_stage: vec![],
 ///         cost_scale_factor: None,
+///         lower_bound_history: Vec::new(),
 ///     },
 ///     season_manifest: SeasonManifest::default(),
 /// };

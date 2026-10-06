@@ -332,6 +332,7 @@ pub fn write_checkpoint(
             training_block_mode,
             training_block_mode_per_stage,
             cost_scale_factor: Some(cost_scale_factor),
+            lower_bound_history: training_result.lower_bound_history.clone(),
         },
         season_manifest: build_season_manifest(system).to_season_manifest(),
     };

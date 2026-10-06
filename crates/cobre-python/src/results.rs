@@ -859,6 +859,11 @@ fn metadata_to_py<'py>(
         "cost_scale_factor",
         into_py(py, producer.cost_scale_factor)?,
     )?;
+    let lower_bound_history = PyList::empty(py);
+    for &lb in &producer.lower_bound_history {
+        lower_bound_history.append(into_py(py, lb)?)?;
+    }
+    producer_dict.set_item("lower_bound_history", lower_bound_history)?;
     dict.set_item("producer", producer_dict)?;
 
     Ok(dict)

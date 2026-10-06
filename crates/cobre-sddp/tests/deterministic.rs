@@ -1477,6 +1477,7 @@ fn d12_checkpoint_round_trip() {
             training_block_mode: "parallel".to_string(),
             training_block_mode_per_stage: vec![],
             cost_scale_factor: None,
+            lower_bound_history: Vec::new(),
         },
     );
 
@@ -10529,6 +10530,7 @@ mod enumerated_checkpoint {
                 training_block_mode: "parallel".to_string(),
                 training_block_mode_per_stage: vec![],
                 cost_scale_factor: None,
+                lower_bound_history: Vec::new(),
             },
         );
 

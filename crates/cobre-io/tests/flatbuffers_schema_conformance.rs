@@ -895,6 +895,7 @@ fn conformance_manifest_value() -> CheckpointManifest {
                 "chronological".to_string(),
             ],
             cost_scale_factor: Some(1_000_000.0),
+            lower_bound_history: vec![1300.5, 1250.25, 1234.5],
         },
         season_manifest: SeasonManifest {
             cycle_code: SEASON_CYCLE_CODE_MONTHLY,
@@ -978,6 +979,18 @@ fn assert_manifest_eq(actual: &CheckpointManifest, expected: &CheckpointManifest
         ap.cost_scale_factor.map(f64::to_bits),
         ep.cost_scale_factor.map(f64::to_bits)
     );
+    assert_eq!(
+        ap.lower_bound_history
+            .iter()
+            .copied()
+            .map(f64::to_bits)
+            .collect::<Vec<_>>(),
+        ep.lower_bound_history
+            .iter()
+            .copied()
+            .map(f64::to_bits)
+            .collect::<Vec<_>>()
+    );
 
     let (asm, esm) = (&actual.season_manifest, &expected.season_manifest);
     assert_eq!(asm.cycle_code, esm.cycle_code);
@@ -1030,6 +1043,13 @@ fn checkpoint_manifest_round_trip() {
         &json!(["parallel", "chronological"])
     );
     assert!((as_f64(&json, "cost_scale_factor") - 1_000_000.0).abs() < 1e-6);
+    let lower_bound_history: Vec<f64> = get(&json, "lower_bound_history")
+        .as_array()
+        .expect("lower_bound_history is an array")
+        .iter()
+        .map(|v| v.as_f64().expect("lower_bound_history entries are numbers"))
+        .collect();
+    assert_eq!(lower_bound_history, vec![1300.5, 1250.25, 1234.5]);
 
     let nodes = get(&json, "nodes").as_array().expect("nodes is an array");
     assert_eq!(nodes.len(), 2);
@@ -1093,6 +1113,7 @@ fn checkpoint_manifest_round_trip() {
         "training_block_mode": "parallel",
         "training_block_mode_per_stage": ["parallel", "chronological"],
         "cost_scale_factor": 1_000_000.0,
+        "lower_bound_history": [1300.5, 1250.25, 1234.5],
         "season_manifest": {
             "cycle_code": 0,
             "n_seasons": 12,

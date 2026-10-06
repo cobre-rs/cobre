@@ -103,6 +103,7 @@ mod boundary_cuts {
                 training_block_mode: "parallel".to_string(),
                 training_block_mode_per_stage: vec![],
                 cost_scale_factor: None,
+                lower_bound_history: Vec::new(),
             },
         );
         write_policy_checkpoint(policy_dir, &stage_cuts, &stage_bases, &metadata, &[])
@@ -1641,6 +1642,7 @@ mod warm_start {
                 training_block_mode: "parallel".to_string(),
                 training_block_mode_per_stage: vec![],
                 cost_scale_factor: None,
+                lower_bound_history: Vec::new(),
             },
         );
         write_policy_checkpoint(policy_dir, &stage_cuts, &stage_bases, &metadata, &[])
@@ -2846,6 +2848,7 @@ mod range_warm_start_determinism {
                 training_block_mode: "parallel".to_string(),
                 training_block_mode_per_stage: vec![],
                 cost_scale_factor: None,
+                lower_bound_history: Vec::new(),
             },
         );
         write_policy_checkpoint(policy_dir, &stage_cuts, &stage_bases, &metadata, &[])

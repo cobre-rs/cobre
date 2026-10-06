@@ -151,6 +151,44 @@ def test_write_policy_checkpoint_cost_scale_factor_omitted_reads_as_none(
     assert loaded["metadata"]["producer"]["cost_scale_factor"] is None
 
 
+def test_write_policy_checkpoint_lower_bound_history_round_trips(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The producer's lower_bound_history reads back bit for bit, -0.0 included."""
+    import cobre  # noqa: PLC0415
+    import cobre.results  # noqa: PLC0415
+
+    history = [130.0, -0.0, 2.2250738585072014e-308, 123.45]
+    metadata = _make_metadata()
+    metadata["producer"]["lower_bound_history"] = history
+
+    cobre.write_policy_checkpoint(
+        str(tmp_path / "policy"), _make_stage_cuts(), metadata
+    )
+
+    loaded = cobre.results.load_policy(str(tmp_path))
+    recorded = loaded["metadata"]["producer"]["lower_bound_history"]
+    assert [v.hex() for v in recorded] == [v.hex() for v in history]
+
+
+def test_write_policy_checkpoint_lower_bound_history_omitted_reads_as_empty(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Omitting lower_bound_history from the producer dict writes an empty series."""
+    import cobre  # noqa: PLC0415
+    import cobre.results  # noqa: PLC0415
+
+    metadata = _make_metadata()
+    assert "lower_bound_history" not in metadata["producer"]
+
+    cobre.write_policy_checkpoint(
+        str(tmp_path / "policy"), _make_stage_cuts(), metadata
+    )
+
+    loaded = cobre.results.load_policy(str(tmp_path))
+    assert loaded["metadata"]["producer"]["lower_bound_history"] == []
+
+
 def test_write_policy_checkpoint_coefficient_length_mismatch_raises(
     tmp_path: pathlib.Path,
 ) -> None:

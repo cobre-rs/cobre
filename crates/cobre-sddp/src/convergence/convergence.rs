@@ -200,6 +200,12 @@ impl ConvergenceMonitor {
     pub fn iteration_count(&self) -> u64 {
         self.iteration_count
     }
+
+    /// Lower bound recorded by each [`Self::update`], oldest first.
+    #[must_use]
+    pub fn lower_bound_history(&self) -> &[f64] {
+        &self.lower_bound_history
+    }
 }
 
 // ---------------------------------------------------------------------------

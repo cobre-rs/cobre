@@ -242,6 +242,8 @@ pub(crate) struct PyProducerBlock {
     training_block_mode_per_stage: Vec<String>,
     #[pyo3(default)]
     cost_scale_factor: Option<f64>,
+    #[pyo3(default)]
+    lower_bound_history: Vec<f64>,
 }
 
 impl From<PyProducerBlock> for ProducerBlock {
@@ -259,6 +261,7 @@ impl From<PyProducerBlock> for ProducerBlock {
             training_block_mode: p.training_block_mode,
             training_block_mode_per_stage: p.training_block_mode_per_stage,
             cost_scale_factor: p.cost_scale_factor,
+            lower_bound_history: p.lower_bound_history,
         }
     }
 }

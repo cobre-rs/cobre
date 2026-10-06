@@ -625,6 +625,7 @@ where
             Some(frozen_templates),
         );
         result.stop_decision = stop_decision;
+        result.lower_bound_history = self.convergence_monitor.lower_bound_history().to_vec();
 
         Ok(TrainingOutcome {
             result,
@@ -687,20 +688,23 @@ where
             },
         );
 
+        let mut result = TrainingResult::new(
+            final_lb,
+            final_ub,
+            final_ub_std,
+            final_gap,
+            completed_iterations,
+            reason.to_string(),
+            total_time_ms,
+            Vec::new(),
+            solver_stats_log,
+            visited_archive,
+            Some(frozen_templates),
+        );
+        result.lower_bound_history = self.convergence_monitor.lower_bound_history().to_vec();
+
         TrainingOutcome {
-            result: TrainingResult::new(
-                final_lb,
-                final_ub,
-                final_ub_std,
-                final_gap,
-                completed_iterations,
-                reason.to_string(),
-                total_time_ms,
-                Vec::new(),
-                solver_stats_log,
-                visited_archive,
-                Some(frozen_templates),
-            ),
+            result,
             error: Some(err),
         }
     }

@@ -1,7 +1,8 @@
 # Wire Format Evolution
 
 > **Status:** Living register — tracks append-only postcard discriminant
-> assignments for tail-appended wire enum variants; re-derive against the live
+> assignments for tail-appended wire enum variants and the FlatBuffers field-id
+> assignments of policy checkpoint manifest fields; re-derive against the live
 > tree before acting.
 
 `VariableRef` (`cobre-core`) and `BroadcastComputedParameter` (`cobre-io`) are
@@ -55,3 +56,32 @@ pin test) and a full encode → decode → `assert_eq!` round-trip test covering
 every field combination the variant's shape allows. Never insert a variant
 before an existing one: doing so shifts every later discriminant and silently
 reinterprets already-serialized values as the wrong variant.
+
+## Policy checkpoint manifest fields (FlatBuffers)
+
+The policy checkpoint's `manifest.bin` is a FlatBuffers `CheckpointManifest`
+table. `crates/cobre-io/schemas/policy.fbs` is the canonical schema, and its
+header owns the wire-level conventions, the burned slots and every field id
+assigned before this register. The hand-rolled codec in
+`crates/cobre-io/src/output/policy/codec.rs` addresses each field by a vtable
+slot constant, `4 + 2 * id`. A new manifest field follows these rules:
+
+- It takes the next explicit `id` at the table's end and never reuses a
+  `deprecated` slot.
+- Its codec slot constant changes together with `policy.fbs`.
+- A buffer without the field decodes to the field's empty or `None` value,
+  never to an error.
+- The flatc conformance test
+  (`crates/cobre-io/tests/flatbuffers_schema_conformance.rs`, feature
+  `flatc-conformance`) guards both directions: the hand-rolled buffer read by
+  `flatc`, and a `flatc`-built buffer read by the hand-rolled reader.
+- An additive field needs no `FORMAT_VERSION` step inside a release. The policy
+  load gate refuses any checkpoint whose `software`/`software_version` differ
+  from the running build's, so every checkpoint a run loads was written by that
+  same build.
+
+### Field assignments
+
+| Field                 | Table                | `id` | Codec slot | Guarding test(s)                                                                                                                                                                                                  |
+| --------------------- | -------------------- | ---- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lower_bound_history` | `CheckpointManifest` | 21   | 46         | `checkpoint_manifest_round_trip` (flatc, both directions); `checkpoint_manifest_round_trips_the_lower_bound_history_bitwise` (round-trip); `checkpoint_manifest_without_the_lower_bound_history_reads_an_empty_series` (absent field) |

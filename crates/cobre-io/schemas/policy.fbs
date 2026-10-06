@@ -412,4 +412,9 @@ table CheckpointManifest {
   /// Name of the software that wrote this checkpoint; absent in a buffer older
   /// than this field.
   software:string (id: 20);
+
+  /// Lower bound after each recorded iteration, oldest first; the last entry is
+  /// iteration `completed_iterations`. A writer records every completed iteration
+  /// it has; an empty or absent vector means none was recorded.
+  lower_bound_history:[float64] (id: 21);
 }

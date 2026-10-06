@@ -494,6 +494,13 @@ pub struct ProducerBlock {
     /// scaled-at-`1_000_000.0`, the constant every unmarked artifact was
     /// unconditionally written under.
     pub cost_scale_factor: Option<f64>,
+    /// Lower bound after each recorded iteration, oldest first; the last entry
+    /// is iteration [`completed_iterations`]. A writer records every completed
+    /// iteration it has; an empty vector means none was recorded, and is what a
+    /// buffer without the field reads as.
+    ///
+    /// [`completed_iterations`]: Self::completed_iterations
+    pub lower_bound_history: Vec<f64>,
 }
 
 /// Study-global checkpoint metadata carried on the `FlatBuffers`

@@ -83,7 +83,9 @@ pub use cobre_io::scenarios::estimation::{
 pub use config::TrainingConfig;
 pub use convergence::convergence::ConvergenceMonitor;
 pub use convergence::risk_measure::{BackwardOutcome, RiskMeasure};
-pub use convergence::stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
+pub use convergence::stopping_rule::{
+    MonitorState, StopDecision, StopMask, StoppingMode, StoppingRule, StoppingRuleSet,
+};
 pub use cut::cut_selection::CutSelectionStrategy;
 pub use cut::cut_sync::CutSyncBuffers;
 pub use cut::row::build_cut_row_batch_into;

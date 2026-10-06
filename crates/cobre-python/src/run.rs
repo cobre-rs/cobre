@@ -1981,7 +1981,6 @@ mod tests {
             upper_bound: 110.0,
             upper_bound_std: 5.0,
             gap: 0.0909,
-            rules_evaluated: vec![],
         };
         let worker_timing = TrainingEvent::WorkerTiming {
             rank: 0,

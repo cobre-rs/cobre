@@ -40,7 +40,7 @@ you need.
 | `model::parameters`               | `ScalarParameter` / `ComputedParameter` model for user-defined scalar and derived parameters                                          |
 | `constraints::generic_constraint` | User-defined linear constraints (`GenericConstraint`, `VariableRef`) over LP variables                                                |
 | `constraints::initial_conditions` | Reservoir storage, AR inflow lags, and anticipated-commitment history at study start                                                  |
-| `constraints::training_event`     | `TrainingEvent` enum and `StoppingRuleResult`: the typed event stream consumed by loggers, the TUI, MCP progress, and Parquet writers |
+| `constraints::training_event`     | `TrainingEvent` enum: the typed event stream consumed by loggers, the TUI, MCP progress, and Parquet writers                          |
 | `stats::welford`                  | `WelfordAccumulator` — running mean and sample standard deviation for streaming statistics                                            |
 | `system`                          | `System` container and `SystemBuilder`                                                                                                |
 | `topology`                        | `CascadeTopology` derived structure                                                                                                   |

@@ -402,6 +402,7 @@ mod risk_measure_conformance {
 mod stopping_rule_conformance {
     //! Conformance tests for `StoppingRule` and `StoppingRuleSet` semantics.
 
+    use cobre_sddp::StopMask;
     use cobre_sddp::stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
 
     fn make_state(iteration: u64, lb: f64, history: Vec<f64>, shutdown: bool) -> MonitorState {
@@ -439,15 +440,15 @@ mod stopping_rule_conformance {
                         .chain(std::iter::once(0.001_f64))
                         .collect();
                     let state = make_state(history_len as u64, 0.001, history, shutdown);
-                    let result = rule.evaluate(&state);
                     assert!(
-                        result.triggered,
+                        rule.is_triggered(&state),
                         "case_index = {idx}, desc = {desc}: BoundStalling must trigger when \
                          |delta|={:.6} < tolerance={tolerance} using max guard",
                         0.001_f64 / 1.0_f64
                     );
                     assert_eq!(
-                        result.rule_name, "bound_stalling",
+                        rule.name(),
+                        "bound_stalling",
                         "case_index = {idx}, desc = {desc}: rule_name must be bound_stalling"
                     );
                 }
@@ -475,29 +476,24 @@ mod stopping_rule_conformance {
                         lower_bound_history: history,
                         shutdown_requested: shutdown,
                     };
-                    let (should_stop, results) = rule_set.evaluate(&state);
+                    let decision = rule_set.evaluate(&state);
                     assert!(
-                        !should_stop,
-                        "case_index = {idx}, desc = {desc}: All mode must not stop when only 2 \
-                         of 3 rules trigger"
-                    );
-                    assert_eq!(
-                        results.len(),
-                        3,
-                        "case_index = {idx}, desc = {desc}: must return 3 results"
+                        !decision.should_stop(),
+                        "case_index = {idx}, desc = {desc}: All mode must not stop when neither \
+                         conjunct triggers"
                     );
                     assert!(
-                        results[0].triggered,
+                        decision.mask().contains(StopMask::ITERATION_LIMIT),
                         "case_index = {idx}, desc = {desc}: IterationLimit({iter_limit}) must \
                          trigger at iteration {iter_limit}"
                     );
                     assert!(
-                        !results[1].triggered,
+                        !decision.mask().contains(StopMask::TIME_LIMIT),
                         "case_index = {idx}, desc = {desc}: TimeLimit(3600) must not trigger at \
                          1000s"
                     );
                     assert!(
-                        !results[2].triggered,
+                        !decision.mask().contains(StopMask::BOUND_STALLING),
                         "case_index = {idx}, desc = {desc}: BoundStalling must not trigger with \
                          only {history_len} history entries"
                     );
@@ -513,9 +509,8 @@ mod stopping_rule_conformance {
                         mode: StoppingMode::All,
                     };
                     let state = make_state(1, 0.0, vec![], shutdown);
-                    let (should_stop, _) = rule_set.evaluate(&state);
                     assert!(
-                        should_stop,
+                        rule_set.evaluate(&state).should_stop(),
                         "case_index = {idx}, desc = {desc}: GracefulShutdown must bypass All \
                          mode and force should_stop=true (shutdown_requested={shutdown})"
                     );
@@ -644,8 +639,8 @@ mod cut_conformance {
 mod convergence_conformance {
     //! Conformance tests for `ConvergenceMonitor` gap formula and history.
 
-    use cobre_sddp::ConvergenceMonitor;
     use cobre_sddp::stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet};
+    use cobre_sddp::{ConvergenceMonitor, StopMask};
 
     use super::make_sync_result;
 
@@ -710,15 +705,12 @@ mod convergence_conformance {
                     for &v in &lb_values {
                         monitor2.update(v, &make_sync_result(110.0));
                     }
-                    let (should_stop, results) = monitor2.update(50.0, &make_sync_result(110.0));
-                    assert_eq!(
-                        results[0].rule_name, "bound_stalling",
-                        "case_index = {idx}, desc = {desc}: rule must be bound_stalling"
-                    );
+                    let decision = monitor2.update(50.0, &make_sync_result(110.0));
                     assert!(
-                        should_stop || !results[0].detail.contains("insufficient history"),
+                        decision.should_stop()
+                            && decision.mask().contains(StopMask::BOUND_STALLING),
                         "case_index = {idx}, desc = {desc}: after 6 updates, BoundStalling must \
-                         have sufficient history"
+                         have sufficient history and trigger"
                     );
                 }
                 3 => {
@@ -729,32 +721,28 @@ mod convergence_conformance {
                     let mut monitor = ConvergenceMonitor::new(rule_set);
                     let sync = make_sync_result(110.0);
                     for i in 1..10 {
-                        let (stop, results) = monitor.update(100.0, &sync);
+                        let decision = monitor.update(100.0, &sync);
                         assert!(
-                            !stop,
+                            !decision.should_stop(),
                             "case_index = {idx}, desc = {desc}: IterationLimit(10) must not \
                              trigger at iteration {i}"
                         );
                         assert!(
-                            !results[0].triggered,
+                            !decision.mask().contains(StopMask::ITERATION_LIMIT),
                             "case_index = {idx}, desc = {desc}: IterationLimit rule must not be \
                              triggered at iteration {i}"
                         );
                     }
-                    let (stop, results) = monitor.update(100.0, &sync);
+                    let decision = monitor.update(100.0, &sync);
                     assert!(
-                        stop,
+                        decision.should_stop(),
                         "case_index = {idx}, desc = {desc}: IterationLimit(10) must trigger at \
                          iteration 10"
                     );
                     assert!(
-                        results[0].triggered,
+                        decision.mask().contains(StopMask::ITERATION_LIMIT),
                         "case_index = {idx}, desc = {desc}: IterationLimit rule must be triggered \
                          at iteration 10"
-                    );
-                    assert_eq!(
-                        results[0].rule_name, "iteration_limit",
-                        "case_index = {idx}, desc = {desc}: rule_name must be iteration_limit"
                     );
                 }
                 _ => unreachable!("unexpected case_index = {idx}"),

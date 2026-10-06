@@ -6315,6 +6315,38 @@ mod chronological_telescoping {
         );
     }
 
+    /// Under `All`, the iteration limit caps the run instead of joining the
+    /// conjunction: the other rules end it as soon as they hold, and the cap
+    /// ends it, recorded as `iteration_limit`, when they never do.
+    #[test]
+    fn all_mode_stops_on_its_other_rules_and_runs_to_the_iteration_limit_otherwise() {
+        let train_all = |stalling_tolerance: f64, stalling_iterations: u32| {
+            let mut config = enumerated_config_with_rules(vec![
+                StoppingRuleConfig::IterationLimit { limit: 10 },
+                StoppingRuleConfig::BoundStalling {
+                    tolerance: stalling_tolerance,
+                    iterations: stalling_iterations,
+                },
+            ]);
+            config.training.stopping_mode = cobre_io::config::StoppingMode::All;
+            train_result(&config)
+        };
+
+        // No relative LB change reaches a 1e12 tolerance, so the rule triggers
+        // exactly when its 4-entry window fills.
+        let stalled = train_all(1e12, 4);
+        assert_eq!(
+            (stalled.iterations, stalled.reason.as_str()),
+            (4, "bound_stalling")
+        );
+
+        let capped = train_all(1e-12, 50);
+        assert_eq!(
+            (capped.iterations, capped.reason.as_str()),
+            (10, "iteration_limit")
+        );
+    }
+
     /// A `Gap` rule under sampled forward selection is rejected at setup by the
     /// admission gate — the exact upper bound the gap needs is produced only by
     /// the enumerated engine.

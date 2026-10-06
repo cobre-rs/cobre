@@ -269,8 +269,10 @@ where
         let shutdown_flag = config.events.shutdown_flag.take();
         let export_states = config.events.export_states;
 
-        let convergence_monitor =
-            ConvergenceMonitor::new(config.loop_config.stopping_rules.clone());
+        let convergence_monitor = ConvergenceMonitor::with_iteration_budget(
+            config.loop_config.stopping_rules.clone(),
+            config.loop_config.max_iterations,
+        );
 
         // Emit before the locals move into RuntimeHandles, while `event_sender`
         // is still bound here.
@@ -487,7 +489,7 @@ where
 
         let (lb, lb_lp_solves, lb_wall_ms, lb_solve_time_ms) = self.run_lower_bound(iteration)?;
 
-        let (should_stop, rule_results) = self.convergence_monitor.update(lb, &sync_result);
+        let decision = self.convergence_monitor.update(lb, &sync_result);
 
         self.results.final_lb = self.convergence_monitor.lower_bound();
         self.results.final_ub = self.convergence_monitor.upper_bound();
@@ -502,7 +504,6 @@ where
                 upper_bound: self.results.final_ub,
                 upper_bound_std: self.results.final_ub_std,
                 gap: self.results.final_gap,
-                rules_evaluated: rule_results.clone(),
             },
         );
 
@@ -553,11 +554,10 @@ where
 
         self.results.completed_iterations = iteration;
 
-        if should_stop {
-            self.results.termination_reason = rule_results
-                .iter()
-                .find(|r| r.triggered)
-                .map_or_else(|| "unknown".to_string(), |r| r.rule_name.to_string());
+        if decision.should_stop() {
+            self.results.termination_reason = decision
+                .first_triggered()
+                .map_or_else(|| "unknown".to_string(), str::to_string);
 
             if self.results.termination_reason == RULE_GRACEFUL_SHUTDOWN {
                 return Ok(IterationOutcome::Shutdown);

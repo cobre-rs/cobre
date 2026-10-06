@@ -2,13 +2,13 @@
 
 Case directory loading, validation, and result writing for the [Cobre](https://github.com/cobre-rs/cobre) power systems ecosystem.
 
-This crate provides two top-level entry points for all I/O in the Cobre ecosystem.
-`load_case` reads a case directory of JSON and Parquet files, executes a five-layer
-validation pipeline (structural, schema, referential integrity, dimensional
-consistency, and semantic), and produces a fully-validated `System` ready for the
-solver. `write_results` accepts aggregate result types and writes all output
-artifacts — Parquet tables, FlatBuffers policy checkpoints, and JSON manifests —
-to a specified root directory.
+`load_case` and `write_results` are this crate's top-level entry points for all
+I/O in the Cobre ecosystem. `load_case` reads a case directory of JSON and
+Parquet files, runs the layered validation pipeline described below, and
+produces a fully-validated `System` ready for the solver. `write_results`
+accepts aggregate result types and writes all output artifacts — Parquet tables,
+FlatBuffers policy checkpoints, and JSON manifests — to a specified root
+directory.
 
 ## When to Use
 
@@ -28,7 +28,7 @@ depend on it from pure algorithm crates — pass the `System` value instead.
 
 ## Validation pipeline
 
-`load_case` runs five layers in sequence; earlier layers gate later ones (a file
+`load_case` runs the layers below in sequence; earlier layers gate later ones (a file
 missing in Layer 1 is never parsed in Layer 2), and every layer collects all of
 its diagnostics into a shared `ValidationContext` before the pipeline decides
 whether to fail — a `ConstraintError` reports every problem found in one pass,
@@ -49,27 +49,24 @@ not just the first.
    ordering (lower tiers may not exceed upper), PAR model stationarity, stage
    count consistency, and estimation prerequisites (see below).
 
-After all five layers pass, `load_case` resolves the three-tier penalty/bound
+After every layer passes, `load_case` resolves the three-tier penalty/bound
 cascade, assembles the scenario models (running the estimation pipeline first
 when `inflow_history.parquet` is present without `inflow_seasonal_stats.parquet`),
 and calls `SystemBuilder::build()` to construct the immutable `System`.
 
 ## Error handling (`LoadError`)
 
-| Variant              | Fields                                                                              | Pipeline phase                                                                                                                                                                          |
-| -------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `IoError`            | `path`, `source: std::io::Error`                                                    | Layer 1/2 — file exists in the manifest but cannot be read from disk                                                                                                                    |
-| `ParseError`         | `path`, `message`                                                                   | Layer 2 — file is readable but malformed (invalid JSON/Parquet)                                                                                                                         |
-| `SchemaError`        | `path`, `field` (dot-separated, e.g. `"hydros[3].bus_id"`), `message`               | Layer 2 — required field missing or a value violates a schema constraint; also returned by `parse_config` when `training.selection` or `training.stopping_rules` is absent              |
-| `ConstraintError`    | `description` (all collected messages, newline-joined, each `[ErrorKind]`-prefixed) | Layers 4/5, or a final `SystemBuilder::build()` rejection (duplicate IDs, cascade cycle)                                                                                                |
-| `PolicyIncompatible` | `check`, `policy_value`, `system_value`                                             | After all layers pass, when `policy.mode` is `warm_start`/`resume` and the stored policy fails a compatibility check (hydro count, stage count, cut dimension, or entity identity hash) |
+`load_case` and every parsing function return `LoadError` on failure.
+`LoadError`'s rustdoc orders its variants by the pipeline phase that raises
+them and documents the fields each one carries; the API docs in
+[Links](#links) list every variant.
 
 `LoadError::io(path, source)` is the constructor to use instead of a `From<std::io::Error>`
 impl — the latter would lose the path context every diagnostic needs.
 
 ## `Config` struct (`config.json`)
 
-`Config` (`src/config/mod.rs`) has seven sections, all but `training` defaulted:
+Every `Config` (`src/config/mod.rs`) section except `training` has a default:
 
 | Section                  | Type                         | Default    | Purpose                                                |
 | ------------------------ | ---------------------------- | ---------- | ------------------------------------------------------ |
@@ -86,17 +83,20 @@ impl — the latter would lose the path context every diagnostic needs.
 `LoadError::SchemaError` if either is absent or `null`, or if
 `training.stopping_rules` has no `iteration_limit` rule.
 
-`training.stopping_rules` accepts four internally-tagged (`"type"`) rule
+`training.stopping_rules` accepts these internally-tagged (`"type"`) rule
 variants — `iteration_limit { limit }`, `time_limit { seconds }`,
 `bound_stalling { iterations, tolerance }`, and
-`gap { tolerance, relative_tolerance }` (parses but is rejected at load;
-evaluation is not yet wired) — combined via `training.stopping_mode`: `"any"`
-(default, OR) or `"all"` (AND).
+`gap { tolerance, relative_tolerance }` (admissible only under enumerated
+forward selection, where the upper bound is exact rather than a statistical
+estimate) — combined via `training.stopping_mode`: `"any"` (default, OR) or
+`"all"` (AND over every rule except `iteration_limit`, whose largest limit
+caps the run).
 
 `policy.mode` is one of `PolicyMode::Fresh` (default, start from scratch),
 `WarmStart` (load existing cuts/states from `policy.path`), or `Resume`
-(continue an interrupted run from the last checkpoint); the latter two trigger
-the `PolicyIncompatible` compatibility checks above.
+(continue an interrupted run from the last checkpoint). `load_case` does not
+check the stored policy against the case; that check runs when the policy is
+loaded.
 
 ## Three-tier penalty/bound resolution
 

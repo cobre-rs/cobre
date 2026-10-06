@@ -46,17 +46,8 @@ use, prefer `cobre-cli`, which wraps this crate.
 ## Error handling (`SddpError`)
 
 All fallible operations return `Result<T, SddpError>` (`Send + Sync + 'static`).
-
-| Variant               | Trigger                                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `Solver`              | An LP subproblem solve failed (wraps `cobre_solver::SolverError`) after all retries                                       |
-| `Communication`       | An MPI collective operation failed (wraps `cobre_comm::CommError`)                                                        |
-| `Stochastic`          | Scenario generation or PAR model validation failed                                                                        |
-| `Io`                  | Case directory loading or validation failed (wraps `cobre_io::LoadError`)                                                 |
-| `Validation`          | Algorithm configuration is semantically invalid                                                                           |
-| `Infeasible`          | An LP subproblem was provably infeasible (carries `stage`, `iteration`, `scenario`) — distinct from `Solver`, a hard stop |
-| `Simulation`          | A simulation-phase operation failed (LP failure, I/O, or policy issue)                                                    |
-| `WireVersionMismatch` | A postcard-encoded broadcast payload's wire `version` does not match this binary — restart all ranks with the same binary |
+The rustdoc of each `SddpError` variant states when it is raised; the API docs
+in [Links](#links) list every variant.
 
 ## Feature flags
 

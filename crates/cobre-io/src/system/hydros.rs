@@ -921,10 +921,10 @@ fn convert_penalty_overrides(raw: RawHydroPenaltyOverrides) -> HydroPenaltyOverr
         generation_violation_below_cost: raw.generation_violation_below_cost,
         evaporation_violation_cost: raw.evaporation_violation_cost,
         water_withdrawal_violation_cost: raw.water_withdrawal_violation_cost,
-        water_withdrawal_violation_pos_cost: raw.water_withdrawal_violation_cost,
-        water_withdrawal_violation_neg_cost: raw.water_withdrawal_violation_cost,
-        evaporation_violation_pos_cost: raw.evaporation_violation_cost,
-        evaporation_violation_neg_cost: raw.evaporation_violation_cost,
+        water_withdrawal_violation_pos_cost: None,
+        water_withdrawal_violation_neg_cost: None,
+        evaporation_violation_pos_cost: None,
+        evaporation_violation_neg_cost: None,
         inflow_nonnegativity_cost: raw.inflow_nonnegativity_cost,
     }
 }
@@ -1297,6 +1297,86 @@ mod tests {
             (hydros[0].penalties.storage_violation_below_cost - 10_000.0).abs() < f64::EPSILON,
             "storage_violation_below_cost should be 10_000.0 (global default)"
         );
+    }
+
+    fn make_global_with_directional_costs() -> GlobalPenaltyDefaults {
+        let mut global = make_global();
+        global.hydro.water_withdrawal_violation_pos_cost = 1_100.0;
+        global.hydro.water_withdrawal_violation_neg_cost = 1_200.0;
+        global.hydro.evaporation_violation_pos_cost = 5_100.0;
+        global.hydro.evaporation_violation_neg_cost = 5_200.0;
+        global
+    }
+
+    #[test]
+    fn plant_penalties_block_without_symmetric_cost_keeps_global_directional_costs() {
+        let json = r#"{
+          "hydros": [{
+            "id": 0, "name": "Override",
+            "operational_start_date": "2024-01-01",
+            "downstream_id": null,
+            "reservoir": { "min_storage_hm3": 0.0, "max_storage_hm3": 1000.0 },
+            "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+            "generation": {
+              "model": "constant_productivity",
+              "min_turbined_m3s": 0.0,
+              "max_turbined_m3s": 500.0,
+              "min_generation_mw": 0.0,
+              "max_generation_mw": 250.0
+            },
+            "penalties": { "spillage_cost": 0.05 },
+            "unit_groups": [
+              { "id": 0, "name": "Override", "bus_id": 0,
+                "min_generation_mw": 0.0, "max_generation_mw": 250.0,
+                "min_turbined_m3s": 0.0, "max_turbined_m3s": 500.0 }
+            ]
+          }]
+        }"#;
+        let f = write_json(json);
+        let global = make_global_with_directional_costs();
+        let hydros = parse_hydros(f.path(), &global).unwrap();
+
+        let p = &hydros[0].penalties;
+        assert!((p.water_withdrawal_violation_pos_cost - 1_100.0).abs() < f64::EPSILON);
+        assert!((p.water_withdrawal_violation_neg_cost - 1_200.0).abs() < f64::EPSILON);
+        assert!((p.evaporation_violation_pos_cost - 5_100.0).abs() < f64::EPSILON);
+        assert!((p.evaporation_violation_neg_cost - 5_200.0).abs() < f64::EPSILON);
+        assert!((p.spillage_cost - 0.05).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn plant_symmetric_penalty_sets_both_directions() {
+        let json = r#"{
+          "hydros": [{
+            "id": 0, "name": "Override",
+            "operational_start_date": "2024-01-01",
+            "downstream_id": null,
+            "reservoir": { "min_storage_hm3": 0.0, "max_storage_hm3": 1000.0 },
+            "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+            "generation": {
+              "model": "constant_productivity",
+              "min_turbined_m3s": 0.0,
+              "max_turbined_m3s": 500.0,
+              "min_generation_mw": 0.0,
+              "max_generation_mw": 250.0
+            },
+            "penalties": { "water_withdrawal_violation_cost": 2000.0, "evaporation_violation_cost": 6000.0 },
+            "unit_groups": [
+              { "id": 0, "name": "Override", "bus_id": 0,
+                "min_generation_mw": 0.0, "max_generation_mw": 250.0,
+                "min_turbined_m3s": 0.0, "max_turbined_m3s": 500.0 }
+            ]
+          }]
+        }"#;
+        let f = write_json(json);
+        let global = make_global_with_directional_costs();
+        let hydros = parse_hydros(f.path(), &global).unwrap();
+
+        let p = &hydros[0].penalties;
+        assert!((p.water_withdrawal_violation_pos_cost - 2_000.0).abs() < f64::EPSILON);
+        assert!((p.water_withdrawal_violation_neg_cost - 2_000.0).abs() < f64::EPSILON);
+        assert!((p.evaporation_violation_pos_cost - 6_000.0).abs() < f64::EPSILON);
+        assert!((p.evaporation_violation_neg_cost - 6_000.0).abs() < f64::EPSILON);
     }
 
     // ── AC: entity-level penalty all-default (no penalties block) ─────────────

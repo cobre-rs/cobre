@@ -1938,6 +1938,48 @@ sets a CPU-specific flag, or a reported CLP allocation failure during a reset.
   season_id >= 12". The fixtures do cross id 12, so the messages are literally
   true, but the cascade no longer activates on an id threshold. **Owner.** The
   training / test owner. **Trigger.** The next edit to those tests.
+- **`.venv` at the repo root is not ignored.** `CONTRIBUTING.md` § "Testing
+  cobre-python" creates `.venv` at the repo root, and `.gitignore` ignores
+  `.venv-mpi-smoke/` and `.venv.claude/` but not `.venv`. **Owner.** The
+  build / CI owner. **Trigger.** The next `.gitignore` edit.
+- **Test-helper copies.** `crates/cobre-cli/tests/cli_validate.rs` keeps private
+  `cobre` and `write_file` helpers that `crates/cobre-cli/tests/common/mod.rs`
+  exports. Recursive directory-copy helpers are repeated across test suites:
+  `copy_dir_recursive` (`crates/cobre-cli/tests/common/mod.rs`,
+  `crates/cobre-sddp/tests/common/mod.rs`,
+  `crates/cobre-sddp/tests/cut_basis.rs`), `copy_recursive`
+  (`crates/cobre-sddp/tests/deterministic.rs`), `copy_case_dir_into`
+  (`crates/cobre-io/tests/integration.rs`) and `copy_dir_all` (the tests in
+  `crates/cobre-python/src/run.rs`). **Owner.** The test-infrastructure owner.
+  **Trigger.** A behaviour difference between two copies, or the next test that
+  needs the same helper.
+- **Unit notation in rustdoc that the schemas do not export.**
+  `HydroEnergyProductivityRow`
+  (`crates/cobre-io/src/extensions/hydro_energy_productivity.rs`) keeps the
+  escaped-bracket unit notation the exported schemas no longer use. The error
+  table in `parse_correlation`'s rustdoc
+  (`crates/cobre-io/src/scenarios/correlation.rs`) escapes brackets inside a
+  code span, so rustdoc shows the backslashes. **Owner.** The doc / comment
+  owner. **Trigger.** The next edit to either doc comment, or a `JsonSchema`
+  derive on `HydroEnergyProductivityRow`.
+- **The anticipated-lane record's stage field.** The rustdoc of
+  `AnticipatedLaneWriteRecord::stage_id`
+  (`crates/cobre-io/src/output/simulation_writer.rs`) calls it a "Stage index
+  (0-based)" while the field is named `stage_id`. Align the name or the doc
+  once the value it holds is confirmed. **Owner.** The output-format owner.
+  **Trigger.** The next edit to the anticipated-lane writer, or a consumer
+  reading the column as a stage id.
+- **JSON conversion split across modules.** `json_value_to_py` lives in
+  `crates/cobre-python/src/results.rs`, while its inverse `py_to_json_value`
+  lives in `crates/cobre-python/src/convert.rs`. **Owner.** The Python bindings
+  owner. **Trigger.** The next edit to either conversion.
+- **Reserved checkpoint keys describe effects nothing implements.** The
+  schema-visible docs of `compress` ("Compress checkpoint files.") and
+  `store_basis` ("Include LP basis in checkpoints for warm-start.") on
+  `CheckpointingConfig` (`crates/cobre-io/src/config/policy.rs`, exported to
+  `schemas/config.schema.json`) state effects that no code performs. Both keys
+  are reserved. **Owner.** The training owner. **Trigger.** Either key being
+  wired, or the next edit to those doc comments.
 
 ### The Python policy writer accepts a foreign checkpoint's identity
 
@@ -2050,11 +2092,16 @@ same level, stays through the skipped-simulation writes on a signal stop, drains
 the artifacts. A user SIGTERM handler is left in place, and a call from a
 non-main thread installs nothing.
 
+That rework covers training only. `Study.simulate()` and the simulation phase
+of `cobre.run.run` run without signal servicing, so a signal received during
+simulation is acted on only when the call returns.
+
 **Owner.** The Python bindings owner.
 
 **Trigger.** A report that Ctrl-C or a scheduler SIGTERM does not stop a Python
-run at an iteration boundary, or the next change to the streaming drain,
-`train_native` or `run_via_study`.
+run at an iteration boundary, a request to interrupt a long Python simulation,
+or simulation gaining a stop point at which partial results are written, or the
+next change to the streaming drain, `train_native` or `run_via_study`.
 
 ### External-library refusals name loop positions instead of ids
 
@@ -2232,6 +2279,314 @@ term.
 or a test, needs the rule list, or a validation rule is added in
 `cobre-stochastic` or `cobre-sddp` (it should then enter a table from the
 start).
+
+### A constant inside a parenthesized group gets a generic parse error
+
+**What it is.** The generic-constraint expression parser rejects a bare
+constant inside a parenthesized group, as the grammar in the module doc of
+`crates/cobre-io/src/constraints/generic.rs` states. The refusal is the generic
+token error from `parse_single_term`, reached through `parse_group_terms` (for
+example "expected '*' after coefficient 73, got RParen"). It does not say that
+a group cannot hold a constant.
+
+**Owner.** The input-validation owner.
+
+**Trigger.** A user report of that message, or the next change to the
+expression parser's messages.
+
+### Validation messages hand-type their input-file labels
+
+**What it is.** Validation findings name the input file they concern by a path
+literal typed at each emitting site, for example the file label in
+`validate_variable_ref_entity` (`crates/cobre-io/src/validation/referential.rs`).
+The private `INPUT_FILES` table in `crates/cobre-io/src/validation/structural.rs`
+already pairs each input file with its relative path. A label looked up from it
+could not drift from the real path; a hand-typed one can.
+
+**Owner.** The input-validation owner.
+
+**Trigger.** The next wrong file label in a validation message, or the next
+change that adds validation emitters.
+
+### No validator checks that block hours sum to the stage duration
+
+**What it is.** Three docs state that a stage's block hours sum to its
+duration: `Block::duration_hours` and `Stage::blocks`
+(`crates/cobre-core/src/model/temporal.rs`), and the module doc of
+`crates/cobre-io/src/stages.rs`, which defers the check to the semantic layer.
+No validator performs it, so a stage whose blocks do not cover its date span
+loads, and `Stage::total_hours` returns the block sum. Either the check is
+added or the docs state the rule as a convention.
+
+**Owner.** The input-validation owner.
+
+**Trigger.** A case whose block hours differ from its stage spans, or the next
+change to stage validation.
+
+### A non-root hydro-model preprocessing failure exits as an internal error
+
+**What it is.** Under MPI, ranks other than rank 0 rebuild the hydro production
+models themselves (`prepare_hydro_models` in
+`crates/cobre-cli/src/commands/run/setup.rs`). A failure there is mapped by
+hand to `CliError::Internal` (exit 4), bypassing `CliError::from`, which
+classifies the same error on rank 0. Rank 0 has already built the same models,
+so the failure is unexpected. When it happens, it is reported as a software
+fault whatever its cause.
+
+**Owner.** The cobre-cli run-orchestration owner.
+
+**Trigger.** A preprocessing failure seen on a non-root rank, or the next
+change to non-root reconstruction in that file.
+
+### Exit codes can differ by rank after a coordinated training failure
+
+**What it is.** When training fails on one rank under MPI, every rank stops
+together (`reconcile_error_flag` in
+`crates/cobre-sddp/src/training/rank_reconcile.rs`), but each rank then maps
+its own error (`train_then_simulate` in
+`crates/cobre-cli/src/commands/run/mod.rs`). The failing rank exits with its
+error's code, and its peers, which hold a communication error, exit 4. The
+launcher then reports whichever rank exits first. The graceful-stop path
+agrees one exit code on every rank through `CliError::for_peer_failure`; the
+training-failure path does not.
+
+**Owner.** The cobre-cli run-orchestration owner.
+
+**Trigger.** A multi-rank run whose launcher reports exit 4 for an input error,
+or the next change to the training-failure path.
+
+### The run-error hint does not carry --output
+
+**What it is.** When `cobre run` fails, its hint (`format_error` in
+`crates/cobre-cli/src/error.rs`) suggests running `cobre validate <CASE_DIR>`.
+After a run with `--output`, that suggestion validates against the default
+output directory, so a refusal that depends on the chosen directory may not
+reproduce. `cobre validate` accepts the same `--output` flag. The hint text is
+pinned by tests, so a change to it updates those pins.
+
+**Owner.** The cobre-cli run-orchestration owner.
+
+**Trigger.** A user following the hint after a run with `--output`, or the next
+change to the hint text.
+
+### cobre validate --json omits input-validation warnings
+
+**What it is.** `cobre validate --json` prints one JSON object
+(`ValidateBoundaryOutput`, written by `emit_validate_json` in
+`crates/cobre-cli/src/commands/validate.rs`), which has no warnings field. The
+input-validation warnings the human report prints are therefore absent from the
+JSON output, while the Python `validate` result reports them
+(`build_warnings_list` in `crates/cobre-python/src/io.rs`).
+
+**Owner.** The cobre-cli owner.
+
+**Trigger.** A script that needs the warnings from `--json`, or the next change
+to the `--json` object.
+
+### Validate's construction-failure kind depends on whether a boundary policy is configured
+
+**What it is.** `cobre validate --json` and Python's validate report a
+study-construction failure as `StudySetupError` on a case without a boundary
+policy. On a case with a boundary policy, they report the same failure,
+including a scalar-parameter gap, as `BoundaryReconciliationError`
+(`PrepPhase` and `prep_phase_metadata` in
+`crates/cobre-sddp/src/validate_phases.rs`). The kinds were kept so that no
+case changed the kind it reported.
+
+**Owner.** The setup / config owner.
+
+**Trigger.** A consumer that classifies validate failures by kind across cases
+with and without a boundary policy, or the next change to the `--json` kinds.
+
+### A failed final checkpoint write hides an earlier failed periodic write
+
+**What it is.** When a periodic checkpoint write fails
+(`write_periodic_checkpoint` in
+`crates/cobre-sddp/src/training/session/mod.rs`, which raises
+`SddpError::CheckpointWrite` with the iteration) and the final checkpoint write
+(`write_training_outputs` in `crates/cobre-cli/src/commands/run/outputs.rs`)
+then fails as well, the CLI reports the final write's error first, because
+`train_then_simulate` returns the output-write result before it returns
+`training.error`. The message therefore does not name the iteration whose
+periodic write failed.
+
+**Owner.** The training owner.
+
+**Trigger.** A run whose periodic checkpoint write fails, or the next change
+to checkpoint error reporting.
+
+### The external scheme requires a seed it never reads
+
+**What it is.** The loader requires `scenario_source.seed` whenever a class
+uses the `out_of_sample` or the `external` scheme
+(`crates/cobre-io/src/config/mod.rs`). External selection draws from the
+constant `EXTERNAL_SELECTION_BASE_SEED`
+(`crates/cobre-stochastic/src/sampling/class_sampler.rs`), so in a study whose
+only non-in-sample classes are external, the required seed is never read.
+Dropping the requirement for `external` is backward-compatible.
+
+**Owner.** The setup / config owner.
+
+**Trigger.** An external-only study that has to carry an unused seed, or the
+next change to the seed requirement.
+
+### The exported schemas do not encode value-conditional requirements as schema constructs
+
+**What it is.** Two load requirements depend on another field's value, and the
+exported JSON schemas carry both only as description prose, not as conditional
+schema constructs:
+
+- the payload field each `kind` of a generic parameter needs
+  (`schemas/generic_parameters.schema.json`);
+- the seed each sampling scheme needs in `scenario_source`
+  (`RawScenarioSourceConfig`; `schemas/config.schema.json`).
+
+The loader enforces both, so a file that passes schema validation can still be
+refused at load.
+
+**Owner.** The cobre-io input-schema owner.
+
+**Trigger.** A schema consumer (an editor or a generator) that needs these
+requirements, or the next change to either entry shape.
+
+### A pinned test asserts warm and cold costs are bit-identical
+
+**What it is.** `enumerated_census_pool_fill_warms_previously_cold_leaves`
+(`crates/cobre-sddp/tests/simulation_integration.rs`) asserts with
+`assert_eq!` that per-scenario costs are bit-identical between the
+warm-started and the cold run, and `.claude/rules/sddp.md` names that
+bit-identity as the pin of the pool-fill basis path. The determinism contract
+does not include cross-algorithm equivalence: a warm-started solve may report
+a different, equally valid optimal vertex, whose cost can differ in the last
+bits. The assertion holds today, but a solver or basis change that keeps the
+contract could break it.
+
+**Owner.** The SDDP-rules owner.
+
+**Trigger.** That assertion failing after a solver, basis or LP-layout change,
+or the next edit to the test or to its paragraph in `.claude/rules/sddp.md`.
+
+### Plain-text citations of retired methodology sections
+
+**What it is.** Rustdoc and comments in several crates still cite sections of
+the retired methodology specification in plain text: section numbers such as
+`SS5.1` or `§15`, and page names such as "Solver Abstraction" or
+`internal-structures.md`. Those pages no longer exist on the docs site, and
+because the citations are not links, no link check finds them. Examples:
+
+- the HiGHS backend (`crates/cobre-solver/src/backends/highs/`), one of them in
+  the `// SAFETY:` comment on `unsafe impl Send for HighsSolver`;
+- `crates/cobre-io/src/output/schemas.rs`;
+- `crates/cobre-comm/src/ferrompi.rs`;
+- `crates/cobre-core/src/constraints/initial_conditions.rs` and
+  `crates/cobre-core/src/constraints/generic_constraint.rs`.
+
+The entry "Documentation corrections in rustdoc, release text and recordings"
+covers the solver-interface and the `cobre-core` model files. The test
+fixtures labelled by retired section numbers (`SS1.1`, `SS5 row 1`) in
+`crates/cobre-solver/tests/` and the backends' `tests.rs` are labels, not
+pointers. Find the candidates with
+`rg -n '\bSS[0-9]|§[0-9]|Solver Abstraction|HiGHS Implementation|Solver Workspaces' crates`.
+Not every hit is a retired-spec citation, so classify each one when editing.
+
+**Owner.** The doc / comment owner.
+
+**Trigger.** The next edit to a file the search finds (remove the citation
+there), or a reader following one to a missing page.
+
+### A cobre-core private doc links a serde-gated type
+
+**What it is.** A doc comment on a private field of `ResolvedBounds` in
+`crates/cobre-core/src/model/resolved/bounds.rs` links
+``[`ResolvedBoundsWire`]``, which exists only under `#[cfg(feature = "serde")]`.
+`cargo doc -p cobre-core --document-private-items` without `--features serde`
+therefore reports a broken intra-doc link. CI passes only because its docs
+builds enable the features.
+
+**Owner.** The core data-model owner.
+
+**Trigger.** A docs build of the crate without the `serde` feature, or the next
+edit to that doc comment.
+
+### Crate READMEs mirror enumerations that drift
+
+**What it is.** Two READMEs restate lists their crates own:
+
+- `crates/cobre-sddp/README.md`: the feature-flag table, which has no
+  `test-support` row, and the `CutSelectionStrategy` list;
+- `crates/cobre-io/README.md`: the `Config` section table and the stopping-rule
+  variant list.
+
+Each copy drifts as the code changes, as the error-variant tables did before
+they were replaced by pointers to the enums' rustdoc.
+
+**Owner.** The doc / comment owner.
+
+**Trigger.** The next edit to either README, or the next change to one of the
+mirrored lists.
+
+### Docs-site pages to revise after the 2026-10 fix wave
+
+**What it is.** The docs site (the `cobre-docs` repository) still describes
+behaviour that this repository changed in the 2026-10 fix wave:
+
+- the error-codes reference and the policy-management page quote the policy
+  refusal's remedy and the checkpoint `format_version` refusal as they read
+  before the wave;
+- the error-codes reference lists a `PolicyIncompatible` value as reserved
+  although the variant no longer exists, and says `WarmStartIncompatible` and
+  `ResumeIncompatible` are reserved and never emitted, while `cobre validate`
+  now reports both;
+- no page documents the `.staging` and `.previous` directories that the
+  checkpoint writer keeps beside the policy directory.
+
+The penalty pages are covered by the entry "Energy-equivalent penalty
+ordering".
+
+**Owner.** The `cobre-docs` methodology owner.
+
+**Trigger.** The next docs-site revision against this repository.
+
+### recordings/setup.sh does not install the recording host's fonts and browser libraries
+
+**What it is.** The tapes set `FontFamily "JetBrains Mono"`, and vhs renders
+through a headless Chromium that it downloads on first use.
+`recordings/setup.sh` installs vhs, ttyd and ffmpeg only. It installs neither
+the font nor the shared libraries the downloaded Chromium needs. On a fresh
+host, the GIFs therefore render in a fallback font, or the render fails until
+those are installed by hand.
+
+**Owner.** The build / CI owner.
+
+**Trigger.** The next GIF regeneration on a fresh host, or the next edit to
+`recordings/setup.sh`.
+
+### The doc guards do not scan docs/design/
+
+**What it is.** `scripts/ci/check-no-plan-leaks.sh` scans crate sources, tests
+and benches, `CHANGELOG.md` and `README.md`. `scripts/ci/check-doc-paths.sh`
+and `scripts/ci/check_doc_voice.py` scan root-level documents. None reads
+`docs/design/`, so plan identifiers, dead repo-relative paths and stale symbols
+in the design documents, this register included, are caught only by hand.
+
+**Owner.** The build / CI owner.
+
+**Trigger.** A plan identifier or a dead path found in `docs/design/`, or the
+next change to one of those scripts.
+
+### check_schemas.sh writes its diff inside a directory it compares
+
+**What it is.** `scripts/ci/check_schemas.sh` runs `diff -ruN` between the
+committed `schemas/` and a freshly exported temporary directory, and writes the
+output to `drift.diff` inside that same temporary directory. The output file is
+therefore part of the tree being compared while the comparison runs. The check
+passes today, but its result depends on `drift.diff` still being empty when
+`diff` reaches it.
+
+**Owner.** The build / CI owner.
+
+**Trigger.** The next edit to that script, or a drift report that lists
+`drift.diff` itself.
 
 ## Audit-evidence
 

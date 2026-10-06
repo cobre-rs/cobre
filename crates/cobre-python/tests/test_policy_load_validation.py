@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import pathlib
 import shutil
+import sys
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -252,11 +253,11 @@ def test_load_policy_wider_stored_basis_raises_policy_incompatible(
         ("resume", "Cannot resume without a prior checkpoint."),
     ],
 )
-def test_training_load_without_a_policy_directory_raises_solver_error(
+def test_training_load_without_a_policy_directory_raises_validation_error(
     tmp_path: pathlib.Path, mode: str, unmet_requirement: str
 ) -> None:
     """Warm-start and resume against an output dir with no policy raise
-    `SolverError` naming the missing directory and what the load needed."""
+    `ValidationError` naming the missing directory and what the load needed."""
     import cobre  # noqa: PLC0415
     import cobre.errors  # noqa: PLC0415
 
@@ -266,7 +267,7 @@ def test_training_load_without_a_policy_directory_raises_solver_error(
         config_overrides={"policy.mode": mode},
     )
 
-    with pytest.raises(cobre.errors.SolverError) as exc_info:
+    with pytest.raises(cobre.errors.ValidationError) as exc_info:
         study.train()
 
     message = str(exc_info.value)
@@ -274,11 +275,11 @@ def test_training_load_without_a_policy_directory_raises_solver_error(
     assert message.endswith(f". {unmet_requirement}"), message
 
 
-def test_warm_start_from_an_unreadable_checkpoint_raises_solver_error(
+def test_warm_start_from_an_unparseable_checkpoint_raises_policy_incompatible_error(
     tmp_path: pathlib.Path,
 ) -> None:
     """A warm-start whose checkpoint manifest cannot be parsed raises
-    `SolverError` with the read-failure message."""
+    `PolicyIncompatibleError` with the read-failure message."""
     import cobre  # noqa: PLC0415
     import cobre.errors  # noqa: PLC0415
 
@@ -291,9 +292,68 @@ def test_warm_start_from_an_unreadable_checkpoint_raises_solver_error(
         config_overrides={"policy.mode": "warm_start"},
     )
 
-    with pytest.raises(cobre.errors.SolverError) as exc_info:
+    with pytest.raises(cobre.errors.PolicyIncompatibleError) as exc_info:
         study.train()
 
+    message = str(exc_info.value)
+    assert message.startswith("failed to read policy checkpoint: "), message
+
+
+def test_warm_start_from_a_policy_directory_without_manifest_raises_policy_incompatible_error(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A warm-start against a `policy/` directory holding no `manifest.bin`
+    raises `PolicyIncompatibleError` with the read-failure message."""
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+
+    (tmp_path / "policy").mkdir()
+
+    study = cobre.Study(
+        VALID_CASE,
+        output_dir=str(tmp_path),
+        config_overrides={"policy.mode": "warm_start"},
+    )
+
+    with pytest.raises(cobre.errors.PolicyIncompatibleError) as exc_info:
+        study.train()
+
+    message = str(exc_info.value)
+    assert message.startswith("failed to read policy checkpoint: "), message
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_warm_start_from_a_manifest_the_process_cannot_open_raises_case_io_error(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A warm-start whose `manifest.bin` the process cannot open raises
+    `CaseIoError`, also catchable as `OSError`."""
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+
+    cobre.run.run(VALID_CASE, output_dir=str(tmp_path))
+    manifest = tmp_path / "policy" / "manifest.bin"
+    manifest.chmod(0o000)
+    try:
+        try:
+            manifest.open("rb").close()
+        except OSError:
+            pass
+        else:
+            pytest.skip("the process can read a 0o000 file (running as root)")
+
+        study = cobre.Study(
+            VALID_CASE,
+            output_dir=str(tmp_path),
+            config_overrides={"policy.mode": "warm_start"},
+        )
+
+        with pytest.raises(cobre.errors.CaseIoError) as exc_info:
+            study.train()
+    finally:
+        manifest.chmod(0o644)
+
+    assert isinstance(exc_info.value, OSError)
     message = str(exc_info.value)
     assert message.startswith("failed to read policy checkpoint: "), message
 

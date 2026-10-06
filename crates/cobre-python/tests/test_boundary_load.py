@@ -29,6 +29,8 @@ from test_policy_load_validation import (
 _REPO_ROOT = pathlib.Path(__file__).parents[3]
 VALID_CASE = str(_REPO_ROOT / "examples" / "1dtoy")
 
+_UNDATED_PRICED_STATE_DATE = -(2**31)
+
 
 def _set_boundary_policy(
     case_dir: pathlib.Path,
@@ -118,9 +120,10 @@ def test_boundary_load_strict_accepts_a_faithful_self_boundary(
 
 
 def test_boundary_load_rejects_a_mismatched_source(tmp_path: pathlib.Path) -> None:
-    """A source checkpoint naming a different hydro raises, naming the
-    offending hydro in the message.
+    """A source checkpoint naming a different hydro raises `ValidationError`,
+    naming the offending hydro in the message.
     """
+    import cobre.errors  # noqa: PLC0415
     import cobre.run  # noqa: PLC0415
 
     source_output = tmp_path / "source"
@@ -135,13 +138,52 @@ def test_boundary_load_rejects_a_mismatched_source(tmp_path: pathlib.Path) -> No
     )
     _set_boundary_policy(target_case, source_policy_dir)
 
-    with pytest.raises(RuntimeError, match="boundary cut error") as exc_info:
+    with pytest.raises(
+        cobre.errors.ValidationError, match="boundary cut error"
+    ) as exc_info:
         cobre.run.run(str(target_case), output_dir=str(tmp_path / "mismatched_output"))
 
     assert str(mismatched_hydro_id) in str(exc_info.value), (
         f"expected the reject message to name hydro {mismatched_hydro_id}: "
         f"{exc_info.value}"
     )
+
+
+def test_boundary_load_rejects_an_undated_checkpoint_with_validation_error(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A boundary source whose every pool carries the undated sentinel is
+    refused with `ValidationError` once the run applies its policy mode.
+    """
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+    import cobre.results  # noqa: PLC0415
+    import cobre.run  # noqa: PLC0415
+
+    source_output = tmp_path / "source"
+    cobre.run.run(VALID_CASE, output_dir=str(source_output))
+
+    loaded = cobre.results.load_policy(str(source_output))
+    for stage in loaded["stage_cuts"]:
+        stage["priced_state_date"] = _UNDATED_PRICED_STATE_DATE
+    undated_output = tmp_path / "undated"
+    cobre.write_policy_checkpoint(
+        str(undated_output / "policy"), loaded["stage_cuts"], loaded["metadata"]
+    )
+
+    target_case = tmp_path / "target"
+    shutil.copytree(VALID_CASE, target_case)
+    _set_boundary_policy(target_case, undated_output / "policy")
+
+    with pytest.raises(
+        cobre.errors.ValidationError,
+        match=(
+            "boundary cut error: configuration validation error: "
+            "boundary policy checkpoint at .* "
+            "carries no priced_state_date on any pool"
+        ),
+    ):
+        cobre.run.run(str(target_case), output_dir=str(tmp_path / "target_output"))
 
 
 def test_boundary_load_rejects_a_source_written_by_another_version(

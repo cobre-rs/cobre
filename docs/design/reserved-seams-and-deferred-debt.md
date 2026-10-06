@@ -348,6 +348,34 @@ for the crate, or hoist a shared node-graph test-fixture builder into
 **Trigger.** Systemic — the next CI-configuration pass (a Rust test regression in
 that crate would otherwise ship unseen).
 
+### Python policy-write refusal still classified by message prefix
+
+**What it is.** `cobre.write_policy_checkpoint` (`crates/cobre-python/src/policy.rs`)
+reports its identity refusal, an `SddpError::PolicySoftwareMismatch`, as a message
+with the `POLICY_VALIDATION_ERROR_PREFIX` prefix, and `message_prefix_to_pyerr`
+(`crates/cobre-python/src/errors.rs`) turns that prefix into
+`PolicyIncompatibleError`. That is the class the error's `ErrorClass` gives, so the
+two routes agree today, but the class follows the text rather than the error.
+Routing it through `ErrorSource::Sddp` would make the class independent of the
+message and leave the prefix branch with no producer.
+
+**Owner.** The Python bindings owner.
+
+**Trigger.** A second refusal joins the writer, the writer's error text changes, or
+the next change to the bindings' exception routing.
+
+### Python raises SolverError for internal faults
+
+**What it is.** Errors of class `ErrorClass::Internal` (communication failure,
+wire-format mismatch, basis-shape mismatch) raise `cobre.errors.SolverError`, while
+`cobre run` reports them as internal faults and `cobre.errors.InternalError` exists
+for that meaning. Mapping them to `InternalError` changes a public exception class.
+
+**Owner.** The Python bindings owner.
+
+**Trigger.** A Python caller needs to tell a software or environment fault from an
+LP failure, or the next revision of the exception hierarchy.
+
 ### Backend-scoped parity-roster caveat
 
 **What it is.** The opening-order determinism check and three of the

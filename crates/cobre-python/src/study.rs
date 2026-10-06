@@ -478,7 +478,8 @@ impl Study {
     /// - Raises `CaseIoError` (an `OSError`) on a sidecar write failure or an
     ///   unreadable case file.
     /// - Raises `ValidationError` on a schema, parse, or constraint failure in
-    ///   the case data.
+    ///   the case data, or when the case data cannot support its stochastic
+    ///   model (e.g. no complete historical window).
     /// - Raises `PolicyIncompatibleError` (a `ValueError`) when a warm-start
     ///   policy does not match the system.
     /// - Raises `SolverError` (a `RuntimeError`) on any other preprocessing or
@@ -623,9 +624,14 @@ impl Study {
     ///
     /// # Errors
     ///
-    /// - `SolverError` (a `RuntimeError`) on `HiGHS` init failure, a training
-    ///   error, or a policy-mode failure (e.g. a missing prior policy directory
-    ///   under `WarmStart`/`Resume`).
+    /// - `ValidationError` (a `ValueError`) when `WarmStart`/`Resume` finds no
+    ///   prior policy directory, when a boundary policy is refused, or when the
+    ///   training data is refused.
+    /// - `PolicyIncompatibleError` (a `ValueError`) when the stored policy has
+    ///   no manifest, is malformed, or was written by another version.
+    /// - `CaseIoError` (an `OSError`) when a policy file cannot be opened.
+    /// - `SolverError` (a `RuntimeError`) on `HiGHS` init failure, an LP
+    ///   failure during training, or an internal fault.
     /// - `InternalError` (a `RuntimeError`) on a drain-thread panic.
     /// - The original exception raised by a callback (or `KeyboardInterrupt`)
     ///   re-raised verbatim AFTER the training artifacts are written.
@@ -662,10 +668,11 @@ impl Study {
     ///
     /// # Errors
     ///
-    /// - `SolverError` (a `RuntimeError`) when the policy directory is missing or
-    ///   the checkpoint cannot be read or reconstructed.
-    /// - `PolicyIncompatibleError` (a `ValueError`) when policy validation
+    /// - `ValidationError` (a `ValueError`) when the policy directory is missing.
+    /// - `PolicyIncompatibleError` (a `ValueError`) when the checkpoint has no
+    ///   manifest, cannot be parsed or reconstructed, or policy validation
     ///   rejects it.
+    /// - `CaseIoError` (an `OSError`) when a policy file cannot be opened.
     #[pyo3(signature = (output_dir=None))]
     #[allow(clippy::needless_pass_by_value)]
     fn load_policy(&self, py: Python<'_>, output_dir: Option<PathBuf>) -> PyResult<Policy> {

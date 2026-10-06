@@ -178,8 +178,8 @@ impl From<PhaseError> for RunError {
 /// Error returned by the training/simulation phase helpers.
 ///
 /// Mirrors [`RunError`] minus the callback variant. The `From<String>` impl keeps
-/// every existing `?` site unchanged; only a hard `train`/`simulate` failure
-/// builds the typed `Sddp` arm.
+/// every existing `?` site unchanged; a hard `train`/`simulate`, setup-phase or
+/// boundary-cut failure builds the typed `Sddp` arm.
 #[derive(Debug)]
 pub(crate) enum PhaseError {
     /// A descriptive message.
@@ -817,32 +817,39 @@ fn load_effective_config(
     }
 }
 
-/// Adds [`SETUP_VALIDATION_ERROR_PREFIX`] only for `SddpError::Validation`;
-/// every other setup-phase error keeps today's message and class.
-#[allow(clippy::needless_pass_by_value)]
-fn setup_error_message(err: SddpError, phase_prefix: Option<&str>) -> String {
+/// Carries a setup-phase error typed. The message gains
+/// [`SETUP_VALIDATION_ERROR_PREFIX`] only for `SddpError::Validation`; the
+/// exception class comes from the error's `ErrorClass`, never from the prefix.
+fn setup_phase_error(err: SddpError, phase_prefix: Option<&str>) -> PhaseError {
     let body = match phase_prefix {
         Some(prefix) => format!("{prefix}: {err}"),
         None => err.to_string(),
     };
-    if matches!(err, SddpError::Validation(_)) {
+    let message = if matches!(err, SddpError::Validation(_)) {
         format!("{SETUP_VALIDATION_ERROR_PREFIX}: {body}")
     } else {
         body
+    };
+    PhaseError::Sddp {
+        message,
+        error: err,
     }
 }
 
-/// Maps a boundary-cut load error to its message prefix: [`SddpError::PolicySoftwareMismatch`]
-/// gets [`POLICY_VALIDATION_ERROR_PREFIX`] (so it raises `PolicyIncompatibleError`), every
-/// other boundary-load error keeps [`BOUNDARY_CUT_ERROR_PREFIX`].
-#[allow(clippy::needless_pass_by_value)]
-fn boundary_cut_error_message(err: SddpError) -> String {
+/// Carries a boundary-cut load error typed. The message takes
+/// [`POLICY_VALIDATION_ERROR_PREFIX`] for `SddpError::PolicySoftwareMismatch` and
+/// [`BOUNDARY_CUT_ERROR_PREFIX`] for every other error; the exception class comes
+/// from the error's `ErrorClass`, never from the prefix.
+fn boundary_phase_error(err: SddpError) -> PhaseError {
     let prefix = if matches!(err, SddpError::PolicySoftwareMismatch { .. }) {
         POLICY_VALIDATION_ERROR_PREFIX
     } else {
         BOUNDARY_CUT_ERROR_PREFIX
     };
-    format!("{prefix}: {err}")
+    PhaseError::Sddp {
+        message: format!("{prefix}: {err}"),
+        error: err,
+    }
 }
 
 /// Everything the front half of the solve lifecycle produces: the live
@@ -915,7 +922,7 @@ pub(crate) fn build_study_setup(
     // construction config below so both the layout and the boundary-load reject
     // see them. Mirrors the CLI run path.
     let boundary_requirements = resolve_boundary_state_requirements(case_dir, &config)
-        .map_err(|e| setup_error_message(e, None))?;
+        .map_err(|e| setup_phase_error(e, None))?;
 
     let seed = config
         .training
@@ -935,7 +942,7 @@ pub(crate) fn build_study_setup(
         &training_source,
         boundary_requirements.inflow_lag_depth(),
     )
-    .map_err(|e| setup_error_message(e, Some(STOCHASTIC_PREPROCESSING_ERROR_PREFIX)))?;
+    .map_err(|e| setup_phase_error(e, Some(STOCHASTIC_PREPROCESSING_ERROR_PREFIX)))?;
     timings.stochastic_fit_seconds = stochastic_start.elapsed().as_secs_f64();
     let system = result.system;
     let estimation_report = result.estimation_report;
@@ -948,7 +955,7 @@ pub(crate) fn build_study_setup(
         config.exports.fpha_deviation_points,
         Some(&mut hydro_timings),
     )
-    .map_err(|e| setup_error_message(e, Some(HYDRO_MODEL_PREPROCESSING_ERROR_PREFIX)))?;
+    .map_err(|e| setup_phase_error(e, Some(HYDRO_MODEL_PREPROCESSING_ERROR_PREFIX)))?;
     timings.production_fit_seconds = hydro_timings.production_fit_seconds;
     timings.evaporation_fit_seconds = hydro_timings.evaporation_fit_seconds;
 
@@ -956,7 +963,7 @@ pub(crate) fn build_study_setup(
         .simulation_scenario_source(&case_dir.join("config.json"))
         .map_err(|e| format!("{SCENARIO_SOURCE_ERROR_PREFIX}: {e}"))?;
     let mut construction =
-        StudyParams::from_config(&config, Vec::new()).map_err(|e| setup_error_message(e, None))?;
+        StudyParams::from_config(&config, Vec::new()).map_err(|e| setup_phase_error(e, None))?;
     construction.boundary = boundary_requirements;
     construction.scalar_parameters = artifacts.scalar_parameters;
     let setup = StudySetup::from_broadcast_params(
@@ -967,7 +974,7 @@ pub(crate) fn build_study_setup(
         &training_source,
         &simulation_source,
     )
-    .map_err(|e| setup_error_message(e, None))?;
+    .map_err(|e| setup_phase_error(e, None))?;
 
     let mut provenance_report = build_provenance_report(
         estimation_path,
@@ -1096,8 +1103,9 @@ pub(crate) fn reconcile_boundary_policy(
 /// # Errors
 ///
 /// Returns [`PhaseError::PolicyLoad`] when a `WarmStart`/`Resume` load fails, and
-/// [`PhaseError::Message`] when the boundary cuts cannot be loaded. The caller maps
-/// the error to a Python exception type via [`crate::errors::convert_error`].
+/// [`PhaseError::Sddp`] when the boundary cuts cannot be loaded. The caller maps
+/// the error to a Python exception type via [`crate::errors::convert_error`], which
+/// takes a boundary-cut failure's class from its `ErrorClass`.
 pub(crate) fn apply_training_policy_mode(
     setup: &mut StudySetup,
     system: &System,
@@ -1122,9 +1130,9 @@ pub(crate) fn apply_training_policy_mode(
     // replaces the entire FCF first, then boundary cuts overwrite only the
     // terminal pool.
     if let Some(ref bp) = config.policy.boundary {
-        let recon = reconcile_boundary_policy(setup, system, bp, case_dir)
-            .map_err(boundary_cut_error_message)?;
-        inject_boundary_cuts(setup, &recon.cuts).map_err(boundary_cut_error_message)?;
+        let recon =
+            reconcile_boundary_policy(setup, system, bp, case_dir).map_err(boundary_phase_error)?;
+        inject_boundary_cuts(setup, &recon.cuts).map_err(boundary_phase_error)?;
         let cut_count = recon.cuts.len();
         eprintln!(
             "cobre-python: boundary cuts: {cut_count} loaded from {} (priced at {})",
@@ -1542,7 +1550,9 @@ mod tests {
 
     use cobre_sddp::config::ShutdownSource;
     use cobre_sddp::setup::prepare_stochastic;
-    use cobre_sddp::{SolverStatsDelta, SolverStatsLogEntry, aggregate_solver_stats_log};
+    use cobre_sddp::{
+        SddpError, SolverStatsDelta, SolverStatsLogEntry, aggregate_solver_stats_log,
+    };
 
     use cobre_core::TrainingEvent;
     use cobre_core::training_event::{WorkerPhaseTimings, WorkerTimingPhase};
@@ -1550,9 +1560,10 @@ mod tests {
     use pyo3::types::PyDict;
 
     use super::{
-        apply_training_policy_mode, build_study_setup, drain_training_events,
-        iteration_summary_to_dict, run_in_scoped_pool, run_via_study,
+        PhaseError, apply_training_policy_mode, boundary_phase_error, build_study_setup,
+        drain_training_events, iteration_summary_to_dict, run_in_scoped_pool, run_via_study,
     };
+    use crate::errors::{BOUNDARY_CUT_ERROR_PREFIX, POLICY_VALIDATION_ERROR_PREFIX};
 
     fn example_case_dir(relative: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1663,6 +1674,32 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&output_dir).ok();
+    }
+
+    #[test]
+    fn boundary_phase_error_keeps_both_prefixes_and_the_typed_error() {
+        let validation = SddpError::Validation("no terminal pool".to_string());
+        let expected = format!("{BOUNDARY_CUT_ERROR_PREFIX}: {validation}");
+        match boundary_phase_error(validation) {
+            PhaseError::Sddp {
+                message,
+                error: SddpError::Validation(_),
+            } => assert_eq!(message, expected),
+            other => panic!("expected a typed Validation, got {other:?}"),
+        }
+
+        let mismatch = SddpError::PolicySoftwareMismatch {
+            policy_software: Some("another-program".to_string()),
+            policy_version: "0.0.1".to_string(),
+        };
+        let expected = format!("{POLICY_VALIDATION_ERROR_PREFIX}: {mismatch}");
+        match boundary_phase_error(mismatch) {
+            PhaseError::Sddp {
+                message,
+                error: SddpError::PolicySoftwareMismatch { .. },
+            } => assert_eq!(message, expected),
+            other => panic!("expected a typed PolicySoftwareMismatch, got {other:?}"),
+        }
     }
 
     #[test]

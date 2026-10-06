@@ -16,6 +16,7 @@ complete in a few seconds.
 
 import json
 import pathlib
+import shutil
 
 import pytest
 
@@ -299,18 +300,41 @@ def test_repeated_simulate_one_policy(tmp_path: pathlib.Path) -> None:
     )
 
 
-def test_load_policy_missing_dir_raises(tmp_path: pathlib.Path) -> None:
-    """load_policy() with no prior training raises RuntimeError.
+def test_load_policy_missing_dir_raises_validation_error(tmp_path: pathlib.Path) -> None:
+    """load_policy() with no prior training raises ValidationError.
 
     The error message must mention the missing policy directory so callers can
     diagnose a simulation-only request against an untrained output dir.
     """
     import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
 
     study = cobre.Study(VALID_CASE, output_dir=str(tmp_path))
 
-    with pytest.raises(RuntimeError, match="Policy directory not found"):
+    with pytest.raises(cobre.errors.ValidationError, match="Policy directory not found"):
         study.load_policy()
+
+
+def test_stochastic_data_refusal_raises_validation_error(tmp_path: pathlib.Path) -> None:
+    """A historical inflow scheme over a case with no inflow history is refused
+    at setup with ValidationError, from both `Study(...)` and `run(...)`."""
+    import cobre  # noqa: PLC0415
+    import cobre.errors  # noqa: PLC0415
+    import cobre.run  # noqa: PLC0415
+
+    case = tmp_path / "case"
+    shutil.copytree(VALID_CASE, case)
+    config_path = case / "config.json"
+    config = json.loads(config_path.read_text())
+    config["training"]["scenario_source"]["inflow"] = {"scheme": "historical"}
+    config_path.write_text(json.dumps(config))
+    expected = "stochastic error: insufficient data: no valid historical windows found"
+
+    with pytest.raises(cobre.errors.ValidationError, match=expected):
+        cobre.Study(str(case), output_dir=str(tmp_path / "study_output"))
+
+    with pytest.raises(cobre.errors.ValidationError, match=expected):
+        cobre.run.run(str(case), output_dir=str(tmp_path / "run_output"))
 
 
 def test_simulate_zero_cut_policy_raises(tmp_path: pathlib.Path) -> None:

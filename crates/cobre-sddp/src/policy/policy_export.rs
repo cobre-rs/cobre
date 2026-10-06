@@ -1,8 +1,8 @@
 //! Policy checkpoint export helpers.
 //!
 //! Shared conversion logic for extracting active cuts and basis data from a
-//! trained [`FutureCostFunction`] and [`TrainingResult`] into the `cobre-io`
-//! policy types needed by [`cobre_io::write_policy_checkpoint`].
+//! trained [`FutureCostFunction`] and its captured basis cache into the
+//! `cobre-io` policy types needed by [`cobre_io::write_policy_checkpoint`].
 
 // Rationale: harvested counts/indices are small non-negative values bounded far below FlatBuffers field widths; narrowing casts are pervasive.
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -31,7 +31,7 @@ use crate::lp::indexer::{
 };
 use crate::setup::{NodeGraph, NodePos, extended_delivery_stages};
 use crate::time_value::post_study_delivery_calendar;
-use crate::training::TrainingResult;
+use crate::workspace::CapturedBasis;
 
 /// The sentinel-or-dated `(interval_start, interval_end)` pair for a resolved
 /// delivery `stage`: sentinel when `None`; otherwise the day-accurate
@@ -608,7 +608,7 @@ pub fn build_stage_cuts_payloads<'a>(
         .collect()
 }
 
-/// Convert the solver basis cache to u8 byte vectors via `to_discriminant_code`.
+/// Convert `basis_cache` to u8 byte vectors via `to_discriminant_code`.
 ///
 /// The canonical discriminant space (`0..=6`) is a strict superset of the `HiGHS`
 /// code space this format previously stored, so pre-existing checkpoints (bytes
@@ -616,9 +616,8 @@ pub fn build_stage_cuts_payloads<'a>(
 /// `to_highs_code` would fold, now survives reload. Mirrored on load by
 /// `build_basis_cache_from_checkpoint`'s `from_discriminant_code`.
 #[must_use]
-pub fn convert_basis_cache(training_result: &TrainingResult) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-    training_result
-        .basis_cache
+pub fn convert_basis_cache(basis_cache: &[Option<CapturedBasis>]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    basis_cache
         .iter()
         .map(|opt| {
             opt.as_ref().map_or_else(
@@ -644,25 +643,25 @@ pub fn convert_basis_cache(training_result: &TrainingResult) -> (Vec<Vec<u8>>, V
 
 /// Build per-node [`PolicyBasisRecord`] references from pre-converted basis data.
 ///
-/// `training_result.basis_cache` is node-indexed, so the enumeration index is the
-/// node ordinal, carried into `stage_id`. `num_cut_rows` is the basis's own
-/// trailing cut-row count, `row_status.len() - base_row_count`, never its pool's
-/// populated count: the root basis is captured in the last forward pass, before
-/// that iteration's backward pass appends cuts to its pool.
+/// `basis_cache` is node-indexed, so the enumeration index is the node ordinal,
+/// carried into `stage_id`. `num_cut_rows` is the basis's own trailing cut-row
+/// count, `row_status.len() - base_row_count`, never its pool's populated count:
+/// the root basis is captured in the last forward pass, before that iteration's
+/// backward pass appends cuts to its pool.
 #[must_use]
 pub fn build_stage_basis_records<'a>(
-    training_result: &TrainingResult,
+    basis_cache: &[Option<CapturedBasis>],
+    iteration: u64,
     basis_col_u8: &'a [Vec<u8>],
     basis_row_u8: &'a [Vec<u8>],
 ) -> Vec<PolicyBasisRecord<'a>> {
-    training_result
-        .basis_cache
+    basis_cache
         .iter()
         .enumerate()
         .filter_map(|(node, opt)| {
             opt.as_ref().map(|cb| PolicyBasisRecord {
                 stage_id: node as u32,
-                iteration: training_result.iterations as u32,
+                iteration: iteration as u32,
                 column_status: &basis_col_u8[node],
                 row_status: &basis_row_u8[node],
                 num_cut_rows: (cb.basis.row_status.len() - cb.base_row_count) as u32,
@@ -2927,8 +2926,13 @@ mod tests {
             None,
         );
 
-        let (col, row) = convert_basis_cache(&training_result);
-        let records = build_stage_basis_records(&training_result, &col, &row);
+        let (col, row) = convert_basis_cache(&training_result.basis_cache);
+        let records = build_stage_basis_records(
+            &training_result.basis_cache,
+            training_result.iterations,
+            &col,
+            &row,
+        );
 
         assert_eq!(records.len(), 7, "one basis record per node, not per pool");
         for (node, rec) in records.iter().enumerate() {

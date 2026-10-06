@@ -11,9 +11,9 @@ use std::path::Path;
 
 use chrono::NaiveDate;
 use cobre_io::output::policy::{
-    CheckpointManifest, FORMAT_VERSION, HydroSeasonOrders, ProducerBlock, SEASON_CYCLE_CODE_ABSENT,
-    SEASON_CYCLE_CODE_CUSTOM, SEASON_CYCLE_CODE_MONTHLY, SEASON_CYCLE_CODE_WEEKLY, SeasonManifest,
-    write_policy_checkpoint,
+    CheckpointManifest, FORMAT_VERSION, GraphManifest, HydroSeasonOrders, ProducerBlock,
+    SEASON_CYCLE_CODE_ABSENT, SEASON_CYCLE_CODE_CUSTOM, SEASON_CYCLE_CODE_MONTHLY,
+    SEASON_CYCLE_CODE_WEEKLY, SeasonManifest, write_policy_checkpoint,
 };
 use cobre_io::output::{
     OutputError, write_correlation_json, write_fitting_report, write_inflow_annual_component,
@@ -27,16 +27,19 @@ use cobre_io::{EntitySlot, SOFTWARE_NAME, SOFTWARE_VERSION};
 use cobre_stochastic::StochasticContext;
 
 use crate::TrainingResult;
+use crate::cut::FutureCostFunction;
 use crate::policy_export::{
     borrow_cut_records, build_active_indices, build_stage_basis_records, build_stage_cut_records,
     build_stage_cuts_payloads, build_stage_entity_manifest, build_stage_states_payloads,
     convert_basis_cache, scale_cut_records_for_export,
 };
-use crate::setup::{NodePos, StudySetup};
+use crate::setup::{NodeGraph, NodePos, StudySetup};
 use crate::stochastic_summary::{
     estimation_report_to_fitting_report, inflow_models_to_annual_component_rows,
     inflow_models_to_ar_rows, inflow_models_to_stats_rows,
 };
+use crate::visited_states::VisitedStatesArchive;
+use crate::workspace::CapturedBasis;
 
 use cobre_core::{BlockMode, InflowModel, SeasonCycleType, System};
 
@@ -238,6 +241,170 @@ fn pool_entity_manifests(
         .collect()
 }
 
+/// The checkpoint inputs fixed for the whole run; a training-dependent value
+/// belongs in [`CheckpointState`], or a repeated [`CheckpointLayout::write`]
+/// would carry stale data.
+#[derive(Debug, Clone)]
+pub(crate) struct CheckpointLayout {
+    stage_manifests: Vec<Vec<EntitySlot>>,
+    study_stage_ids: Vec<i32>,
+    study_stage_end_dates: Vec<NaiveDate>,
+    cost_scale_factor: f64,
+    n_stages: usize,
+    graph_manifest: GraphManifest,
+    season_manifest: SeasonManifest,
+    training_block_mode: String,
+    training_block_mode_per_stage: Vec<String>,
+    params: CheckpointParams,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct CheckpointState<'a> {
+    pub(crate) iterations: u64,
+    pub(crate) final_lb: f64,
+    pub(crate) final_ub: f64,
+    pub(crate) basis_cache: &'a [Option<CapturedBasis>],
+    pub(crate) visited_archive: Option<&'a VisitedStatesArchive>,
+    pub(crate) lower_bound_history: &'a [f64],
+}
+
+impl<'a> CheckpointState<'a> {
+    pub(crate) fn of(result: &'a TrainingResult) -> Self {
+        Self {
+            iterations: result.iterations,
+            final_lb: result.final_lb,
+            final_ub: result.final_ub,
+            basis_cache: &result.basis_cache,
+            visited_archive: result.visited_archive.as_ref(),
+            lower_bound_history: &result.lower_bound_history,
+        }
+    }
+}
+
+impl CheckpointLayout {
+    pub(crate) fn new(setup: &StudySetup, system: &System, params: CheckpointParams) -> Self {
+        // `n_pools` sizes the pool-indexed manifests; `n_stages` is the metadata
+        // field and comes from `setup.num_stages()` — NOT `fcf.pools.len()`, which
+        // counts pools, equal to the stage count only on the chain degeneracy.
+        let n_pools = setup.fcf.pools.len();
+        let n_stages = setup.num_stages();
+
+        let stage_manifests = pool_entity_manifests(setup, system, n_pools);
+
+        let study_stage_end_dates: Vec<NaiveDate> = system
+            .stages()
+            .iter()
+            .filter(|s| s.id >= 0)
+            .map(|s| s.end_date)
+            .collect();
+
+        let study_modes: Vec<BlockMode> = system
+            .stages()
+            .iter()
+            .filter(|s| s.id >= 0)
+            .map(|s| s.block_mode)
+            .collect();
+        let (training_block_mode, training_block_mode_per_stage) =
+            training_block_provenance(&study_modes);
+
+        Self {
+            stage_manifests,
+            study_stage_ids: setup.inputs.study_stage_ids.clone(),
+            study_stage_end_dates,
+            cost_scale_factor: setup.inputs.stage_data.stage_templates.cost_scale_factor,
+            n_stages,
+            graph_manifest: setup.build_graph_manifest(),
+            season_manifest: build_season_manifest(system).to_season_manifest(),
+            training_block_mode,
+            training_block_mode_per_stage,
+            params,
+        }
+    }
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub(crate) fn write(
+        &self,
+        policy_dir: &Path,
+        fcf: &FutureCostFunction,
+        node_graph: &NodeGraph,
+        state: CheckpointState<'_>,
+    ) -> Result<(), OutputError> {
+        let cost_scale_factor = self.cost_scale_factor;
+        let stage_records_internal = build_stage_cut_records(fcf);
+        let stage_records_owned =
+            scale_cut_records_for_export(&stage_records_internal, cost_scale_factor);
+        let stage_records = borrow_cut_records(&stage_records_owned);
+        let stage_active_indices = build_active_indices(&stage_records);
+        let stage_cuts = build_stage_cuts_payloads(
+            fcf,
+            node_graph,
+            &self.study_stage_ids,
+            &self.study_stage_end_dates,
+            cost_scale_factor,
+            &stage_records,
+            &stage_active_indices,
+            &self.stage_manifests,
+        );
+        debug_assert!(
+            stage_cuts
+                .iter()
+                .all(|p| p.cost_scale_factor.to_bits() == cost_scale_factor.to_bits()),
+            "every pool must carry the study's single resolved cost_scale_factor"
+        );
+
+        let (basis_col_u8, basis_row_u8) = convert_basis_cache(state.basis_cache);
+        let stage_bases = build_stage_basis_records(
+            state.basis_cache,
+            state.iterations,
+            &basis_col_u8,
+            &basis_row_u8,
+        );
+
+        let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
+
+        let metadata = CheckpointManifest {
+            format_version: FORMAT_VERSION,
+            software: Some(SOFTWARE_NAME.to_string()),
+            software_version: SOFTWARE_VERSION.to_string(),
+            created_at: cobre_io::now_iso8601(),
+            num_stages: self.n_stages as u32,
+            graph_manifest: self.graph_manifest.clone(),
+            producer: ProducerBlock {
+                completed_iterations: state.iterations as u32,
+                final_lower_bound: state.final_lb,
+                best_upper_bound: Some(state.final_ub),
+                max_iterations: self.params.max_iterations as u32,
+                forward_passes: self.params.forward_passes,
+                warm_start_cuts: warm_start_counts.iter().copied().max().unwrap_or(0),
+                warm_start_counts,
+                rng_seed: self.params.seed,
+                total_visited_states: state.visited_archive.map_or(0, |a| {
+                    (0..a.num_nodes()).map(|t| a.count(NodePos(t)) as u64).sum()
+                }),
+                training_block_mode: self.training_block_mode.clone(),
+                training_block_mode_per_stage: self.training_block_mode_per_stage.clone(),
+                cost_scale_factor: Some(cost_scale_factor),
+                lower_bound_history: state.lower_bound_history.to_vec(),
+            },
+            season_manifest: self.season_manifest.clone(),
+        };
+
+        let stage_states = if self.params.export_states {
+            build_stage_states_payloads(state.visited_archive, &self.stage_manifests, node_graph)
+        } else {
+            Vec::new()
+        };
+
+        write_policy_checkpoint(
+            policy_dir,
+            &stage_cuts,
+            &stage_bases,
+            &metadata,
+            &stage_states,
+        )
+    }
+}
+
 /// Write the trained policy (cuts, bases, visited states, metadata) to
 /// `policy_dir` as `FlatBuffers` files.
 ///
@@ -250,7 +417,6 @@ fn pool_entity_manifests(
 /// Propagates [`OutputError`] from
 /// [`cobre_io::output::policy::write_policy_checkpoint`] if any of the
 /// `FlatBuffers` files cannot be written.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn write_checkpoint(
     policy_dir: &Path,
     setup: &StudySetup,
@@ -258,101 +424,11 @@ pub fn write_checkpoint(
     training_result: &TrainingResult,
     params: &CheckpointParams,
 ) -> Result<(), OutputError> {
-    let fcf = &setup.fcf;
-    // `n_pools` sizes the pool-indexed vectors below; `n_stages` is the metadata
-    // field and comes from `setup.num_stages()` — NOT `fcf.pools.len()`, which
-    // counts pools, equal to the stage count only on the chain degeneracy.
-    let n_pools = fcf.pools.len();
-    let n_stages = setup.num_stages();
-
-    let stage_manifests = pool_entity_manifests(setup, system, n_pools);
-
-    let cost_scale_factor = setup.inputs.stage_data.stage_templates.cost_scale_factor;
-    let stage_records_internal = build_stage_cut_records(fcf);
-    let stage_records_owned =
-        scale_cut_records_for_export(&stage_records_internal, cost_scale_factor);
-    let stage_records = borrow_cut_records(&stage_records_owned);
-    let stage_active_indices = build_active_indices(&stage_records);
-    let study_stage_end_dates: Vec<NaiveDate> = system
-        .stages()
-        .iter()
-        .filter(|s| s.id >= 0)
-        .map(|s| s.end_date)
-        .collect();
-    let stage_cuts = build_stage_cuts_payloads(
-        fcf,
-        &setup.inputs.node_graph,
-        &setup.inputs.study_stage_ids,
-        &study_stage_end_dates,
-        cost_scale_factor,
-        &stage_records,
-        &stage_active_indices,
-        &stage_manifests,
-    );
-    debug_assert!(
-        stage_cuts
-            .iter()
-            .all(|p| p.cost_scale_factor.to_bits() == cost_scale_factor.to_bits()),
-        "every pool must carry the study's single resolved cost_scale_factor"
-    );
-
-    let (basis_col_u8, basis_row_u8) = convert_basis_cache(training_result);
-    let stage_bases = build_stage_basis_records(training_result, &basis_col_u8, &basis_row_u8);
-
-    let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
-
-    let study_modes: Vec<BlockMode> = system
-        .stages()
-        .iter()
-        .filter(|s| s.id >= 0)
-        .map(|s| s.block_mode)
-        .collect();
-    let (training_block_mode, training_block_mode_per_stage) =
-        training_block_provenance(&study_modes);
-
-    let metadata = CheckpointManifest {
-        format_version: FORMAT_VERSION,
-        software: Some(SOFTWARE_NAME.to_string()),
-        software_version: SOFTWARE_VERSION.to_string(),
-        created_at: cobre_io::now_iso8601(),
-        num_stages: n_stages as u32,
-        graph_manifest: setup.build_graph_manifest(),
-        producer: ProducerBlock {
-            completed_iterations: training_result.iterations as u32,
-            final_lower_bound: training_result.final_lb,
-            best_upper_bound: Some(training_result.final_ub),
-            max_iterations: params.max_iterations as u32,
-            forward_passes: params.forward_passes,
-            warm_start_cuts: warm_start_counts.iter().copied().max().unwrap_or(0),
-            warm_start_counts,
-            rng_seed: params.seed,
-            total_visited_states: training_result.visited_archive.as_ref().map_or(0, |a| {
-                (0..a.num_nodes()).map(|t| a.count(NodePos(t)) as u64).sum()
-            }),
-            training_block_mode,
-            training_block_mode_per_stage,
-            cost_scale_factor: Some(cost_scale_factor),
-            lower_bound_history: training_result.lower_bound_history.clone(),
-        },
-        season_manifest: build_season_manifest(system).to_season_manifest(),
-    };
-
-    let stage_states = if params.export_states {
-        build_stage_states_payloads(
-            training_result.visited_archive.as_ref(),
-            &stage_manifests,
-            &setup.inputs.node_graph,
-        )
-    } else {
-        Vec::new()
-    };
-
-    write_policy_checkpoint(
+    CheckpointLayout::new(setup, system, *params).write(
         policy_dir,
-        &stage_cuts,
-        &stage_bases,
-        &metadata,
-        &stage_states,
+        &setup.fcf,
+        &setup.inputs.node_graph,
+        CheckpointState::of(training_result),
     )
 }
 

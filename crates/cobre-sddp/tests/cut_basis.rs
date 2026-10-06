@@ -84,8 +84,13 @@ mod boundary_cuts {
             &stage_active_indices,
             &stage_manifests,
         );
-        let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases = build_stage_basis_records(result, &basis_col, &basis_row);
+        let (basis_col, basis_row) = convert_basis_cache(&result.basis_cache);
+        let stage_bases = build_stage_basis_records(
+            &result.basis_cache,
+            result.iterations,
+            &basis_col,
+            &basis_row,
+        );
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,
@@ -1623,8 +1628,13 @@ mod warm_start {
             &stage_active_indices,
             &stage_manifests,
         );
-        let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases = build_stage_basis_records(result, &basis_col, &basis_row);
+        let (basis_col, basis_row) = convert_basis_cache(&result.basis_cache);
+        let stage_bases = build_stage_basis_records(
+            &result.basis_cache,
+            result.iterations,
+            &basis_col,
+            &basis_row,
+        );
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,
@@ -1771,8 +1781,13 @@ mod warm_start {
         assert!(outcome.error.is_none());
         let result = outcome.result;
 
-        let (basis_col, basis_row) = convert_basis_cache(&result);
-        let records = build_stage_basis_records(&result, &basis_col, &basis_row);
+        let (basis_col, basis_row) = convert_basis_cache(&result.basis_cache);
+        let records = build_stage_basis_records(
+            &result.basis_cache,
+            result.iterations,
+            &basis_col,
+            &basis_row,
+        );
         assert!(
             !records.is_empty(),
             "training must capture at least one basis"
@@ -2829,8 +2844,13 @@ mod range_warm_start_determinism {
             &stage_active_indices,
             &stage_manifests,
         );
-        let (basis_col, basis_row) = convert_basis_cache(result);
-        let stage_bases = build_stage_basis_records(result, &basis_col, &basis_row);
+        let (basis_col, basis_row) = convert_basis_cache(&result.basis_cache);
+        let stage_bases = build_stage_basis_records(
+            &result.basis_cache,
+            result.iterations,
+            &basis_col,
+            &basis_row,
+        );
         let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
         let metadata = cobre_sddp::test_support::checkpoint_metadata(
             fcf.pools.len() as u32,

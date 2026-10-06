@@ -3755,7 +3755,7 @@ mod tests {
             None,
         );
 
-        let (col_u8, row_u8) = convert_basis_cache(&training_result);
+        let (col_u8, row_u8) = convert_basis_cache(&training_result.basis_cache);
 
         let record = PolicyBasisRecord {
             stage_id: 0,

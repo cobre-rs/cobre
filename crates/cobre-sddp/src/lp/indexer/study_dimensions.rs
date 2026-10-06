@@ -32,8 +32,8 @@ pub struct StudyDimensions {
     /// The study's anticipated-plant set.
     pub anticipated_plants: AnticipatedPlants,
     /// PAR order of the downstream (coarser) resolution model. Non-zero only when
-    /// the study includes stages with `season_id >= 12` (a monthly-to-quarterly
-    /// transition); zero for uniform-resolution studies.
+    /// the study steps from a month-long season to a quarter-long one
+    /// (`derive_downstream_par_order`); zero otherwise.
     pub downstream_par_order: usize,
 }
 

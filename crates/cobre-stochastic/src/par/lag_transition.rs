@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use chrono::{Datelike, NaiveDate};
 use cobre_core::{
-    temporal::{SeasonCycleType, SeasonDefinition, SeasonMap, Stage, StageLagTransition},
+    temporal::{SUB_PERIOD_TOLERANCE_DAYS, SeasonDefinition, SeasonMap, Stage, StageLagTransition},
     window_period_overlaps,
 };
 
@@ -136,27 +136,48 @@ pub(crate) fn compute_period_transition(
 /// be wider than the model's own order; `par`'s global
 /// [`max_order`](PrecomputedPar::max_order) stands in for a quarterly order
 /// until a separate quarterly PAR model exists. The gate reads
-/// `par.max_order()` once any stage crosses into the quarterly range
-/// (`season_id >= 12`), gated off only for `Weekly` — an ISO week number
-/// reaching 12 has nothing to do with quarters, while a `Monthly` or `Custom`
-/// cycle's `season_id >= 12` is a deliberate quarterly convention; a `None`
-/// `season_map` also leaves the ring inert (`0`).
+/// `par.max_order()` when some stage's season spans a calendar quarter right
+/// after a stage whose season spans a calendar month, each within
+/// [`SUB_PERIOD_TOLERANCE_DAYS`] of the calendar length; otherwise, and for a
+/// `None` `season_map`, the ring stays inert (`0`).
 #[must_use]
 pub fn derive_downstream_par_order(
     stages: &[Stage],
     par: &PrecomputedPar,
     season_map: Option<&SeasonMap>,
 ) -> usize {
-    let cycle_admits_ring =
-        season_map.is_some_and(|sm| !matches!(sm.cycle_type, SeasonCycleType::Weekly));
-    let has_quarterly_stages = stages
-        .iter()
-        .any(|s| s.season_id.is_some_and(|id| id >= 12));
-    if has_quarterly_stages && cycle_admits_ring {
+    if season_map.is_some_and(|sm| month_to_quarter_step(stages, sm).is_some()) {
         par.max_order()
     } else {
         0
     }
+}
+
+const CALENDAR_MONTH_DAYS: (i64, i64) = (28, 31);
+const CALENDAR_QUARTER_DAYS: (i64, i64) = (90, 92);
+
+fn season_spans(
+    season_map: &SeasonMap,
+    season_id: Option<usize>,
+    (shortest, longest): (i64, i64),
+) -> bool {
+    season_id
+        .and_then(|id| season_map.resolution_level_of(id))
+        .and_then(|days| i64::try_from(days).ok())
+        .is_some_and(|days| {
+            (shortest - SUB_PERIOD_TOLERANCE_DAYS..=longest + SUB_PERIOD_TOLERANCE_DAYS)
+                .contains(&days)
+        })
+}
+
+fn month_to_quarter_step(stages: &[Stage], season_map: &SeasonMap) -> Option<usize> {
+    stages
+        .windows(2)
+        .position(|pair| {
+            season_spans(season_map, pair[0].season_id, CALENDAR_MONTH_DAYS)
+                && season_spans(season_map, pair[1].season_id, CALENDAR_QUARTER_DAYS)
+        })
+        .map(|index| index + 1)
 }
 
 /// Precompute one [`StageLagTransition`] per stage from stage date boundaries
@@ -167,11 +188,11 @@ pub fn derive_downstream_par_order(
 ///
 /// # Downstream accumulation
 ///
-/// `downstream_par_order > 0` detects a resolution transition (first stage whose
-/// `season_id >= 12`, i.e. crosses from the monthly into the quarterly range) and
-/// fills downstream fields for the `downstream_par_order * 3` monthly stages
-/// before it. Passing `0` leaves every downstream field at its default — the
-/// downstream fields are inert unless populated here.
+/// `downstream_par_order > 0` places the resolution transition at the
+/// month-to-quarter step [`derive_downstream_par_order`] detects and fills
+/// downstream fields for the `downstream_par_order * 3` monthly stages before
+/// it. Passing `0`, or stages without that step, leaves every downstream field
+/// at its default — the downstream fields are inert unless populated here.
 #[must_use]
 pub fn precompute_stage_lag_transitions(
     stages: &[Stage],
@@ -195,10 +216,19 @@ pub fn precompute_stage_lag_transitions(
         .collect();
 
     if downstream_par_order > 0 {
-        compute_downstream_transitions(stages, &mut result, downstream_par_order);
+        compute_downstream_transitions(stages, season_map, &mut result, downstream_par_order);
     }
 
     result
+}
+
+fn calendar_month_of(season_map: &SeasonMap, season_id: usize) -> Option<u32> {
+    season_map
+        .seasons
+        .iter()
+        .find(|def| def.id == season_id)
+        .map(|def| def.month_start)
+        .filter(|month| (1..=12).contains(month))
 }
 
 /// Sum of hours across the 3 months from `start_month`, wrapping into
@@ -219,21 +249,20 @@ fn quarter_hours(start_year: i32, start_month: u32) -> f64 {
 /// Populate downstream accumulation fields on the pre-transition window entries
 /// in `transitions`.
 ///
-/// The transition is the first stage whose `season_id >= 12` (quarterly range);
-/// the window is the `downstream_par_order * 3` monthly stages before it. Weights
-/// use quarterly calendar boundaries (months 1–3 → Q1, 4–6 → Q2, 7–9 → Q3,
-/// 10–12 → Q4); `downstream_finalize` is set on the last monthly stage of each
-/// calendar quarter within the window. No transition / empty window leaves
+/// The transition is the month-to-quarter step of
+/// [`derive_downstream_par_order`]; the window is the `downstream_par_order * 3`
+/// monthly stages before it. Weights use the calendar quarter of each window
+/// season's `month_start` (months 1–3 → Q1, 4–6 → Q2, 7–9 → Q3, 10–12 → Q4);
+/// `downstream_finalize` is set on the last monthly stage of each calendar
+/// quarter within the window. No transition / empty window leaves
 /// `transitions` unchanged.
 fn compute_downstream_transitions(
     stages: &[Stage],
+    season_map: &SeasonMap,
     transitions: &mut [StageLagTransition],
     downstream_par_order: usize,
 ) {
-    let Some(transition_idx) = stages
-        .iter()
-        .position(|s| s.season_id.is_some_and(|id| id >= 12))
-    else {
+    let Some(transition_idx) = month_to_quarter_step(stages, season_map) else {
         return;
     };
 
@@ -242,13 +271,12 @@ fn compute_downstream_transitions(
 
     for stage_idx in window_start..transition_idx {
         let stage = &stages[stage_idx];
-        let Some(season_id) = stage.season_id else {
+        let Some(month) = stage
+            .season_id
+            .and_then(|id| calendar_month_of(season_map, id))
+        else {
             continue;
         };
-
-        // season_id is 0-based (0=Jan … 11=Dec); + 1 makes a 1-based calendar month.
-        let month = u32::try_from(season_id % 12 + 1)
-            .unwrap_or_else(|_| unreachable!("season_id % 12 always fits in u32"));
 
         let quarter_start_month: u32 = ((month - 1) / 3) * 3 + 1;
         let quarter_end_month: u32 = quarter_start_month + 2;
@@ -279,11 +307,10 @@ fn compute_downstream_transitions(
                 / next_quarter_total_hours;
 
         let is_last_of_quarter = stages[stage_idx + 1..transition_idx].iter().all(|later| {
-            let later_month = later.season_id.map_or(u32::MAX, |id| {
-                u32::try_from(id % 12 + 1).unwrap_or(u32::MAX)
-            });
-            let later_quarter_start = ((later_month.saturating_sub(1)) / 3) * 3 + 1;
-            later_quarter_start != quarter_start_month
+            later
+                .season_id
+                .and_then(|id| calendar_month_of(season_map, id))
+                .is_none_or(|later_month| ((later_month - 1) / 3) * 3 + 1 != quarter_start_month)
         });
 
         transitions[stage_idx].accumulate_downstream = true;
@@ -339,7 +366,7 @@ pub fn precompute_noise_groups(stages: &[Stage]) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cobre_core::temporal::{SeasonCycleType, SeasonDefinition, SeasonMap, Stage};
+    use cobre_core::temporal::{SeasonCycleType, SeasonCycles, SeasonDefinition, SeasonMap, Stage};
     use cobre_core::{
         EntityId, Hydro, InflowHistoryRow, RecentObservation,
         test_support::{HydroSpec, MirrorUnitGroup, StageSpec, date, single_block},
@@ -350,7 +377,8 @@ mod tests {
     };
     use crate::seeds::{DerivedInflowSeeds, derive_inflow_seeds};
     use crate::test_support::{
-        InflowModelSpec, MonthlyLabels, make_inflow_model, monthly_season_map, weekly_season_map,
+        InflowModelSpec, MonthlyLabels, make_inflow_model, monthly_quarterly_season_map,
+        monthly_season_map, sparse_ring_season_map, weekly_season_map,
     };
 
     /// A one-hydro [`PrecomputedPar`] with `max_order() == 1`: an order-1
@@ -400,7 +428,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // derive_downstream_par_order gate (Monthly-only convention)
+    // derive_downstream_par_order gate (month-to-quarter span step)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -429,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_downstream_par_order_monthly_quarterly_unchanged() {
+    fn test_derive_downstream_par_order_monthly_map_stays_inert() {
         let season_map = monthly_season_map(MonthlyLabels::OneBased);
         let stages = vec![
             make_stage(0, d(2026, 1, 1), d(2026, 2, 1), Some(0)),
@@ -441,9 +469,9 @@ mod tests {
         let derived =
             derive_downstream_par_order(&stages, &par_of_order_one(&stages), Some(&season_map));
         assert_eq!(
-            derived, 1,
-            "a Monthly season cycle crossing season_id >= 12 must activate the \
-             quarterly ring at par.max_order()"
+            derived, 0,
+            "every season of a Monthly map spans one month, so no stage spans a \
+             quarter and the quarterly ring stays inert"
         );
     }
 
@@ -473,6 +501,176 @@ mod tests {
             derived, 1,
             "a Custom season cycle crossing season_id >= 12 must keep the \
              quarterly ring active at par.max_order() — only Weekly is gated off"
+        );
+    }
+
+    fn ring_study_stages(season_ids: [usize; 5]) -> Vec<Stage> {
+        let bounds = [
+            (d(2026, 1, 1), d(2026, 2, 1)),
+            (d(2026, 2, 1), d(2026, 3, 1)),
+            (d(2026, 3, 1), d(2026, 4, 1)),
+            (d(2026, 4, 1), d(2026, 7, 1)),
+            (d(2026, 7, 1), d(2026, 10, 1)),
+        ];
+        bounds
+            .into_iter()
+            .zip(season_ids)
+            .enumerate()
+            .map(|(index, ((start, end), season_id))| {
+                make_stage(index, start, end, Some(season_id))
+            })
+            .collect()
+    }
+
+    fn renumbered(season_map: &SeasonMap, renumber: fn(usize) -> usize) -> SeasonMap {
+        SeasonMap {
+            cycle_type: season_map.cycle_type,
+            seasons: season_map
+                .seasons
+                .iter()
+                .map(|def| SeasonDefinition {
+                    id: renumber(def.id),
+                    ..def.clone()
+                })
+                .collect(),
+        }
+    }
+
+    fn flagged(
+        transitions: &[StageLagTransition],
+        flag: fn(&StageLagTransition) -> bool,
+    ) -> Vec<usize> {
+        transitions
+            .iter()
+            .enumerate()
+            .filter(|(_, transition)| flag(transition))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    #[test]
+    fn cascade_step_ignores_season_id_numbering() {
+        let ring_map = sparse_ring_season_map();
+        let renumbered_map = renumbered(&ring_map, |id| match id {
+            12 => 3,
+            13 => 4,
+            id => id,
+        });
+        let ring_stages = ring_study_stages([0, 1, 2, 12, 13]);
+        let renumbered_stages = ring_study_stages([0, 1, 2, 3, 4]);
+
+        let derived = derive_downstream_par_order(
+            &renumbered_stages,
+            &par_of_order_one(&renumbered_stages),
+            Some(&renumbered_map),
+        );
+        assert_eq!(
+            derived, 1,
+            "quarters numbered 3 and 4 right after month-long seasons must activate the ring"
+        );
+        assert_eq!(
+            precompute_stage_lag_transitions(&renumbered_stages, &renumbered_map, 1),
+            precompute_stage_lag_transitions(&ring_stages, &ring_map, 1),
+            "renumbering the quarterly seasons must not change any transition"
+        );
+    }
+
+    #[test]
+    fn cascade_window_ignores_month_season_numbering() {
+        let ring_map = sparse_ring_season_map();
+        let misaligned_map = renumbered(&ring_map, |id| match id {
+            0 => 2,
+            1 => 3,
+            2 => 4,
+            12 => 0,
+            13 => 1,
+            id => id,
+        });
+
+        assert_eq!(
+            precompute_stage_lag_transitions(
+                &ring_study_stages([2, 3, 4, 0, 1]),
+                &misaligned_map,
+                1
+            ),
+            precompute_stage_lag_transitions(&ring_study_stages([0, 1, 2, 12, 13]), &ring_map, 1),
+            "each window month must come from its season's definition, not its id"
+        );
+    }
+
+    #[test]
+    fn cascade_needs_a_month_long_season_before_the_quarter() {
+        let season_map = SeasonMap {
+            cycle_type: SeasonCycleType::Custom,
+            seasons: monthly_quarterly_season_map()
+                .seasons
+                .into_iter()
+                .filter(|def| (12..=15).contains(&def.id))
+                .collect(),
+        };
+        let stages = vec![
+            make_stage(0, d(2024, 7, 1), d(2024, 10, 1), Some(12)),
+            make_stage(1, d(2024, 10, 1), d(2025, 1, 1), Some(13)),
+            make_stage(2, d(2025, 1, 1), d(2025, 4, 1), Some(14)),
+        ];
+
+        let derived =
+            derive_downstream_par_order(&stages, &par_of_order_one(&stages), Some(&season_map));
+        assert_eq!(
+            derived, 0,
+            "a study of quarters alone has no month-long season to step from"
+        );
+
+        let transitions = precompute_stage_lag_transitions(&stages, &season_map, 1);
+        assert!(
+            transitions
+                .iter()
+                .all(|t| !t.accumulate_downstream && !t.rebuild_from_downstream),
+            "without a month-to-quarter step no stage may accumulate or rebuild \
+             downstream: {transitions:?}"
+        );
+    }
+
+    #[test]
+    fn cascade_step_matches_the_resolution_groups_on_a_layered_map() {
+        let season_map = monthly_quarterly_season_map();
+        let stages = vec![
+            make_stage(0, d(2024, 1, 1), d(2024, 2, 1), Some(0)),
+            make_stage(1, d(2024, 2, 1), d(2024, 3, 1), Some(1)),
+            make_stage(2, d(2024, 3, 1), d(2024, 4, 1), Some(2)),
+            make_stage(3, d(2024, 4, 1), d(2024, 5, 1), Some(3)),
+            make_stage(4, d(2024, 5, 1), d(2024, 6, 1), Some(4)),
+            make_stage(5, d(2024, 6, 1), d(2024, 7, 1), Some(5)),
+            make_stage(6, d(2024, 7, 1), d(2024, 10, 1), Some(12)),
+            make_stage(7, d(2024, 10, 1), d(2025, 1, 1), Some(13)),
+            make_stage(8, d(2025, 1, 1), d(2025, 4, 1), Some(14)),
+            make_stage(9, d(2025, 4, 1), d(2025, 7, 1), Some(15)),
+        ];
+
+        let derived =
+            derive_downstream_par_order(&stages, &par_of_order_one(&stages), Some(&season_map));
+        assert_eq!(derived, 1);
+
+        let transitions = precompute_stage_lag_transitions(&stages, &season_map, 1);
+        assert_eq!(flagged(&transitions, |t| t.rebuild_from_downstream), [6]);
+        assert_eq!(
+            flagged(&transitions, |t| t.accumulate_downstream),
+            [3, 4, 5]
+        );
+
+        let cycles = SeasonCycles::new(&season_map);
+        let groups: Vec<Option<usize>> = stages
+            .iter()
+            .map(|s| s.season_id.and_then(|id| cycles.group_of(id)))
+            .collect();
+        let first_group_change = groups
+            .windows(2)
+            .position(|pair| pair[0] != pair[1])
+            .map(|index| index + 1);
+        assert_eq!(
+            first_group_change,
+            Some(6),
+            "the month-to-quarter step must sit where the resolution group changes"
         );
     }
 

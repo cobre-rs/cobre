@@ -30,9 +30,7 @@ book/output/
 # JSON schemas generated in the wrong directory (canonical location: book/src/schemas/)
 /*.schema.json
 
-# Implementation plans (local development only). The debt register lives on the
-# `debt-register` branch and is checked out here as a nested worktree:
-#   git worktree add plans/architecture-debt-audit debt-register
+# Implementation plans and debt tracking (local development only, never committed).
 plans/
 
 # Claude Code — track project rules and hooks, ignore ephemeral state

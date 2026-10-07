@@ -14,9 +14,6 @@ shared fixtures, comparators, runner, CI tiering, and correctness hardening.
   **formalizes and extends** it (adds property / compile-fail / hardening tiers,
   a decision rule, and a comparator standard) without weakening any existing
   contract.
-- Several items here close entries in
-  `reserved-seams-and-deferred-debt.md` (oracle-harness duplication, Python-Rust
-  tests invisible to CI, mega-file/inline-test asymmetry).
 
 The figures below are a point-in-time calibration snapshot, each paired with a
 command to re-measure it; the standard itself is stated as invariants, not

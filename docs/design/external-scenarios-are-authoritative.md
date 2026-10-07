@@ -16,8 +16,6 @@ scheme — including the deterministic (σ = 0) case.
 - `.claude/rules/sddp.md` owns the policy-load and stochastic correctness
   contracts; this proposal changes one `cobre-io` semantic validation rule (the
   external-library σ check) and its rationale, and adds no numerical contract.
-- `docs/design/reserved-seams-and-deferred-debt.md` tracks the AR(p > 0)
-  deterministic-external-inflow case this proposal deliberately leaves rejected.
 
 ---
 
@@ -184,7 +182,6 @@ samples. So for AR(p > 0):
 
 - **AR(p > 0) deterministic external inflow: rejected, message corrected.** Not
   supported in this change; the whole-trajectory constraint is of marginal value.
-  Recorded as a reserved case in `reserved-seams-and-deferred-debt.md`.
 - **Vehicle: design doc + progressive plan.** This proposal is the plan's spec.
 
 ## 8. Downstream (out of scope here)

@@ -92,8 +92,7 @@ A distinct future-cost _function_ per leaf — different `α/β`, say one water-
 function for a wet-basin ending and another for a dry-basin ending — is a different
 model. It requires more than one boundary policy on input, one per terminal regime,
 which is a reserved future feature (per-leaf boundary input), not a fix to the
-single-policy path. That seam is tracked with the boundary-policy source-node entry in
-[`reserved-seams-and-deferred-debt.md`](reserved-seams-and-deferred-debt.md).
+single-policy path.
 
 The shared stage template across leaves is correct while a state affects only the
 inflow realization, not the LP structure — which holds for the hydrothermal model.

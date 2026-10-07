@@ -529,9 +529,7 @@ Pinned directly by `run_stage_solve_cross_node_stored_basis_is_treated_as_cold`
 drops to cold instead of erroring) and its DCS companion in `cut/dcs.rs`; the
 reproducibility the check protects is pinned by the `opening_order_determinism`
 gate in `tests/mpi_wire.rs` (bitwise `final_lb` across thread and rank shapes).
-The CLP/HiGHS basis-validation asymmetry itself is unpinned by any test;
-recorded in `docs/design/reserved-seams-and-deferred-debt.md`'s deferred-debt
-register.
+The CLP/HiGHS basis-validation asymmetry itself is unpinned by any test.
 
 ### Simulation pool-fill re-tags a shared-pool sibling basis, never pool-matches
 

@@ -8,6 +8,7 @@ authors:
 repository-code: "https://github.com/cobre-rs/cobre"
 url: "https://docs.cobre-rs.dev/"
 license: Apache-2.0
+doi: 10.5281/zenodo.23202161
 keywords:
   - SDDP
   - hydrothermal dispatch
@@ -15,6 +16,4 @@ keywords:
   - power systems
   - Rust
 # No `version` / `date-released`: they would go stale between releases.
-# Once Zenodo is linked (P0-09), add the concept DOI, which always resolves
-# to the latest release:
-# doi: 10.5281/zenodo.XXXXXXX
+# `doi` is the Zenodo concept DOI, which always resolves to the latest release.

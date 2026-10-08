@@ -14,6 +14,7 @@
   <a href="https://pypi.org/project/cobre-python/"><img alt="Python Versions" src="https://img.shields.io/pypi/pyversions/cobre-python"></a>
   <a href="https://docs.rs/cobre-sddp"><img src="https://docs.rs/cobre-sddp/badge.svg" alt="docs.rs"/></a>
   <a href="https://github.com/cobre-rs/cobre/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache 2.0"/></a>
+  <a href="https://doi.org/10.5281/zenodo.23202161"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.23202161.svg" alt="DOI"></a>
 </p>
 
 ---

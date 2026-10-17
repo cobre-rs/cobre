@@ -98,6 +98,7 @@ impl SolverInterface for ClpSolver {
     ///
     /// Panics if `template.num_cols`, `template.num_rows`, or `template.num_nz`
     /// does not fit in `i32` (the LP exceeds the CLP C API limit).
+    /// Also panics if a slice length disagrees with those counts.
     fn load_model(&mut self, template: &StageTemplate) {
         let t0 = Instant::now();
         assert!(
@@ -115,6 +116,7 @@ impl SolverInterface for ClpSolver {
             "num_nz {} overflows i32: LP exceeds CLP API limit",
             template.num_nz
         );
+        template.assert_ffi_shape();
         // Rationale: the values below were asserted to fit in i32 above.
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let num_col = template.num_cols as i32;
@@ -125,7 +127,8 @@ impl SolverInterface for ClpSolver {
         // - `num_col`/`num_row` fit in i32 (asserted above).
         // - All pointer arguments point into owned `Vec` data on `template` that
         //   remains alive for the duration of this call.
-        // - Slice lengths match the CLP `Clp_loadProblem` contract:
+        // - Slice lengths match the CLP `Clp_loadProblem` contract
+        //   (`StageTemplate::assert_ffi_shape`):
         //   `num_cols + 1` for col_starts, `num_nz` for row_indices and values,
         //   `num_cols` for col_lower/col_upper/objective, `num_rows` for
         //   row_lower/row_upper.
@@ -187,7 +190,8 @@ impl SolverInterface for ClpSolver {
     ///
     /// # Panics
     ///
-    /// Panics if `rows.num_rows` or the batch nnz does not fit in `i32`.
+    /// Panics if `rows.num_rows` or the batch nnz does not fit in `i32`, or if a
+    /// slice length disagrees with the batch's CSR shape.
     fn add_rows(&mut self, rows: &RowBatch) {
         assert!(
             i32::try_from(rows.num_rows).is_ok(),
@@ -200,15 +204,10 @@ impl SolverInterface for ClpSolver {
             rows.col_indices.len()
         );
 
+        rows.assert_ffi_shape();
+
         let new_nz = rows.col_indices.len();
         if rows.num_rows == 0 {
-            // A well-formed empty batch has no column entries; guard so a
-            // malformed batch (no rows but non-empty col_indices) cannot scatter
-            // ghost entries into the retained CSC.
-            debug_assert!(
-                new_nz == 0,
-                "malformed RowBatch: num_rows is 0 but col_indices has {new_nz} entries"
-            );
             return;
         }
 
@@ -285,8 +284,8 @@ impl SolverInterface for ClpSolver {
         // - The pointer arguments point into the caller's `rows` CSR slices,
         //   which outlive this call: `row_lower`/`row_upper` have `num_rows`
         //   entries, `row_starts` has `num_rows + 1` entries, and
-        //   `col_indices`/`values` have `row_starts[num_rows]` entries (the
-        //   `RowBatch` CSR contract). The batch nnz was asserted to fit in i32.
+        //   `col_indices`/`values` have `row_starts[num_rows]` entries
+        //   (`RowBatch::assert_ffi_shape`). The batch nnz was asserted to fit in i32.
         // - Row bounds are forwarded verbatim; the C wrapper owns the
         //   ±IEEE-inf → ±DBL_MAX translation.
         unsafe {

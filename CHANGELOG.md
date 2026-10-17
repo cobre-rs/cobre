@@ -66,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A rank that panics during `cobre run` under MPI aborts the whole job
   with exit code 101. The other ranks used to wait in a collective until the
   job was killed.
+- `cobre-solver`: `load_model` and `add_rows` on both backends now panic when a
+  `StageTemplate` or `RowBatch` slice length disagrees with its declared counts.
+  In release builds this check was missing, so a malformed input caused an
+  out-of-bounds read in the C solver.
 
 ## [0.18.0] - 2026-10-07
 

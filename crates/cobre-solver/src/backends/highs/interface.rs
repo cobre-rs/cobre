@@ -111,7 +111,7 @@ impl SolverInterface for HighsSolver {
         //   duration of this call.
         // - `template.col_starts` and `template.row_indices` are `Vec<i32>` owned by the
         //   template, alive for the duration of this borrow.
-        // - All slice lengths match the HiGHS API contract:
+        // - All slice lengths match the HiGHS API contract (`StageTemplate::assert_ffi_shape`):
         //   `num_col + 1` for a_start, `num_nz` for a_index and a_value,
         //   `num_col` for col_cost/col_lower/col_upper, `num_row` for row_lower/row_upper.
         assert!(
@@ -129,65 +129,7 @@ impl SolverInterface for HighsSolver {
             "num_nz {} overflows i32: LP exceeds HiGHS API limit",
             template.num_nz
         );
-        // These slices are internally constructed, so a length mismatch is a
-        // construction bug, not user input -- debug_assert, no release panic.
-        // CSC column starts carry one extra trailing offset (`num_cols + 1`).
-        debug_assert_eq!(
-            template.col_starts.len(),
-            template.num_cols + 1,
-            "col_starts len {} != num_cols + 1 ({})",
-            template.col_starts.len(),
-            template.num_cols + 1
-        );
-        debug_assert_eq!(
-            template.row_indices.len(),
-            template.num_nz,
-            "row_indices len {} != num_nz {}",
-            template.row_indices.len(),
-            template.num_nz
-        );
-        debug_assert_eq!(
-            template.values.len(),
-            template.num_nz,
-            "values len {} != num_nz {}",
-            template.values.len(),
-            template.num_nz
-        );
-        debug_assert_eq!(
-            template.col_lower.len(),
-            template.num_cols,
-            "col_lower len {} != num_cols {}",
-            template.col_lower.len(),
-            template.num_cols
-        );
-        debug_assert_eq!(
-            template.col_upper.len(),
-            template.num_cols,
-            "col_upper len {} != num_cols {}",
-            template.col_upper.len(),
-            template.num_cols
-        );
-        debug_assert_eq!(
-            template.objective.len(),
-            template.num_cols,
-            "objective len {} != num_cols {}",
-            template.objective.len(),
-            template.num_cols
-        );
-        debug_assert_eq!(
-            template.row_lower.len(),
-            template.num_rows,
-            "row_lower len {} != num_rows {}",
-            template.row_lower.len(),
-            template.num_rows
-        );
-        debug_assert_eq!(
-            template.row_upper.len(),
-            template.num_rows,
-            "row_upper len {} != num_rows {}",
-            template.row_upper.len(),
-            template.num_rows
-        );
+        template.assert_ffi_shape();
         // Scale vectors are optional: empty means "no scaling", otherwise they must be
         // keyed by the matching dimension.
         debug_assert!(
@@ -261,6 +203,7 @@ impl SolverInterface for HighsSolver {
             "rows nnz {} overflows i32: RowBatch exceeds HiGHS API limit",
             rows.col_indices.len()
         );
+        rows.assert_ffi_shape();
         // SAFETY: Both values have been asserted to fit in i32 above.
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let num_new_row = rows.num_rows as i32;
@@ -272,8 +215,8 @@ impl SolverInterface for HighsSolver {
         // - All pointer arguments point into owned data alive for the duration of this call.
         // - `rows.row_starts` and `rows.col_indices` are `Vec<i32>` owned by the RowBatch,
         //   alive for the duration of this borrow.
-        // - Slice lengths: `num_rows + 1` for starts, total nnz for index and value,
-        //   `num_rows` for lower/upper bounds.
+        // - Slice lengths (`RowBatch::assert_ffi_shape`): `num_rows + 1` for starts,
+        //   total nnz for index and value, `num_rows` for lower/upper bounds.
         let status = unsafe {
             ffi::cobre_highs_add_rows(
                 self.handle,

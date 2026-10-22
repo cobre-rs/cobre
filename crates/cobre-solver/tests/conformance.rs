@@ -1730,3 +1730,141 @@ fn test_solver_clp_solve_accepts_inconsistent_basis_status_combination_silently(
         primals[2]
     );
 }
+
+// ─── FFI shape guards: malformed slice lengths panic before the FFI call ─────
+
+#[cfg(any(feature = "highs", feature = "clp"))]
+mod ffi_shape_guards {
+    use super::{make_fixture_row_batch, make_fixture_stage_template};
+    use cobre_solver::{ActiveSolver, RowBatch, SolverInterface, StageTemplate};
+
+    fn empty_row_batch(row_starts: Vec<i32>) -> RowBatch {
+        RowBatch {
+            num_rows: 0,
+            row_starts,
+            col_indices: Vec::new(),
+            values: Vec::new(),
+            row_lower: Vec::new(),
+            row_upper: Vec::new(),
+        }
+    }
+
+    fn load(template: &StageTemplate) {
+        let mut solver = ActiveSolver::new().expect("solver must construct");
+        solver.load_model(template);
+    }
+
+    fn load_then_add(rows: &RowBatch) {
+        let mut solver = ActiveSolver::new().expect("solver must construct");
+        solver.load_model(&make_fixture_stage_template());
+        solver.add_rows(rows);
+    }
+
+    #[test]
+    #[should_panic(expected = "col_starts len")]
+    fn load_model_rejects_col_starts_shorter_than_num_cols_plus_one() {
+        let mut t = make_fixture_stage_template();
+        t.col_starts.pop();
+        load(&t);
+    }
+
+    #[test]
+    #[should_panic(expected = "row_indices len")]
+    fn load_model_rejects_row_indices_shorter_than_num_nz() {
+        let mut t = make_fixture_stage_template();
+        t.row_indices.pop();
+        load(&t);
+    }
+
+    #[test]
+    #[should_panic(expected = "values len")]
+    fn load_model_rejects_values_shorter_than_num_nz() {
+        let mut t = make_fixture_stage_template();
+        t.values.pop();
+        load(&t);
+    }
+
+    #[test]
+    #[should_panic(expected = "col_starts[num_cols]")]
+    fn load_model_rejects_col_starts_tail_past_num_nz() {
+        let mut t = make_fixture_stage_template();
+        t.col_starts[3] = 4;
+        load(&t);
+    }
+
+    #[test]
+    #[should_panic(expected = "objective len")]
+    fn load_model_rejects_objective_shorter_than_num_cols() {
+        let mut t = make_fixture_stage_template();
+        t.objective.pop();
+        load(&t);
+    }
+
+    #[test]
+    #[should_panic(expected = "col_upper len")]
+    fn load_model_rejects_col_upper_shorter_than_num_cols() {
+        let mut t = make_fixture_stage_template();
+        t.col_upper.pop();
+        load(&t);
+    }
+
+    #[test]
+    #[should_panic(expected = "row_lower len")]
+    fn load_model_rejects_row_lower_shorter_than_num_rows() {
+        let mut t = make_fixture_stage_template();
+        t.row_lower.pop();
+        load(&t);
+    }
+
+    #[test]
+    fn add_rows_accepts_well_formed_batch() {
+        load_then_add(&make_fixture_row_batch());
+    }
+
+    #[test]
+    fn add_rows_accepts_empty_batch_with_either_row_starts_form() {
+        load_then_add(&empty_row_batch(Vec::new()));
+        load_then_add(&empty_row_batch(vec![0]));
+    }
+
+    #[test]
+    #[should_panic(expected = "RowBatch row_starts len")]
+    fn add_rows_rejects_row_starts_shorter_than_num_rows_plus_one() {
+        let mut rows = make_fixture_row_batch();
+        rows.row_starts.pop();
+        load_then_add(&rows);
+    }
+
+    #[test]
+    #[should_panic(expected = "RowBatch row_starts[num_rows]")]
+    fn add_rows_rejects_row_starts_tail_past_nnz() {
+        let mut rows = make_fixture_row_batch();
+        rows.row_starts[2] = 5;
+        load_then_add(&rows);
+    }
+
+    #[test]
+    #[should_panic(expected = "RowBatch values len")]
+    fn add_rows_rejects_values_shorter_than_col_indices() {
+        let mut rows = make_fixture_row_batch();
+        rows.values.pop();
+        load_then_add(&rows);
+    }
+
+    #[test]
+    #[should_panic(expected = "RowBatch row_upper len")]
+    fn add_rows_rejects_row_upper_shorter_than_num_rows() {
+        let mut rows = make_fixture_row_batch();
+        rows.row_upper.pop();
+        load_then_add(&rows);
+    }
+
+    #[test]
+    #[should_panic(expected = "num_rows is 0 but col_indices has 1 entries")]
+    fn add_rows_rejects_empty_batch_carrying_entries() {
+        let mut rows = empty_row_batch(vec![0]);
+        rows.col_indices.push(0);
+        rows.values.push(1.0);
+        load_then_add(&rows);
+    }
+}

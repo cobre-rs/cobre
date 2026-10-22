@@ -365,6 +365,64 @@ impl StageTemplate {
             row_scale: Vec::new(),
         }
     }
+
+    /// Asserts the slice lengths the backends' `load_model` FFI call reads.
+    ///
+    /// Release-mode asserts, not `debug_assert`: the fields are public, so this
+    /// is the only thing keeping a malformed template from an out-of-bounds read
+    /// in C. Index contents (monotone starts, row indices in range) are not
+    /// checked here.
+    pub(crate) fn assert_ffi_shape(&self) {
+        assert_eq!(
+            self.col_starts.len(),
+            self.num_cols + 1,
+            "col_starts len {} != num_cols + 1 ({})",
+            self.col_starts.len(),
+            self.num_cols + 1
+        );
+        assert_eq!(
+            self.row_indices.len(),
+            self.num_nz,
+            "row_indices len {} != num_nz {}",
+            self.row_indices.len(),
+            self.num_nz
+        );
+        assert_eq!(
+            self.values.len(),
+            self.num_nz,
+            "values len {} != num_nz {}",
+            self.values.len(),
+            self.num_nz
+        );
+        assert_eq!(
+            usize::try_from(self.col_starts[self.num_cols]).ok(),
+            Some(self.num_nz),
+            "col_starts[num_cols] {} != num_nz {}",
+            self.col_starts[self.num_cols],
+            self.num_nz
+        );
+        for (name, len) in [
+            ("col_lower", self.col_lower.len()),
+            ("col_upper", self.col_upper.len()),
+            ("objective", self.objective.len()),
+        ] {
+            assert_eq!(
+                len, self.num_cols,
+                "{name} len {len} != num_cols {}",
+                self.num_cols
+            );
+        }
+        for (name, len) in [
+            ("row_lower", self.row_lower.len()),
+            ("row_upper", self.row_upper.len()),
+        ] {
+            assert_eq!(
+                len, self.num_rows,
+                "{name} len {len} != num_rows {}",
+                self.num_rows
+            );
+        }
+    }
 }
 
 impl RowBatch {
@@ -376,6 +434,51 @@ impl RowBatch {
         self.values.clear();
         self.row_lower.clear();
         self.row_upper.clear();
+    }
+
+    /// Asserts the slice lengths the backends' `add_rows` FFI call reads.
+    ///
+    /// Release-mode asserts for the same reason as
+    /// [`StageTemplate::assert_ffi_shape`]. An empty batch may carry either
+    /// `[]` or `[0]` as `row_starts`; neither backend reads it.
+    pub(crate) fn assert_ffi_shape(&self) {
+        let nnz = self.col_indices.len();
+        assert_eq!(
+            self.values.len(),
+            nnz,
+            "RowBatch values len {} != col_indices len {nnz}",
+            self.values.len()
+        );
+        for (name, len) in [
+            ("row_lower", self.row_lower.len()),
+            ("row_upper", self.row_upper.len()),
+        ] {
+            assert_eq!(
+                len, self.num_rows,
+                "RowBatch {name} len {len} != num_rows {}",
+                self.num_rows
+            );
+        }
+        if self.num_rows == 0 {
+            assert_eq!(
+                nnz, 0,
+                "malformed RowBatch: num_rows is 0 but col_indices has {nnz} entries"
+            );
+            return;
+        }
+        assert_eq!(
+            self.row_starts.len(),
+            self.num_rows + 1,
+            "RowBatch row_starts len {} != num_rows + 1 ({})",
+            self.row_starts.len(),
+            self.num_rows + 1
+        );
+        assert_eq!(
+            usize::try_from(self.row_starts[self.num_rows]).ok(),
+            Some(nnz),
+            "RowBatch row_starts[num_rows] {} != nnz {nnz}",
+            self.row_starts[self.num_rows]
+        );
     }
 }
 

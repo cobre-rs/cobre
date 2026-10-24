@@ -7,7 +7,8 @@
 //!
 //! The file contains two required top-level arrays and three optional arrays:
 //!
-//! - `storage` — initial reservoir volumes for operating hydros (hm³).
+//! - `storage` — initial reservoir volumes for operating hydros (hm³), each
+//!   within its hydro's storage range (Layer 5a).
 //! - `filling_storage` — initial reservoir volumes for filling hydros (hm³).
 //! - `recent_observations` — the conditioning layer over the windowed
 //!   `inflow_history` record ([`crate::scenarios::parse_inflow_history`]):

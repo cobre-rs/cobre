@@ -53,6 +53,7 @@ pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut Valid
     hydro::check_lifecycle_consistency_remaining(data, ctx);
     hydro::check_filling_config(data, ctx);
     hydro::check_filling_guards(data, ctx);
+    hydro::check_initial_storage_range(data, ctx);
     hydro::check_geometry_monotonicity(data, ctx);
     hydro::check_evaporation_geometry_coverage(data, ctx);
     hydro::check_fpha_constraints(data, ctx);

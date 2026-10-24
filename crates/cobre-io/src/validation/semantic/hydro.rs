@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use cobre_core::commissioning::{Phase, filling_phase};
 use cobre_core::{EntityId, Hydro};
 
 use super::super::{ValidationContext, rules, schema::ParsedData};
@@ -439,6 +440,63 @@ pub(super) fn check_filling_guards(data: &ParsedData, ctx: &mut ValidationContex
                     ),
                 );
             }
+        }
+    }
+}
+
+/// Rule 53: an initial `storage` value lies in its hydro's
+/// `[min_storage_hm3, max_storage_hm3]`, within [`envelope_tolerance`]. The
+/// floor is `0` for a filling hydro and for one commissioning-dormant at the
+/// first study stage, where the storage floor is relaxed. Rejected, never
+/// clamped: clamping would change the declared water without a diagnostic.
+pub(super) fn check_initial_storage_range(data: &ParsedData, ctx: &mut ValidationContext) {
+    let Some(first_stage_id) = data
+        .stages
+        .stages
+        .iter()
+        .map(|s| s.id)
+        .filter(|&id| id >= 0)
+        .min()
+    else {
+        return;
+    };
+
+    for hydro in &data.hydros {
+        let Some(seed) = data
+            .initial_conditions
+            .storage
+            .iter()
+            .find(|s| s.hydro_id == hydro.id)
+        else {
+            continue;
+        };
+        let floor_relaxed = hydro.filling.is_some()
+            || filling_phase(
+                hydro.filling.as_ref(),
+                hydro.entry_stage_id,
+                hydro.exit_stage_id,
+                first_stage_id,
+            ) == Phase::PreFilling;
+        let (floor_name, floor) = if floor_relaxed {
+            ("0", 0.0)
+        } else {
+            ("min_storage_hm3", hydro.min_storage_hm3)
+        };
+        let ceiling = hydro.max_storage_hm3;
+        if seed.value_hm3 < floor - envelope_tolerance(floor)
+            || seed.value_hm3 > ceiling + envelope_tolerance(ceiling)
+        {
+            let entity_str = format!("Hydro {}", hydro.id.0);
+            ctx.emit(
+                &rules::SEMANTIC_INITIAL_STORAGE_OUT_OF_RANGE,
+                "initial_conditions.json",
+                Some(&entity_str),
+                format!(
+                    "{entity_str}: initial storage ({}) must lie in \
+                     [{floor_name}, max_storage_hm3] = [{floor}, {ceiling}]",
+                    seed.value_hm3
+                ),
+            );
         }
     }
 }
@@ -2876,6 +2934,77 @@ mod tests {
             !ctx.errors().iter().any(|e| e.message.contains("Hydro 11")),
             "the no-declared-groups plant must produce zero findings, got: {:?}",
             ctx.errors()
+        );
+    }
+
+    // ── Initial storage range tests ───────────────────────────────────────────
+
+    /// The rule-53 messages from validating one hydro, its storage range set to
+    /// `[100, 1000]`, seeded at `value_hm3` over study stages 0-3.
+    fn initial_storage_range_messages(mut hydro: Hydro, value_hm3: f64) -> Vec<String> {
+        hydro.min_storage_hm3 = 100.0;
+        hydro.max_storage_hm3 = 1000.0;
+        let hydro_id = hydro.id;
+        let mut data = make_data(
+            vec![hydro],
+            vec![],
+            vec![],
+            make_stages(vec![0, 1, 2, 3]),
+            vec![],
+            vec![],
+        );
+        data.initial_conditions.storage = vec![HydroStorage {
+            hydro_id,
+            value_hm3,
+        }];
+        let mut ctx = ValidationContext::new();
+        validate_semantic_hydro_thermal(&data, &mut ctx);
+        ctx.errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::InvalidValue
+                    && e.file.to_string_lossy() == "initial_conditions.json"
+            })
+            .map(|e| e.message.clone())
+            .collect()
+    }
+
+    #[test]
+    fn test_initial_storage_below_min_storage_is_rejected() {
+        let msgs = initial_storage_range_messages(make_hydro(1, None), 50.0);
+        assert_eq!(msgs.len(), 1, "got: {msgs:?}");
+        assert!(
+            msgs[0].contains("Hydro 1")
+                && msgs[0].contains("initial storage (50)")
+                && msgs[0].contains("[min_storage_hm3, max_storage_hm3] = [100, 1000]"),
+            "got: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn test_initial_storage_above_max_storage_is_rejected() {
+        let msgs = initial_storage_range_messages(make_hydro(1, None), 1000.5);
+        assert_eq!(msgs.len(), 1, "got: {msgs:?}");
+    }
+
+    #[test]
+    fn test_initial_storage_at_a_bound_or_within_tolerance_is_accepted() {
+        for value in [100.0, 1000.0, 100.0 - 1e-8, 1000.0 + 1e-7] {
+            let msgs = initial_storage_range_messages(make_hydro(1, None), value);
+            assert!(msgs.is_empty(), "{value}: {msgs:?}");
+        }
+    }
+
+    #[test]
+    fn test_initial_storage_of_a_dormant_hydro_may_lie_below_min_storage() {
+        let mut hydro = make_hydro(1, None);
+        hydro.entry_stage_id = Some(2);
+        let msgs = initial_storage_range_messages(hydro.clone(), 0.0);
+        assert!(msgs.is_empty(), "got: {msgs:?}");
+        let msgs = initial_storage_range_messages(hydro, 1000.5);
+        assert!(
+            msgs.len() == 1 && msgs[0].contains("[0, max_storage_hm3] = [0, 1000]"),
+            "got: {msgs:?}"
         );
     }
 }

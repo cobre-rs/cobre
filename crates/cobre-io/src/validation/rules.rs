@@ -319,6 +319,9 @@ declare_rules! {
     SEMANTIC_PUMPING_ENDPOINT_NOT_OPERATING = "semantic.5a.52",
         Semantic, BusinessRuleViolation, Error,
         "A pumping station is active at a study stage where its source or destination hydro is not operating";
+    SEMANTIC_INITIAL_STORAGE_OUT_OF_RANGE = "semantic.5a.53",
+        Semantic, InvalidValue, Error,
+        "A hydro's initial storage lies outside its own storage range";
     TRAVEL_TIME_INVALID = "travel_time.1",
         Semantic, InvalidValue, Error,
         "A hydro's travel_time_hours is negative or not finite";

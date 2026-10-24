@@ -112,7 +112,7 @@ use crate::{
     lead_time::{AnticipatedResolution, DeliveryAxis, LeadTime, PointResolution},
     lp::builder::{
         LpBuildInputs, StageGeometry, StateBox, build_stage_templates, contract_family_slot,
-        warn_on_inert_plant_floor_overrides,
+        storage_floor_relaxed, warn_on_inert_plant_floor_overrides,
     },
     lp::indexer::{
         AnticipatedLocal, AnticipatedPlants, CutStateProjection, HydroCellIndex, HydroSys,
@@ -1855,14 +1855,14 @@ fn resolve_initial_conditions(
     state: &StateSpace,
     study_dims: &StudyDimensions,
     topology: &bucket_topology::TransitBucketTopology,
-    stage0_box: Option<&StateBox>,
+    stage0: Option<(&Stage, &StateBox)>,
 ) -> InitialConditions {
     let inflow_seeds = resolve_inflow_seeds(system, state.max_par_order);
     let mut initial_state =
         build_initial_state(system, study_dims, state, &inflow_seeds.lag_values);
     splice_transit_bucket_seed(&mut initial_state, state, system, topology);
-    if let Some(stage0_box) = stage0_box {
-        canonicalize_initial_state(&mut initial_state, state, stage0_box);
+    if let Some((stage0, stage0_box)) = stage0 {
+        canonicalize_initial_state(&mut initial_state, state, system, stage0, stage0_box);
     }
     InitialConditions {
         state: initial_state,
@@ -1977,7 +1977,7 @@ fn resolve_stage_data(
         &layout.state,
         &study_dims,
         &transit_bucket_topology,
-        stage_templates.state_boxes().first(),
+        stages.first().zip(stage_templates.state_boxes().first()),
     );
 
     let stage_data = stage_data::StageData {
@@ -2786,21 +2786,36 @@ fn study_stages_slice(system: &System) -> &[Stage] {
     }
 }
 
-/// Project the stage-0 initial (incoming) state onto the stage-0 admissible box
-/// for the box-stable families — storage (and its `PreFilling` seed) and
-/// travel-time buckets — the setup-time analog of the read-back seam's clamp on
-/// the OUTGOING state. Inflow lags are unbounded, so the box leaves them
+/// Project the stage-0 initial (incoming) state onto what each box-stable family
+/// admits on entry. Storage (and its `PreFilling` seed) takes the hydro's
+/// physical range, its floor lifted to `0` where [`storage_floor_relaxed`] holds
+/// at stage 0 — NEVER the stage-0 box, which is the OUTGOING column's bounds and
+/// carries that stage's end-of-stage storage targets: projecting the incoming
+/// storage onto it creates or removes water before the first solve. Travel-time
+/// buckets take the stage-0 box, the setup-time analog of the read-back seam's
+/// clamp on the OUTGOING state. Inflow lags are unbounded, so they stay
 /// untouched. The commitment-hold ring is deliberately NOT clamped here: the
 /// stage-0 box is anchored on the ring's OUTGOING delivery window, so its
 /// residue-0 slot bounds a later delivery than the incoming seed carried there —
 /// that family is projected onto its own delivery-stage bound at seed time in
 /// [`build_initial_state`] instead.
-fn canonicalize_initial_state(state: &mut [f64], layout: &StateSpace, stage0_box: &StateBox) {
-    for j in layout
-        .storage
-        .clone()
-        .chain(layout.transit_buckets_out.clone())
-    {
+fn canonicalize_initial_state(
+    state: &mut [f64],
+    layout: &StateSpace,
+    system: &System,
+    stage0: &Stage,
+    stage0_box: &StateBox,
+) {
+    for (idx, hydro) in system.hydros().iter().enumerate() {
+        let j = layout.storage_state_dim(HydroSys::new(idx)).get();
+        let floor = if storage_floor_relaxed(hydro, stage0.id) {
+            0.0
+        } else {
+            hydro.min_storage_hm3
+        };
+        state[j] = state[j].clamp(floor, hydro.max_storage_hm3);
+    }
+    for j in layout.transit_buckets_out.clone() {
         state[j] = state[j].clamp(stage0_box.lower[j], stage0_box.upper[j]);
     }
 }

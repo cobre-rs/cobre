@@ -12,6 +12,7 @@ use super::EVAPORATION_FLOW_SAFETY_MARGIN;
 use super::delivery_ring::{ColumnBufs, DeliveryRing};
 use super::hydro_state::{
     GroupBoundLookup, MinFloor, cell_max_generation, cell_max_turbined, hydro_phase, is_suspended,
+    storage_floor_relaxed,
 };
 use super::layout::{
     StageLayout, TemplateBuildCtx, contract_direction_counts, contract_family_slot,
@@ -75,18 +76,7 @@ fn fill_storage_columns(
 ) {
     for h_idx in 0..layout.state.hydro_count {
         let hydro = &ctx.hydros[h_idx];
-        // CONTRACT: `min_storage` is a HARD lower bound for every hydro EXCEPT (a) a
-        // filling one (`hydro.filling.is_some()`), whose floor relaxes to `0` in ALL
-        // phases and is re-imposed as a SOFT floor by
-        // `fill_filled_min_storage_floor_columns`, and (b) a non-filling hydro while
-        // `PreFilling` (commissioning-dormant), whose frozen-identity row pins `v_h`
-        // to the inert IC storage — a hard floor above that IC value would reject the
-        // pin and make the LP infeasible. FORBIDDEN — globalizing the relax to all
-        // Operating hydros (makes dead volume soft system-wide); keeping it hard
-        // through a dormant non-filling stage (rejects the IC pin). The dormant relax
-        // disappears at `Operating`, restoring the hard floor.
-        let floor_off =
-            hydro.filling.is_some() || matches!(hydro_phase(hydro, stage.id), Phase::PreFilling);
+        let floor_off = storage_floor_relaxed(hydro, stage.id);
         let hb = ctx.resolved.bounds.hydro_bounds(h_idx, stage_idx);
         let storage_lower = if floor_off { 0.0 } else { hb.min_storage_hm3 };
         let storage_out_col = layout

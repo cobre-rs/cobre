@@ -21,6 +21,22 @@ pub(super) fn hydro_phase(hydro: &Hydro, stage_id: i32) -> Phase {
     )
 }
 
+/// Whether `hydro`'s `min_storage` floor is lifted to `0` at `stage_id`.
+///
+/// CONTRACT: `min_storage` is a HARD lower bound for every hydro EXCEPT (a) a
+/// filling one (`hydro.filling.is_some()`), whose floor relaxes to `0` in ALL
+/// phases and is re-imposed as a SOFT floor by
+/// `fill_filled_min_storage_floor_columns`, and (b) a non-filling hydro while
+/// `PreFilling` (commissioning-dormant), whose frozen-identity row pins `v_h`
+/// to the inert IC storage — a hard floor above that IC value would reject the
+/// pin and make the LP infeasible. FORBIDDEN — globalizing the relax to all
+/// Operating hydros (makes dead volume soft system-wide); keeping it hard
+/// through a dormant non-filling stage (rejects the IC pin). The dormant relax
+/// disappears at `Operating`, restoring the hard floor.
+pub(crate) fn storage_floor_relaxed(hydro: &Hydro, stage_id: i32) -> bool {
+    hydro.filling.is_some() || matches!(hydro_phase(hydro, stage_id), Phase::PreFilling)
+}
+
 /// Whether `hydro` is commissioning (`PreFilling`/`Filling`) at `stage_id`, its
 /// turbine columns pinned at zero.
 pub(super) fn is_suspended(hydro: &Hydro, stage_id: i32) -> bool {

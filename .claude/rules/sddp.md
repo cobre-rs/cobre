@@ -3708,6 +3708,23 @@ Read: `setup/mod.rs` (`id_to_position`, `build_initial_state`),
 and `test_seed_correct_under_staggered_commissioning_dates`, each using a
 staggered-date fixture where the canonical order is id-descending.
 
+## The initial storage takes the hydro's physical range, never the stage-0 box
+
+The stage-0 `StateBox` storage bounds are that stage's OUTGOING column bounds,
+so they carry its end-of-stage storage targets (`hydro_bounds`
+`min_storage_hm3`/`max_storage_hm3`). The incoming initial storage has no
+producing stage: `canonicalize_initial_state` projects it onto the hydro's own
+`[min_storage_hm3, max_storage_hm3]`, the floor lifted to `0` where
+`storage_floor_relaxed` holds at stage 0. Projecting it onto the stage-0 box is
+the wrong-but-running alternative: a stage-0 floor above the declared storage
+raises it and a ceiling below lowers it, creating or removing water before the
+first solve with no diagnostic. Travel-time buckets keep the stage-0 box.
+Read: `setup/mod.rs` (`canonicalize_initial_state`), `lp/builder/hydro_state.rs`
+(`storage_floor_relaxed`, the one owner of which hydros have a hard floor).
+Pinned by `initial_storage_below_stage0_storage_floor_is_not_raised` and
+`initial_storage_above_stage0_storage_ceiling_is_not_lowered`
+(`tests/state_drift_absorption.rs`).
+
 ## Water travel time
 
 A declared upstream→downstream arc introduces in-transit "bucket" state: one

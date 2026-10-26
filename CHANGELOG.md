@@ -11,368 +11,201 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `training.cut_selection.selection.lookback_iterations` for `level1`: the
-  trial states of a run are kept only for the rows added in the last
-  `lookback_iterations` iterations of that run, which bounds the memory they
-  take. Absent, the run keeps every trial state. A zero, or a value below
-  `check_frequency`, is refused.
-- `simulation.cut_set`, `all` or `active`, chooses which rows of each stage
-  the simulation loads. `all` loads every row training added, including rows
-  the selection method deactivated and rows `max_active_per_stage` evicted;
-  `active` loads the rows that were active when training ended.
+- `training.cut_selection.selection.lookback_iterations` for `level1` keeps
+  only the trial states of the last `lookback_iterations` iterations, which
+  bounds their memory. It must be at least `check_frequency`. Absent, every
+  trial state is kept.
+- `simulation.cut_set` chooses the cuts the simulation uses: `all`, every cut
+  training added, or `active`, the cuts active when training ended.
 - `training/convergence.parquet` has a `lazy_round_cap_hits` column: the
-  lazy-selection LP solves of the iteration that reached the round cap with a
-  candidate row still violated.
-- A resumed or warm-started `level1` run restores the stored trial states, and
-  a resumed run with `max_active_per_stage` or the `dynamic` method restores
-  the binding counters of each row.
-- Checkpoints hold one solver basis per forward pass and node from every rank,
-  and record whether the set is whole. A resumed run with several forward
-  passes starts each pass from its own basis, and a warm start or resume
-  restores the bases of a policy trained with a selection method, with their
-  row slots. The unused-bases warning counts per scenario.
-- `policy.mode = resume` is refused, with a message naming what is missing and
-  the way out, when the checkpoint lacks the `level1` trial-state history the
-  run needs, lacks the binding counters the run reads, holds a lookback window
-  shorter than the run's, holds an incomplete basis store, or was written with
-  another `training.selection.forward_passes`.
-- `policy.mode = resume` is refused by `cobre validate` and `cobre run` when
-  the rows of `policy.boundary` differ from the terminal pool of the
-  checkpoint. A resume whose `modeling.cost_scale_factor` differs from the run
-  that wrote the checkpoint is refused only when the boundary rows then
-  differ. The resume applies the scale of its own configuration.
-- Computed scalar parameters in MWh: `max_stored_energy_mwh`,
+  `dynamic` lazy solves of the iteration that hit the round cap.
+- Scalar parameters in MWh for generic constraints: `max_stored_energy_mwh`,
   `integrated_accumulated_productivity_mwh_per_hm3` and
-  `integrated_equivalent_productivity_mwh_per_hm3`. Each is the raw tag of the
-  same name times 10⁶/3600. With them a stored-energy constraint states its
-  amounts in MWh and no stage duration enters either side; price its slack with
-  `"penalty_basis": "per_unit"` so the penalty is a price per MWh on every stage.
-- A generic-constraint expression accepts arithmetic over numbers and
-  `@parameters` on both sides of the relation: `+`, `-`, `*`, `/`, parentheses
-  and unary minus, for example
-  `(@weight_a + @weight_b) * hydro_useful_volume_final(0) >= @pct * @emax`. It
-  must stay linear in LP variables: a product of two variables, or a division
-  by one, is rejected at load. A constant that divides by zero or is not finite
-  is rejected at load, and a value that resolves from parameters to a
-  non-finite number stops setup with an error naming the stage and block.
-- A scalar parameter in `constraints/generic_parameters.json` may be
-  `kind: "expression"`, a formula over other parameters, for example
-  `{ "id": 5, "name": "scaled_demand", "kind": "expression", "expression": "@discount_rate * @demand" }`.
-  A constraint reads it like any other parameter. A reference cycle or an LP
-  variable in the formula is rejected at load. The value is stored per block
-  when a parameter it reads varies by block, and the stored-energy pairing
-  warning (rule 51) checks the tags it reads.
-- `system/hydro_energy_productivity.parquet` has a new
-  `integrated_equivalent_productivity_mw_per_m3s` column. A value sets that
-  plant's own useful-range mean productivity for the stage outright; the
-  cascade sum, `max_stored_energy*`, the `integrated_*` tags and output
-  columns and `stored_energy_*` are computed from it. Use it when a source
-  model's stored-energy convention differs from integrating the plant's
-  geometry over its physical range. Finite and `>= 0.0`; NULL means no
-  override.
-- A hydro's `diversion` channel in `system/hydros.json` may leave out
-  `max_flow_m3s` or set it to `null` to mean the channel has no capacity limit.
-  A per-stage or per-block `max_diversion_m3s` in
-  `constraints/hydro_bounds.parquet` still caps it.
-- `fpha_config.spillage_fit_max_m3s` in `system/hydro_production_models.json`
-  sets the upper end of the spillage range a computed FPHA plane's spillage
-  coefficient is fit over. Absent, the range stays twice the hydro's long-term
-  mean inflow, or twice its maximum turbined flow when the hydro has no inflow
-  history.
-- `fpha_config.turbined_fit_max_m3s` in `system/hydro_production_models.json`
-  sets the upper end of the turbined-flow range a computed FPHA plane set is
-  fit over. Absent, the range ends at the hydro's maximum turbined flow. The
-  spillage fallback above still uses the hydro's maximum turbined flow.
+  `integrated_equivalent_productivity_mwh_per_hm3`. A stored-energy constraint
+  written with them needs no stage duration; price its slack with
+  `"penalty_basis": "per_unit"`.
+- Generic-constraint expressions accept arithmetic over numbers and
+  `@parameters` on both sides, for example
+  `(@weight_a + @weight_b) * hydro_useful_volume_final(0) >= @pct * @emax`.
+  The expression must stay linear in LP variables.
+- A parameter in `constraints/generic_parameters.json` can be
+  `kind: "expression"`, a formula over other parameters.
+- `generic_constraints/resolved_echo.parquet` has a `slack_penalty_basis`
+  column, null for a hard constraint.
+- `system/hydro_energy_productivity.parquet` has an
+  `integrated_equivalent_productivity_mw_per_m3s` column that sets a plant's
+  useful-range mean productivity for the stage; its stored-energy values are
+  computed from it. NULL means no override.
+- A `diversion` channel in `system/hydros.json` can omit `max_flow_m3s`, or set
+  it to `null`, for no capacity limit.
+- `fpha_config.spillage_fit_max_m3s` and `fpha_config.turbined_fit_max_m3s` in
+  `system/hydro_production_models.json` set the upper end of the spillage and
+  turbined-flow ranges a computed FPHA is fit over. Absent, the ranges are
+  unchanged.
 
 ### Changed
 
-- **BREAKING:** an `initial_conditions.json` `storage` value outside its
-  hydro's `[min_storage_hm3, max_storage_hm3]` is refused at load, naming the
-  hydro, the value and the range; a difference at rounding level is still
-  accepted. This includes a hydro that enters operation after the first
-  stage. A hydro with a `filling` configuration listed under `storage`, or one
-  without it listed under `filling_storage`, is refused too. Setup used to
-  clamp such values without a diagnostic, which changed the water the study
-  starts with.
-- `cobre validate` warns when an initial storage lies outside the storage
-  bounds that `constraints/hydro_bounds.parquet` sets for the end of the
-  hydro's first operating stage. That stage must reach the bound from its own
-  inflow, or release the excess.
-- **BREAKING:** `truncation` and `truncation_with_penalty` follow
-  Larroyd et al. (2022): a negative inflow is no longer raised to zero.
-  `incremental_inflow_m3s` reports the inflow model's value, which can be
-  negative, the inflow lags are built from it, and
-  `inflow_nonnegativity_slack_m3s` reports the water added to it. `truncation`
-  adds exactly the amount that lifts the inflow to zero, at no cost;
-  `truncation_with_penalty` adds at most that amount, priced at
-  `inflow_nonnegativity_cost`. Results change for studies using either
-  method when an inflow draw is negative. Retrain policies trained with either
-  method. Known limitation (the paper's §2.5): the lower bound can exceed the
-  upper bound, and a `gap` stopping rule, admitted only under enumerated
-  forward selection, can then report convergence that has not occurred.
-- Under `penalty`, the `inflow_nonnegativity_slack_m3s` of a PreFilling plant
-  adds water at the downstream plant that receives its inflow, if there is
-  one. It added none before, so results can change for `penalty` studies with
-  PreFilling plants.
+- **BREAKING:** an `initial_conditions.json` storage outside the hydro's
+  storage range is refused at load. It used to be clamped silently. A `filling`
+  hydro listed under `storage`, or a non-filling one under `filling_storage`,
+  is refused too.
+- **BREAKING:** `truncation` and `truncation_with_penalty` follow Larroyd et
+  al. (2022): a negative inflow is no longer raised to zero.
+  `incremental_inflow_m3s` can be negative, and `inflow_nonnegativity_slack_m3s`
+  reports the water added. Results change when an inflow draw is negative;
+  retrain policies trained with either method. The lower bound can then exceed
+  the upper bound, so a `gap` stopping rule can report convergence that has not
+  occurred.
+- Under the default `penalty` inflow non-negativity method, the inflow slack of
+  a PreFilling plant now adds water at the downstream plant that receives its
+  inflow. Results can change for studies with PreFilling plants.
 - **BREAKING:** `level1` keeps exactly the cuts that own a stored trial state.
-  At each trial state the run stored, the cut with the highest value owns it,
-  and the lowest position wins an exact tie. The run stores the trial states
-  of the whole run unless `lookback_iterations` sets a window. Results change
-  for every study that uses `level1`. Retrain policies trained with `level1`.
-- **BREAKING:** `simulation.cut_set` defaults to `all`. A run with `level1` or
-  `max_active_per_stage` now simulates with every row training added,
-  including deactivated and evicted ones. Set `simulation.cut_set` to
-  `active` for the earlier behaviour. Runs without a selection method or cap
-  and runs under `dynamic` are unchanged. A simulation over a loaded policy
-  also includes the rows the writing run deactivated or evicted, as in the
-  `warm_start` entry below.
-- **BREAKING:** `violation_tolerance` of the `dynamic` method is a relative
-  factor, absent by default. Absent, each phase uses the primal feasibility
-  tolerance of its solver profile. A value of 1 or more, or below the primal
-  feasibility tolerance of any phase's solver profile, is refused at load.
-  Runs can return different cuts and bounds, and a value written for the
-  earlier absolute tolerance can now fail at load: delete the key or raise it.
-- **BREAKING:** `row_activity_tolerance` defaults to 1e-6 instead of 0, and an
-  explicit `null` is refused. A run that sets `max_active_per_stage` or uses
-  `dynamic` and omits the key can evict and seed other rows. Set the key to 0
-  to keep the earlier behaviour.
-- **BREAKING:** a zero in `check_frequency`, `lookback_iterations`,
-  `start_iteration`, `candidate_recency` or `max_added_per_round` is a parse
-  error that names the key path. Set the key to 1 or more, or delete it to use
-  its default.
-- **BREAKING:** a `selection` object given as an array is refused. Write it as
-  an object with a `method` key.
-- **BREAKING:** `max_active_per_stage` is refused at load with `dynamic` and
-  with `training.selection.method` set to `enumerated`. Remove the cap, or use
-  `level1`; for enumerated, set `training.selection.method` to `sampled`.
-- `max_active_per_stage` applies to the rows the current run added to each
-  stage strictly between the first and the last, and not to loaded rows. Ties
-  for eviction go to the row binding in fewer solves, then to the lower
-  position in the pool.
-- Loaded cuts keep the `iteration` they were generated in on export. The cuts
-  loaded by `policy.boundary` and by a warm start restart their activity clock.
+  Results change; retrain `level1` policies.
+- **BREAKING:** `simulation.cut_set` defaults to `all`, so runs with `level1`
+  or `max_active_per_stage` simulate with every cut training added. Set it to
+  `active` for the earlier behaviour.
+- **BREAKING:** under `policy.mode = warm_start`, `level1` selects loaded cuts
+  like generated ones, so they can be deactivated and reactivated.
+- **BREAKING:** `violation_tolerance` of `dynamic` is a relative factor, absent
+  by default; absent, each phase uses its solver profile's primal feasibility
+  tolerance. A value written as an absolute tolerance can now be refused:
+  delete the key or raise it.
+- **BREAKING:** `row_activity_tolerance` defaults to 1e-6 instead of 0 and
+  refuses `null`, so runs with `max_active_per_stage` or `dynamic` can evict
+  other cuts. Set it to 0 for the earlier behaviour.
+- **BREAKING:** a zero in `check_frequency`, `start_iteration`,
+  `candidate_recency` or `max_added_per_round` is refused. Use 1 or more, or
+  delete the key.
+- **BREAKING:** a `selection` given as an array is refused. Write it as an
+  object with a `method` key.
+- **BREAKING:** `max_active_per_stage` is refused with `dynamic` and with
+  enumerated forward selection. Remove the cap, use `level1`, or set
+  `training.selection.method` to `sampled`.
+- `max_active_per_stage` applies only to the cuts the run itself added, on the
+  stages between the first and the last.
+- A `dynamic` run that simulates with `simulation.cut_set = all` is refused when
+  the policy it loads holds inactive cuts. Set `simulation.cut_set` to `active`
+  or use `level1`.
 - **BREAKING:** `training/cut_selection/iterations.parquet` has one row per
-  `(iteration, pool_id)` on every iteration of a run with a selection method or
-  a cap. `cuts_in_pool` replaces `cuts_populated`, and `stage_id` is joined by
-  `pool_id` and a nullable `node_id`. `cuts_deactivated`, `cuts_reactivated`
-  and `selection_time_ms` are null where no selection pass ran on the pool;
-  `budget_evicted` and `active_after_budget` are null where the cap was not
-  applied; `cuts_in_lp` is null under `dynamic`. Update readers of the file.
-- **BREAKING:** policy checkpoints are written with `format_version` 4, and
-  version-3 checkpoints are refused. Cut values are stored in the scaled units
-  of the run that wrote them, so a resume with the same
-  `modeling.cost_scale_factor` is exact. Each file in the policy's `states/`
-  directory is keyed by pool and holds each stored trial state with its slot,
-  and each file in `basis/` holds one entry per scenario. Re-run the program
-  that produced the policy.
-- **BREAKING:** a resumed run places every cut at its original position and
-  restores the prefix the original run started with. `level1` and
-  `max_active_per_stage` treat the reloaded cuts as the uninterrupted run
-  does; a resumed run with a cap used to count only the cuts added after the
-  resume.
-- **BREAKING:** under `warm_start`, a loaded cut its source scored is selected
-  by `level1` like a generated cut, and can be deactivated and reactivated.
-  `simulation.cut_set = all` over a loaded policy includes the cuts the
-  writing run deactivated or evicted.
-- **BREAKING:** `exports.states` writes each pool's stored trial states, by
-  position and at the pool's state dimension, for every selection setting, the
-  root pool included. A `dynamic` run or a run without selection now writes
-  them. The per-stage visited-states export at full dimension is removed.
-- A resumed run starts a scenario that has no basis of its own cold, as the
-  original run did, instead of from another scenario's basis.
-- **BREAKING:** a run that fails writes its partial policy to
+  iteration and pool, keyed by `pool_id` and a nullable `node_id`, and
+  `cuts_in_pool` replaces `cuts_populated`. Update readers of the file.
+- **BREAKING:** `exports.states` writes the stored trial states of every pool,
+  for every selection setting. The per-stage visited-states export is removed.
+- **BREAKING:** policy checkpoints use `format_version` 4; version 3 is
+  refused. Re-run the program that produced the policy.
+- **BREAKING:** a resumed run continues as the uninterrupted run would: every
+  cut keeps its position, and the `level1` trial states, binding counters and
+  solver bases are restored. A resume with `max_active_per_stage` used to count
+  only the cuts added after the resume.
+- `policy.mode = resume` is refused, with a message naming the way out, when
+  the checkpoint lacks state the run needs, holds a shorter
+  `lookback_iterations` window, was written with another
+  `training.selection.forward_passes`, or ends with cuts that differ from the
+  `policy.boundary` rows.
+- **BREAKING:** a failed run writes its partial policy to
   `<policy.path>.partial` and leaves the last whole checkpoint in
-  `policy.path`. The failure message names the directory.
-- A `dynamic` run that simulates with `simulation.cut_set = all` is refused
-  when the pool it loads holds inactive rows that `all` includes, and only
-  when the run simulates. For a policy loaded to resume or only to simulate,
-  these are the rows a selection method deactivated or `max_active_per_stage`
-  evicted in the run that wrote it. For a `warm_start` policy and for
-  `policy.boundary` rows, they are the scored inactive rows; inactive rows
-  that were never scored, such as those a capped source leaves, are not
-  included. The terminal pool of a checkpoint is not checked when
-  `policy.boundary` replaces it. Set `simulation.cut_set` to `active` or use
-  `level1`.
-- `cobre validate` reconciles `policy.boundary` only when the run trains.
-- **BREAKING:** a refused policy loaded only to simulate is reported by
-  `cobre validate --json` and `cobre.io.validate` as
-  `SimulationPolicyIncompatible`, no longer as `WarmStartIncompatible`, which
-  now covers only `policy.mode = warm_start`. The warnings of an accepted
-  simulation-only load, which the Python validation also returns, change kind
-  the same way. Filter on both kinds to keep the previous behaviour.
-- x86_64 Linux builds of the MPI release archive and builds from source,
-  `cargo install` included, no longer enable AVX2 and FMA. Every x86_64 build
-  of a version now uses one floating-point kernel, so they select the same
-  cuts. Results of those builds can differ from 0.18.0's.
+  `policy.path`.
+- **BREAKING:** `cobre validate --json` reports a refused simulation-only
+  policy as `SimulationPolicyIncompatible`; `WarmStartIncompatible` now covers
+  only `policy.mode = warm_start`. Filter on both kinds to keep the previous
+  behaviour.
+- **BREAKING:** an enabled generic-constraint slack must set `penalty_basis`.
+  `per_hour` charges every hour the row covers, as before; use it for rows in
+  MW or m³/s. `per_unit` charges once per unit of violation; use it for rows in
+  MWh or hm³. Add `"penalty_basis": "per_hour"` to keep current costs. A
+  disabled slack that sets `penalty` or `penalty_basis` is rejected.
+- A generic constraint written without a relational operator drops a variable
+  whose coefficient is exactly zero, such as `0 * x` or `x - x`, as a relation
+  already did. A row left with only stage-level terms and bounds is then one
+  stage-level row, so under `per_unit` a violation costs the penalty once
+  instead of once per block.
+- **BREAKING:** a field in `constraints/generic_parameters.json` that does not
+  belong to the entry's `kind`, such as `values` on a `constant`, is rejected.
+- **BREAKING:** in `system/hydro_energy_productivity.parquet`,
+  `equivalent_productivity_mw_per_m3s` sets only the reference-point
+  productivity. A plant with geometry integrates its mean productivity anyway,
+  so its stored-energy values change where the two differed. The
+  `integrated_equivalent_productivity_mw_per_m3s` column is required: write the
+  old value there to keep previous results, or leave it all-NULL.
 - **BREAKING:** `constraints/hydro_bounds.parquet` rejects a positive
-  `max_diversion_m3s` on a hydro with no `diversion` channel, as it already
-  rejected a positive `min_diversion_m3s` (rule 46). Before, the diverted water
-  left the system without reaching any plant.
-- **BREAKING:** a negative `diversion.max_flow_m3s` in `system/hydros.json` is
-  rejected at load.
-- **BREAKING:** `equivalent_productivity_mw_per_m3s` in
-  `system/hydro_energy_productivity.parquet` sets only the reference-point
-  productivity. A plant with VHA geometry and a specific productivity now
-  integrates its useful-range mean productivity even when this override is
-  present, so its `integrated_*` and `max_stored_energy*` tags, the
-  `integrated_*_productivity_mw_per_m3s` output columns and
-  `stored_energy_*` change wherever the override differed from the integral.
-  The same productivity supplied from `hydro_production_models.json` already
-  behaved this way. To keep a study's previous values, write the same number
-  to the new `integrated_equivalent_productivity_mw_per_m3s` column.
-- **BREAKING:** `system/hydro_energy_productivity.parquet` must carry the
-  `integrated_equivalent_productivity_mw_per_m3s` column; a file without it
-  is rejected at load. Add it as an all-NULL column to keep current behavior
-  for the reference-point productivity.
-- A plant whose geometry gives a non-positive useful-range mean head is
-  rejected at setup even when it has an `equivalent_productivity_mw_per_m3s`
-  override; the error names the plant and the integrated column that
-  supplies its value instead.
-- **BREAKING:** the `linearized_head` production model is removed. Both
-  `hydros.json` and `hydro_production_models.json` accepted it, but it always
-  ran as `constant_productivity`, in training and in simulation. A file that
-  names it is rejected at load; write `constant_productivity` instead, which
-  gives the same results. Such a hydro no longer needs two rows in
-  `system/hydro_geometry.parquet`.
-- **BREAKING:** `model` and `default_model` in
-  `system/hydro_production_models.json` accept only `constant_productivity`
-  and `fpha`. Any other name used to run silently as constant productivity;
-  it is now rejected at load, naming the `model` field.
-- The stored-energy pairing warning (rule 51) also flags a constraint that
-  mixes raw and MWh stored-energy tags, and a `max_stored_energy*` tag beside a
-  same-unit productivity tag of another scope or evaluator for the same hydro.
-- **BREAKING:** an enabled generic-constraint slack must declare
-  `slack.penalty_basis`. `per_hour` charges the penalty for every hour the
-  row covers, as before: the stage's total hours for a stage-level row and
-  the block's hours for a block row. Use it for a row in MW or m³/s.
-  `per_unit` charges the penalty once per unit of violation, whatever the
-  stage length. Use it for a row in MWh or hm³. To keep a study's current
-  costs, add `"penalty_basis": "per_hour"` to every enabled slack.
-- **BREAKING:** a disabled generic-constraint slack that sets `penalty` or
-  `penalty_basis` is rejected. These fields used to be ignored.
-- `generic_constraints/resolved_echo.parquet` has a new
-  `slack_penalty_basis` column, null for a hard constraint.
-- HiGHS forward and simulation solves are cold by default: `use_warm_start`
-  now defaults to `false` for those phases, so their LPs ignore the stored
-  basis and run presolve. Backward solves still warm-start. Set
-  `"use_warm_start": true` in `training.solver.forward` or `simulation.solver`
-  to restore warm-starting for that phase. A cold solve can stop at a
-  different but equally optimal vertex, so simulated duals and the final
-  lower bound may differ slightly from 0.18.0 on the same inputs.
-- HiGHS retry escalation keeps the phase's `use_warm_start` at every retry
-  level; levels 5-11 previously reset it to the solver default.
+  `max_diversion_m3s` on a hydro without a `diversion` channel, and
+  `system/hydros.json` rejects a negative `diversion.max_flow_m3s`.
+- The spillage coefficients of computed FPHA planes change: they are now fit
+  over the points where each plane binds.
+- HiGHS forward and simulation solves are cold by default (`use_warm_start` is
+  `false`); backward solves still warm-start. Set `"use_warm_start": true` in
+  `training.solver.forward` or `simulation.solver` to warm-start again.
+  Simulated duals and the final lower bound may differ slightly from 0.18.0.
 - `cobre run` writes its banner, progress lines and summaries to stdout;
-  warnings and errors stay on stderr, and progress bars on an interactive
-  terminal still draw on stderr. Scripts and job logs that read the run report
-  from stderr must read stdout instead. `--color` now applies to both streams.
-- The training gap in the progress lines and the training summary is printed
-  with 5 decimals instead of 1, so small gaps no longer round to `0.0%`.
-- A generic constraint written without a relational operator now drops a
-  variable whose coefficient is exactly zero, such as `0 * x` or `x - x`, as a
-  relation already did. When every remaining variable is stage-level and
-  no coefficient or bound resolves to a per-block value, the row now collapses
-  to one stage-level row, so under `"penalty_basis": "per_unit"` a violation of
-  it costs the penalty once instead of once per block.
-- A generic-constraint expression nested deeper than 256 levels, counting
-  parentheses and unary operators alike, is rejected with a diagnostic.
-  Expanding named expressions into a constraint is likewise refused once the
-  expansion exceeds an operation budget set far above the size of an authored
-  constraint.
-- **BREAKING:** in `constraints/generic_parameters.json`, a payload field that
-  does not belong to the entry's kind (for example `values` on a `constant`)
-  stops the load. Only `block_values` was rejected before; the other fields
-  were ignored.
-- **BREAKING:** the Linux CLI archives are built on Ubuntu 24.04 and need
-  glibc 2.38 or newer. They no longer run on Ubuntu 22.04, Debian 12 or
-  RHEL 9. The Python wheels keep their manylinux tags.
-- A computed FPHA plane's spillage coefficient is the mean, over the grid
-  points where the plane binds, of a least-squares slope through the
-  zero-spillage generation, sampled over the fit range in 100 steps. It was a
-  free-intercept least-squares slope at the plane's highest-generation grid
-  point, sampled in 8 steps, so the spillage coefficients of computed planes
-  change.
+  warnings and errors stay on stderr. Scripts that read the run report from
+  stderr must read stdout. `--color` applies to both streams.
+- The training gap is printed with 5 decimals, so small gaps no longer show as
+  `0.0%`.
+- The MPI release archive and builds from source on x86_64 Linux no longer
+  enable AVX2 and FMA, so every x86_64 build of a version gives the same
+  results. Results can differ from 0.18.0.
+- **BREAKING:** the Linux CLI archives need glibc 2.38 or newer (Ubuntu 24.04).
+  They no longer run on Ubuntu 22.04, Debian 12 or RHEL 9.
 
 ### Removed
 
-- **BREAKING:** the `lml1` and `domination` values of
-  `training.cut_selection.selection.method`. A config naming either fails at
-  load and points to `level1`.
-- **BREAKING:** `tie_tolerance` of `level1`. A config that sets it fails at
-  load. `level1` compares row values exactly: delete the key.
+- **BREAKING:** the `lml1` and `domination` selection methods and the
+  `tie_tolerance` of `level1`. Use `level1`, and delete `tie_tolerance`.
+- **BREAKING:** the `linearized_head` production model, which always ran as
+  `constant_productivity`. Write `constant_productivity` instead; results are
+  the same. `model` and `default_model` in
+  `system/hydro_production_models.json` accept only `constant_productivity`
+  and `fpha`; any other name used to run as constant productivity.
 
 ### Fixed
 
-- The initial storage was moved onto the first stage's `min_storage_hm3` and
-  `max_storage_hm3` from `constraints/hydro_bounds.parquet`, which bound the
-  storage at the end of that stage. A first-stage minimum above the initial
-  storage added water before the first solve, and a maximum below it removed
-  water. The initial storage is now kept within the hydro's own storage range.
-- At a stage before a hydro's `entry_stage_id` or after its `exit_stage_id`,
-  its storage stays at the value it entered the stage with. A
-  `max_storage_hm3` in `constraints/hydro_bounds.parquet` below that value made
-  the stage infeasible. At those stages the storage ceiling is now never below
-  the hydro's own `max_storage_hm3`.
-- A `min_turbined_m3s` or `min_generation_mw` value in
-  `constraints/hydro_bounds.parquet` had no effect: the LP read only the unit
-  groups' minima. A plant minimum above the sum of its groups' minima now
-  binds on the plant's total, and a shortfall is charged once, at the plant's
-  penalty, in `turbined_slack_m3s` and `generation_slack_mw`. A value below
-  that sum cannot loosen the groups' minima, and setup now warns about it.
-- A `max_turbined_m3s` or `max_generation_mw` value in
-  `constraints/hydro_bounds.parquet` capped each bus's share of a plant whose
-  unit groups sit on several buses, but not their total, so the plant could
-  turbine or generate up to that value on every bus at once. A plant maximum
-  below the sum of its buses' capacities now caps the plant's total.
+- The initial storage is no longer moved into the first stage's
+  `min_storage_hm3` and `max_storage_hm3` from
+  `constraints/hydro_bounds.parquet`, which bound the end of that stage; the
+  move added or removed water before the first solve. `cobre validate` warns
+  when the initial storage lies outside those bounds.
+- A `max_storage_hm3` in `constraints/hydro_bounds.parquet` below a hydro's
+  storage no longer makes a stage before its `entry_stage_id` or after its
+  `exit_stage_id` infeasible.
+- `min_turbined_m3s` and `min_generation_mw` in
+  `constraints/hydro_bounds.parquet` had no effect. A plant minimum above its
+  unit groups' minima now binds on the plant's total, with the shortfall in
+  `turbined_slack_m3s` and `generation_slack_mw`.
+- `max_turbined_m3s` and `max_generation_mw` in
+  `constraints/hydro_bounds.parquet` now cap the total of a plant whose unit
+  groups sit on several buses. Each bus could reach the value before.
 - `truncation` corrects a negative inflow when the hydro's PAR residual
-  standard deviation is zero. Such a study could stop on an infeasible LP
-  before.
-- `cuts_removed` in `training/convergence.parquet` was always 0.
-  `cuts_active` in the same file ignored evictions and reactivations, and
-  `row_pool.peak_active` in `training/metadata.json` missed a peak reached
-  after a reactivation.
+  standard deviation is zero; such a study could stop on an infeasible LP.
+- A hydro with computed FPHA on some stages and another model on others, such
+  as constant productivity 0.0 on an outage stage, is no longer refused.
+- A generic constraint that repeats a variable, or names one variable twice
+  through aliases such as `hydro_storage` and `hydro_storage_final`, no longer
+  aborts the run.
+- `cuts_removed` in `training/convergence.parquet` was always 0, and
+  `cuts_active` there and `row_pool.peak_active` in `training/metadata.json`
+  missed evictions and reactivations.
 - A `max_active_per_stage` below the number of cuts loaded by `policy.boundary`
-  aborted training on a basis row-count mismatch. The cap now counts and
-  evicts only the rows the run generated.
-- A lazy solve under `dynamic` that reached the round cap returned a relaxed
-  result. It now ends only when no candidate row is violated.
-- `cobre validate` printed two warnings twice.
-- A checkpoint write refuses a payload a load would reject, and a file over the
-  2 GiB limit of the policy format, naming the file. The writers refuse an
-  entity manifest whose dates are inconsistent and repeated ids.
-- A basis-store decode failure at the end of a multi-rank run no longer
-  leaves the other ranks blocked.
-- Under MPI, training multiplied its LP-solve count by the number of ranks, and
-  the first-try/retried/failed split and the forward solve seconds with it. The
-  training summary and `solve_stats` in `training/metadata.json` now report the
-  same counts for any rank count, and the split adds up to the total.
-- `cobre run` under MPI no longer panics when the forward passes do not
-  divide evenly across ranks. A rank holding fewer passes than another could
-  index its stored warm-start bases out of bounds, and the job then hung. Such
-  a run now writes the same outputs as a single-process run.
-- A rank that panics during `cobre run` under MPI aborts the whole job
-  with exit code 101. The other ranks used to wait in a collective until the
-  job was killed.
-- A generic constraint whose terms land on the same LP column (a repeated
-  variable, or an aliased pair such as `hydro_storage` and `hydro_storage_final`)
-  no longer aborts the run when HiGHS loads the LP. The terms are summed into one
-  coefficient per column, and a column whose coefficients sum to exactly zero
-  gets no entry.
+  no longer aborts training.
+- A `dynamic` lazy solve that hit the round cap returned a relaxed result; it
+  now ends only when no candidate cut is violated.
+- A checkpoint that a load would reject, or a policy file over the format's
+  2 GiB limit, now fails when written, naming the file.
 - Results no longer depend on the C compiler's default target. A compiler that
-  targets FMA by default, such as the amd64v3 GCC of Ubuntu 26.04, fused
-  multiply-adds in qhull, HiGHS and CLP. The fitted FPHA planes and the LP
-  solutions then moved in the last bits, and a computed FPHA plane could get a
-  storage coefficient slightly below zero, which loading the planes back as
-  precomputed rejected. The vendored C and C++ now compile without FMA. On
-  aarch64, where compilers fused by default, results can differ in the last
-  bits from earlier releases.
-- A hydro with computed FPHA and a stage range that selects another model,
-  such as constant productivity 0.0 on an outage stage, was refused with "no
-  FphaColumnLayout covers stage N". Only its FPHA stages are fit now.
-- Under MPI, the backward `wait` in the training time split and the
-  `bwd_load_imbalance_ms` timing column now include the time a rank spends
-  waiting for the other ranks. Previously they counted only the imbalance
-  between rank 0's own threads, so they understated the wait and did not match
-  a single-rank run with the same total thread count.
+  fuses multiply-adds by default, such as the GCC of Ubuntu 26.04, moved LP
+  solutions in the last bits and could give a computed FPHA plane a slightly
+  negative storage coefficient, which loading the planes back as precomputed
+  rejected. On aarch64, results can differ in the last bits from earlier
+  releases.
+- Under MPI, the training summary and `solve_stats` in `training/metadata.json`
+  multiplied LP-solve counts and forward solve seconds by the number of ranks.
+  They now match a single-process run.
+- Under MPI, the backward `wait` time and `bwd_load_imbalance_ms` include the
+  time a rank waits for the other ranks.
+- `cobre run` under MPI no longer panics or hangs when the forward passes do
+  not divide evenly across ranks.
+- Under MPI, a rank that panics aborts the whole job with exit code 101, and a
+  basis-store decode failure at the end of a run no longer blocks the other
+  ranks. The other ranks used to wait until the job was killed.
 
 ## [0.18.0] - 2026-10-07
 

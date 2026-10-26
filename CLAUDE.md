@@ -78,7 +78,7 @@ compile.
 
 Comment & documentation rules for all `.rs` files are codified in `.claude/rules/comments.md`, which auto-loads when editing any `**/*.rs` file. It governs the default-off Deletion Test, the refactor/relocate/hoist gates, the Four Voices, and directives D1–D5 / N1–N6.
 
-Prose documentation integrity rules (scope matrix, the single adaptation, and the six prose-only failure modes) are codified in `.claude/rules/doc-integrity.md`, which auto-loads when editing Markdown files in `CONTRIBUTING.md`, `CHANGELOG.md`, and root-level `*.md`.
+Prose documentation integrity rules (scope matrix, the single adaptation, the six prose-only failure modes, and the CHANGELOG admission test and entry shape) are codified in `.claude/rules/doc-integrity.md`, which auto-loads when editing Markdown files in `CONTRIBUTING.md`, `CHANGELOG.md`, and root-level `*.md`.
 
 When modifying hot-path code (`training/forward/`, `training/backward/`,
 `training/training.rs`, `simulation/pipeline.rs`, `training/lower_bound.rs`),

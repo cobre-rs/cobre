@@ -146,7 +146,7 @@ A code comment is co-located with one code site, so these cannot arise there:
   list") or a guard-pinned literal; they must not silently diverge.
 - For **CHANGELOG entries**: Provenance is inverted — historical narrative is
   correct here. Plan-leakage still applies: no `Epic`/`ticket`/`workstream` tokens
-  in released CHANGELOG entries.
+  in released CHANGELOG entries. Admission and entry shape are governed by §6.
 
 ### Directives
 
@@ -214,3 +214,49 @@ Delete the adjective or clause. If the sentence still states a true, checkable
 fact about _what the software does_, the deletion was correct. If it only lost
 enthusiasm, it was hype. Keep a quality word **only** when its basis sits on the
 page or one link away.
+
+---
+
+## 6. CHANGELOG entries — the CLI user is the only reader
+
+The reader of `CHANGELOG.md` runs the `cobre` CLI and works with its input
+files and outputs. Crate consumers, Python-only users and maintainers are not
+its readers; the PR body carries what they need.
+
+### Admission — does the change get an entry?
+
+An entry exists only for a change a CLI user can observe:
+
+- different results or outputs (a value, a file, a column);
+- an input that is now refused, or newly accepted;
+- a new or changed error or warning;
+- a changed default, command, flag, or install requirement.
+
+Leave out: crate API changes (breaking ones included — they go in the PR
+body), changes seen only through the Python bindings (raise them as a
+judgment call), refactors, solver-retry and other internal mechanics, limits
+no authored input reaches, and cosmetic fixes such as a duplicated message.
+
+### Shape — short and action-first
+
+- One or two lines per entry: what changed, then what the user must do.
+  Lead with the config key, file or command, with its path
+  (`training.cut_selection.selection.lookback_iterations`,
+  `constraints/hydro_bounds.parquet`, `cobre validate --json`).
+- Keep the new default, the refusal condition, the remedy ("set it to
+  `active` for the earlier behaviour", "retrain `level1` policies", "update
+  readers of the file") and a "results change" note when outputs move.
+- Drop the mechanism, the rationale, tie-break rules, per-column null
+  semantics and edge-case sub-conditions. The user docs own that detail.
+- Mark `**BREAKING:**` a change that needs the user to act: edit an input,
+  retrain or re-run, update a reader of an output, or change platform.
+- A fix names the symptom the user saw ("made the stage infeasible",
+  "aborted the run", "was always 0"), not its cause in the code.
+- Merge related changes into one entry — every checkpoint/resume change of a
+  release, several refusals of one file, a fix and the warning added with it.
+  Before appending to `[Unreleased]`, check whether an entry for the same
+  feature should absorb the new change instead.
+- Sections follow Keep a Changelog: Added, Changed, Removed, Fixed. A removal
+  goes under Removed even when it is breaking.
+- Released sections stay as published; trim `[Unreleased]` before a release,
+  not history after it.

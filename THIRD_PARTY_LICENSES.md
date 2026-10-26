@@ -3842,9 +3842,9 @@ limitations under the License.
 ## BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License
 
 Used by:
-- zstd-safe 8.0.0
-- zstd-sys 2.1.0+zstd.1.5.7
-- zstd 0.14.0
+- zstd-safe 8.2.0
+- zstd-sys 2.1.2+zstd.1.5.7
+- zstd 0.14.3
 
 ```
 BSD 3-Clause License
